@@ -157,8 +157,9 @@ function send(ws, obj) {
 }
 
 wss.on('connection', (ws) => {
-  let term = null;       // aktives PTY
-  let session = null;    // tmux-Session-Name (nur im session-Modus)
+  let term = null;          // aktives PTY
+  let session = null;       // tmux-Session-Name (nur im session-Modus)
+  let disposables = [];     // onData/onExit-Listener des aktiven PTY
 
   const baseEnv = {
     ...process.env,
@@ -166,6 +167,16 @@ wss.on('connection', (ws) => {
     COLORTERM: 'truecolor',
     LANG: process.env.LANG || 'en_US.UTF-8',
   };
+
+  // Aktives PTY sauber beenden: erst Listener disposen (damit verspaetete
+  // Ausgaben/Exit nicht das naechste PTY stoeren — verhindert Switch-Race),
+  // dann den Prozess killen.
+  function disposeTerm() {
+    for (const d of disposables) { try { d.dispose(); } catch {} }
+    disposables = [];
+    if (term) { try { term.kill(); } catch {} }
+    term = null;
+  }
 
   function spawnPty(mode, cols, rows) {
     const opts = {
@@ -175,19 +186,23 @@ wss.on('connection', (ws) => {
       cwd: HOME,
       env: baseEnv,
     };
-    if (mode === 'session') {
-      term = pty.spawn('tmux', ['attach-session', '-t', session], opts);
-    } else {
-      term = pty.spawn(SHELL, ['-l'], opts);
-    }
+    const p = mode === 'session'
+      ? pty.spawn('tmux', ['attach-session', '-t', session], opts)
+      : pty.spawn(SHELL, ['-l'], opts);
+    term = p;
 
-    term.onData((d) => {
+    disposables.push(p.onData((d) => {
       if (ws.readyState === ws.OPEN) ws.send(Buffer.from(d, 'utf8'));
-    });
-    term.onExit(({ exitCode }) => {
-      send(ws, { t: 'exit', code: exitCode });
+    }));
+    disposables.push(p.onExit(({ exitCode }) => {
+      // Nur reagieren, wenn dieses PTY noch das aktive ist (kein Switch-Race).
+      if (term !== p) return;
       term = null;
-    });
+      send(ws, { t: 'exit', code: exitCode });
+      // Verbindung schliessen -> Frontend reconnectet und bekommt eine frische
+      // Shell (statt eines toten Prompts).
+      try { ws.close(1000, 'pty exit'); } catch {}
+    }));
     send(ws, { t: 'ready', mode });
   }
 
@@ -207,7 +222,7 @@ wss.on('connection', (ws) => {
 
     switch (msg.t) {
       case 'start': {
-        if (term) { try { term.kill(); } catch {} term = null; }
+        disposeTerm();
         session = null;
         if (msg.mode === 'session') {
           if (!(await sessionExists(msg.session))) {
@@ -244,7 +259,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (term) { try { term.kill(); } catch {} term = null; }
+    disposeTerm();
   });
 });
 

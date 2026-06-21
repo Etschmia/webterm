@@ -88,12 +88,11 @@ function connect() {
     if (typeof e.data === 'string') {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.t === 'exit') {
-        // PTY beendet (z. B. Shell-Logout / tmux detach) -> Hinweis, Reconnect via close.
-        term.writeln('\r\n\x1b[2m[Sitzung beendet]\x1b[0m');
-      } else if (msg.t === 'error') {
+      if (msg.t === 'error') {
         setStatus(msg.m, true);
       }
+      // 'exit': der Server schliesst die Verbindung; der Reconnect (onclose)
+      // liefert automatisch eine frische Shell.
       return;
     }
     term.write(new Uint8Array(e.data));

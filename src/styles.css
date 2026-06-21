@@ -222,7 +222,9 @@ body {
 #terminal {
   position: absolute;
   inset: 0;
-  padding: 10px 6px 8px 12px;
+  /* Extra Boden-Polster (~1 Zeile): verhindert, dass die unterste Terminal-
+     Zeile durch Fit-Rundung unter den Rand rutscht. */
+  padding: 10px 6px 24px 12px;
 }
 .xterm { height: 100%; }
 
