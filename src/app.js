@@ -32,7 +32,6 @@ term.loadAddon(fitAddon);
 // Links im Terminal selbst klickbar (oeffnen in neuem Tab).
 term.loadAddon(new WebLinksAddon((event, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
 term.open(document.getElementById('terminal'));
-fitAddon.fit();
 
 // ---------------------------------------------------------------- State
 const state = {
@@ -62,13 +61,12 @@ function send(obj) {
 
 function startActive() {
   term.reset();
-  const dims = fitAddon.proposeDimensions() || { cols: term.cols, rows: term.rows };
   send({
     t: 'start',
     mode: state.active.mode,
     session: state.active.name,
-    cols: dims.cols,
-    rows: dims.rows,
+    cols: term.cols,
+    rows: term.rows,
   });
 }
 
@@ -109,16 +107,45 @@ function connect() {
 // Tastatureingaben -> PTY
 term.onData((d) => send({ t: 'input', d }));
 
-// ---------------------------------------------------------------- Resize
-function doResize() {
-  fitAddon.fit();
-  send({ t: 'resize', cols: term.cols, rows: term.rows });
+// ---------------------------------------------------------------- Resize / Fit
+const workEl = document.querySelector('.work');
+
+function sendResize() {
+  if (term.cols > 0 && term.rows > 0) send({ t: 'resize', cols: term.cols, rows: term.rows });
 }
-let resizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(doResize, 120);
-});
+
+// Passt das Terminal in den Container ein und korrigiert anschliessend die
+// bekannte FitAddon-Schwaeche: die zur Berechnung benutzte Zellhoehe kann
+// kleiner sein als die tatsaechlich gerenderte Zeilenhoehe (DOM-Renderer,
+// sub-pixel durch lineHeight) -> die unterste Zeile wird abgeschnitten.
+// Daher die echte Zeilenhoehe per getBoundingClientRect messen und die
+// Zeilenzahl auf das reduzieren, was vollstaendig sichtbar hineinpasst.
+function fitTerminal() {
+  if (!term.element) return;
+  try { fitAddon.fit(); } catch {}
+  const rowEl = term.element.querySelector('.xterm-rows > div');
+  if (rowEl) {
+    const perRow = rowEl.getBoundingClientRect().height;      // reale Zeilenhoehe (fraktional)
+    const avail = term.element.getBoundingClientRect().height; // verfuegbare Hoehe
+    if (perRow > 0 && avail > 0) {
+      const maxRows = Math.max(2, Math.floor(avail / perRow));
+      if (term.rows > maxRows) term.resize(term.cols, maxRows);
+    }
+  }
+  sendResize();
+}
+
+let fitScheduled = false;
+function scheduleFit() {
+  if (fitScheduled) return;
+  fitScheduled = true;
+  requestAnimationFrame(() => { fitScheduled = false; fitTerminal(); });
+}
+
+// ResizeObserver deckt alle Groessenaenderungen ab (Fenster, Zoom, DevTools).
+const ro = new ResizeObserver(() => scheduleFit());
+ro.observe(workEl);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFit);
 
 // ---------------------------------------------------------------- Sidebar
 const sessionsEl = document.getElementById('sessions');
@@ -133,8 +160,9 @@ function switchTo(mode, name) {
   renderSidebar();
   if (ws && ws.readyState === WebSocket.OPEN) startActive();
   else connect();
-  // Nach Layoutwechsel neu einpassen.
-  requestAnimationFrame(() => { doResize(); term.focus(); });
+  // Nach Layoutwechsel/Reset neu einpassen.
+  scheduleFit();
+  requestAnimationFrame(() => term.focus());
 }
 
 function makeEntry({ label, dotClass, badge, active, onClick }) {
@@ -293,4 +321,5 @@ function scheduleScan() {
 renderSidebar();
 refreshSessions();
 setInterval(refreshSessions, 4000);
+fitTerminal();
 connect();
