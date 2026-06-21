@@ -1,0 +1,53 @@
+# term-web
+
+Web-Terminal unter **term.martuni.de** — Sidebar + Arbeitsfenster (xterm.js), abgesichert
+über Caddy (TLS + HTTP Basic Auth).
+
+## Funktionen
+- **Standard** (Default): interaktive Login-Shell (`bash -l`) im Home, mit `.bashrc`/Farben.
+- **tmux-Sessions**: alle laufenden Sessions werden in der Sidebar gelistet; Klick hängt das
+  Arbeitsfenster live an die Session. Der aktive Session-Eintrag zeigt einen **Copy-Mode-Toggle**
+  (tmux `copy-mode` an/aus).
+- **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
+  anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
+
+## Architektur
+```
+Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → Node-Backend
+                                                                            ├─ Static (xterm UI)
+                                                                            ├─ WS /ws → node-pty
+                                                                            └─ GET /api/sessions (tmux)
+```
+- `server.js` — HTTP-Static + WebSocket→PTY + REST `/api/sessions`. Bindet nur `127.0.0.1:7681`,
+  prüft den WS-`Origin`.
+- `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
+- `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
+- `deploy/` — systemd-Unit und Caddy-Site (Vorlagen für das Deployment).
+
+### WS-Protokoll
+- Client → Server: JSON-Text-Frames `{t:'start'|'input'|'resize'|'copyMode', …}`.
+- Server → Client: Binär-Frames = rohe PTY-Ausgabe; JSON-Text = Control (`ready`/`exit`/`error`).
+
+## Entwicklung
+```bash
+npm install
+npm run build         # -> public/
+npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
+# oder: node build.mjs --watch   (Auto-Rebuild)
+```
+
+## Deployment
+- **Service**: `deploy/term-server.service` → `/etc/systemd/system/`,
+  `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
+- **Caddy**: Hash via `caddy hash-password` erzeugen, in `deploy/term.martuni.de.caddy` als
+  `basic_auth { <user> <hash> }` eintragen, nach `/etc/caddy/sites/` kopieren, dann
+  `sudo systemctl reload caddy`.
+  - Hinweis: Die Log-Datei muss vor dem ersten Reload existieren —
+    `sudo touch /var/log/caddy/term.access.log && sudo chown caddy:caddy /var/log/caddy/term.access.log`.
+
+## Hinweise
+- **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester
+  Client gewinnt). Stört das eine parallel laufende Session, global in `~/.tmux.conf` auf
+  `set -g window-size largest` (bzw. `manual`) umstellen.
+- **Sicherheit**: Voller Shell-Zugriff als `librechat`. Schutz = TLS + Basic Auth (Caddy) +
+  localhost-Bindung. Credentials geheim halten.

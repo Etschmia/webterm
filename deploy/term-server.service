@@ -1,0 +1,20 @@
+[Unit]
+Description=term-web — Web-Terminal (term.martuni.de)
+After=network.target
+
+[Service]
+Type=simple
+User=librechat
+WorkingDirectory=/home/librechat/term
+Environment=HOME=/home/librechat
+Environment=HOST=127.0.0.1
+Environment=PORT=7681
+Environment=LANG=en_US.UTF-8
+ExecStart=/home/librechat/.local/bin/node /home/librechat/term/server.js
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
