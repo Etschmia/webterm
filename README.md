@@ -65,6 +65,11 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   `.caddy`-Datei mit bcrypt-Hash). Manuell: Hash via `caddy hash-password` erzeugen, in
   einer `deploy/<domain>.caddy` als `basic_auth { <user> <hash> }` eintragen, nach
   `/etc/caddy/sites/` kopieren, dann `sudo systemctl reload caddy`.
+  - **Basic-Auth-Direktive ist versionsabhängig**: Caddy **≥ 2.8** verwendet `basic_auth`,
+    Caddy **< 2.8** noch `basicauth` (ohne Unterstrich) — es gibt keinen Namen, der auf beiden
+    läuft. `./install.sh` erkennt die installierte Version (`caddy version`) und schreibt die
+    passende Direktive automatisch; ist kein `caddy` auffindbar, nimmt es `basic_auth` (≥ 2.8)
+    als Default. Bei manueller Einrichtung den Namen zur Ziel-Version passend wählen.
   - Hinweis: Die Log-Datei muss vor dem ersten Reload existieren —
     `sudo touch /var/log/caddy/term.access.log && sudo chown caddy:caddy /var/log/caddy/term.access.log`.
 

@@ -164,6 +164,23 @@ caddy_hash() {
   return 1
 }
 
+caddy_basicauth_directive() {
+  # Der Direktiven-Name fuer HTTP Basic Auth haengt von der Caddy-Version ab:
+  #   Caddy <  2.8.0  ->  'basicauth'   (alte Schreibweise)
+  #   Caddy >= 2.8.0  ->  'basic_auth'  (ab 2.8.0; 'basicauth' ist dort entfernt)
+  # Es gibt KEINEN Namen, der auf beiden Versionen funktioniert. Laesst sich die
+  # Version nicht ermitteln (caddy fehlt o. ae.), nehmen wir die neuere Schreibweise.
+  local ver
+  ver="$(caddy version 2>/dev/null | head -n1 | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's/^v//')"
+  if [ -z "$ver" ]; then printf 'basic_auth'; return 0; fi
+  # Ist die kleinere von {2.8.0, $ver} genau 2.8.0, dann gilt $ver >= 2.8.0.
+  if [ "$(printf '%s\n' "2.8.0" "$ver" | sort -V | head -n1)" = "2.8.0" ]; then
+    printf 'basic_auth'
+  else
+    printf 'basicauth'
+  fi
+}
+
 install_hint_toolchain() {
   # Gibt den OS-passenden Befehl zur Installation der C/C++-Build-Tools aus.
   if [ "$(uname -s)" = "Darwin" ]; then
@@ -354,6 +371,15 @@ step "5/6  Caddy-Konfiguration"
 HAVE_CADDY=0
 command -v caddy >/dev/null 2>&1 && HAVE_CADDY=1
 
+# Basic-Auth-Direktive passend zur installierten Caddy-Version waehlen.
+CADDY_BASICAUTH="$(caddy_basicauth_directive)"
+if [ "$HAVE_CADDY" -eq 1 ]; then
+  note "Caddy gefunden ($(caddy version 2>/dev/null | head -n1)) — verwende Direktive '$CADDY_BASICAUTH'."
+else
+  note "Caddy nicht gefunden — verwende '$CADDY_BASICAUTH' (passt fuer Caddy >= 2.8)."
+  note "Auf Caddy < 2.8 die Direktive im Snippet in 'basicauth' (ohne Unterstrich) umbenennen."
+fi
+
 write_caddy_credentials_note() {
   note "Hinweis: Das Passwort wird NICHT gespeichert. Es wird sofort per"
   note "'caddy hash-password' in einen bcrypt-Hash umgewandelt; nur dieser Hash"
@@ -408,7 +434,7 @@ if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
 # Echte Zugangsdaten — NICHT ins Repo committen (per .gitignore ausgeschlossen).
 $HOST_NAME {
     # HTTP Basic Auth (Hash via 'caddy hash-password')
-    basic_auth {
+    ${CADDY_BASICAUTH} {
         $CADDY_USER $CADDY_HASH
     }
 
@@ -482,7 +508,7 @@ EOF
 
     # Pfad-Praefix abschneiden und ans term-web-Backend weiterreichen.
     handle_path ${URL_PATH}/* {
-        basic_auth {
+        ${CADDY_BASICAUTH} {
             $CADDY_USER $CADDY_HASH
         }
         reverse_proxy 127.0.0.1:$PORT {
