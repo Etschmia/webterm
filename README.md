@@ -5,6 +5,9 @@ Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
 die Referenz-Instanz läuft unter **term.martuni.de**.
 
 ## Schnellstart
+**Voraussetzungen:** Node.js + npm sowie native Build-Tools für `node-pty`
+(falls kein Prebuild zur Node-Version passt) — auf Debian/Ubuntu
+`sudo apt-get install -y build-essential python3`, auf macOS `xcode-select --install`.
 ```bash
 ./install.sh
 ```

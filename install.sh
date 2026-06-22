@@ -164,6 +164,45 @@ caddy_hash() {
   return 1
 }
 
+install_hint_toolchain() {
+  # Gibt den OS-passenden Befehl zur Installation der C/C++-Build-Tools aus.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    note "    xcode-select --install"
+  elif command -v apt-get >/dev/null 2>&1; then
+    note "    sudo apt-get update && sudo apt-get install -y build-essential python3"
+  elif command -v dnf >/dev/null 2>&1; then
+    note "    sudo dnf install -y gcc-c++ make python3"
+  elif command -v yum >/dev/null 2>&1; then
+    note "    sudo yum install -y gcc-c++ make python3"
+  elif command -v pacman >/dev/null 2>&1; then
+    note "    sudo pacman -S --needed base-devel python"
+  elif command -v zypper >/dev/null 2>&1; then
+    note "    sudo zypper install -y gcc-c++ make python3"
+  elif command -v apk >/dev/null 2>&1; then
+    note "    sudo apk add build-base python3"
+  else
+    note "    (make, ein C++-Compiler wie g++/clang++ und python3 werden benoetigt)"
+  fi
+}
+
+check_build_toolchain() {
+  # node-pty ist ein natives Modul. Fehlt fuer die laufende Node-Version ein
+  # Prebuild, wird aus dem Quellcode kompiliert — dafuer braucht es make, einen
+  # C++-Compiler und python3. Gibt 0 zurueck, wenn alles da ist, sonst 1.
+  local missing=""
+  command -v make >/dev/null 2>&1 || missing="$missing make"
+  if ! command -v g++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1 \
+     && ! command -v c++ >/dev/null 2>&1; then
+    missing="$missing C++-Compiler"
+  fi
+  command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || missing="$missing python3"
+  [ -z "$missing" ] && return 0
+  warn "Build-Werkzeuge fehlen:${missing}. node-pty muss nativ kompiliert werden."
+  note "Installieren mit:"
+  install_hint_toolchain
+  return 1
+}
+
 # --------------------------------------------------------------------------
 # Start
 # --------------------------------------------------------------------------
@@ -207,16 +246,29 @@ if [ -z "$NPM_BIN" ]; then
 else
   ok "npm:  $NPM_BIN"
   [ -n "$NODE_BIN" ] && ok "node: $NODE_BIN" || warn "node-Binary nicht separat gefunden — systemd-Unit braucht den Pfad."
-  info "Abhaengigkeiten installieren (npm install) …"
-  if ( cd "$SCRIPT_DIR" && "$NPM_BIN" install ); then
-    info "Frontend bauen (npm run build) …"
-    if ( cd "$SCRIPT_DIR" && "$NPM_BIN" run build ); then
-      BUILD_OK=1; ok "Build erfolgreich (-> public/)."
-    else
-      err "Build fehlgeschlagen."
+  # node-pty kompiliert nativ, falls kein Prebuild zur Node-Version passt.
+  PROCEED_INSTALL=1
+  if ! check_build_toolchain; then
+    if [ "$INTERACTIVE" -eq 1 ]; then
+      ask_yes_no "Trotzdem 'npm install' versuchen?" "n" || PROCEED_INSTALL=0
     fi
+  fi
+  if [ "$PROCEED_INSTALL" -eq 0 ]; then
+    warn "npm install uebersprungen — Build-Tools installieren (siehe oben), dann Skript erneut ausfuehren."
   else
-    err "npm install fehlgeschlagen."
+    info "Abhaengigkeiten installieren (npm install) …"
+    if ( cd "$SCRIPT_DIR" && "$NPM_BIN" install ); then
+      info "Frontend bauen (npm run build) …"
+      if ( cd "$SCRIPT_DIR" && "$NPM_BIN" run build ); then
+        BUILD_OK=1; ok "Build erfolgreich (-> public/)."
+      else
+        err "Build fehlgeschlagen."
+      fi
+    else
+      err "npm install fehlgeschlagen."
+      note "Bei node-gyp-/'make'-Fehlern fehlen die Build-Tools:"
+      install_hint_toolchain
+    fi
   fi
 fi
 
