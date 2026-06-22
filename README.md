@@ -8,6 +8,14 @@ Web-Terminal unter **term.martuni.de** — Sidebar + Arbeitsfenster (xterm.js), 
 - **tmux-Sessions**: alle laufenden Sessions werden in der Sidebar gelistet; Klick hängt das
   Arbeitsfenster live an die Session. Der aktive Session-Eintrag zeigt einen **Copy-Mode-Toggle**
   (tmux `copy-mode` an/aus).
+- **Sprechende Session-Labels**: Als Label wird – wenn vorhanden – der tmux `pane_title`
+  angezeigt (führende Status-Glyphe wie `⠂`/`✳` entfernt), sonst der Session-Name. Hintergrund:
+  Claude Code setzt den Terminal-/Pane-Titel automatisch; gibst du `claude` per `-n <name>` einen
+  Namen, erscheint **dieser** im Label. So zeigt etwa eine `claude-retry-<pid>-<ts>`-Session (vom
+  auto-retry-Wrapper) ihren sprechenden Titel statt des kryptischen Namens. Reine Shell-Sessions
+  (Titel leer, = laufendes Kommando oder `user@host`-Prompt) bleiben beim Session-Namen. Intern
+  (Attach, Copy-Mode via `-t`) wird immer der echte Session-Name verwendet; der Tooltip zeigt
+  beides.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
 

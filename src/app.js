@@ -165,7 +165,23 @@ function switchTo(mode, name) {
   requestAnimationFrame(() => term.focus());
 }
 
-function makeEntry({ label, dotClass, badge, active, onClick }) {
+// Bereinigt den tmux pane_title: entfernt fuehrende Status-Glyphe (z. B. ⠂ / ✳,
+// die Claude Code als Aktivitaets-Spinner setzt) und Whitespace.
+function cleanTitle(t) {
+  return (t || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+}
+
+// Sprechendes Sidebar-Label: bevorzugt den gesetzten pane_title, faellt aber auf
+// den Session-Namen zurueck, wenn der Titel nur ein Shell-Default ist
+// (leer, = laufendes Kommando wie "bash", oder ein "user@host"-Prompt-Titel).
+function sessionLabel(s) {
+  const clean = cleanTitle(s.title);
+  const cmd = (s.command || '').toLowerCase();
+  const looksDefault = !clean || clean.toLowerCase() === cmd || /^\S+@\S+/.test(clean);
+  return looksDefault ? s.name : clean;
+}
+
+function makeEntry({ label, tooltip, dotClass, badge, active, onClick }) {
   const el = document.createElement('div');
   el.className = 'entry' + (active ? ' active' : '');
   const row = document.createElement('div');
@@ -176,7 +192,7 @@ function makeEntry({ label, dotClass, badge, active, onClick }) {
   const name = document.createElement('span');
   name.className = 'entry-name';
   name.textContent = label;
-  name.title = label;
+  name.title = tooltip || label;
   row.append(dot, name);
 
   if (badge) {
@@ -236,8 +252,11 @@ function renderSidebar() {
   // tmux-Sessions
   for (const s of state.sessions) {
     const active = isActive('session', s.name);
+    const label = sessionLabel(s);
     const entry = makeEntry({
-      label: s.name,
+      label,
+      // Tooltip zeigt zusaetzlich den echten Session-Namen (intern fuer Attach).
+      tooltip: label === s.name ? s.name : `${label} · ${s.name}`,
       dotClass: s.attached ? 'attached' : '',
       badge: `${s.windows}▦`,
       active,

@@ -48,19 +48,28 @@ function tmux(args) {
 
 // Liefert die aktuell laufenden tmux-Sessions als Array.
 async function listSessions() {
-  const fmt = '#{session_name}\t#{session_attached}\t#{session_windows}\t#{pane_in_mode}';
+  // pane_title als LETZTES Feld: es kann Leerzeichen enthalten (Tabs sind in
+  // Titeln unueblich), so bleibt das Splitten der Fixfelder stabil.
+  const fmt = [
+    '#{session_name}', '#{session_attached}', '#{session_windows}',
+    '#{pane_in_mode}', '#{pane_current_command}', '#{pane_title}',
+  ].join('\t');
   const r = await tmux(['list-sessions', '-F', fmt]);
   if (!r.ok) return []; // kein tmux-Server -> leere Liste
   return r.out
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [name, attached, windows, inMode] = line.split('\t');
+      const parts = line.split('\t');
+      const [name, attached, windows, inMode, command] = parts;
+      const title = parts.slice(5).join('\t'); // Rest = pane_title (robust ggü. Tabs)
       return {
         name,
         attached: Number(attached) > 0,
         windows: Number(windows) || 0,
         copyMode: inMode === '1',
+        command: command || '',
+        title: (title || '').trim(),
       };
     });
 }
