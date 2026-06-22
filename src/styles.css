@@ -138,7 +138,7 @@ body {
   padding: 1px 7px;
 }
 
-/* Copy-Mode-Toggle (nur im aktiven Session-Eintrag) */
+/* Copy-Mode-Toggle (Auswahl-/Kopier-Overlay, nur im aktiven Session-Eintrag) */
 .copy-row {
   display: flex;
   align-items: center;
@@ -239,6 +239,43 @@ body {
   box-shadow: var(--shadow-soft);
 }
 .conn-status.err { color: oklch(0.8 0.14 25); border-color: oklch(0.7 0.19 22 / 0.5); }
+
+/* Copy-Mode-Overlay: markierbarer Klartext-Schnappschuss ueber dem Terminal.
+   Schrift/Metrik an das Terminal angeglichen, damit Spalten buendig bleiben. */
+.copy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: auto;
+  background: var(--term-bg);
+  padding: 10px 6px 12px 12px; /* deckungsgleich mit #terminal */
+}
+.copy-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.05;
+  color: var(--foreground);
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.copy-text::selection { background: rgba(53, 198, 146, 0.45); }
+.copy-hint {
+  position: absolute;
+  bottom: 14px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-radius: 999px;
+  padding: 5px 14px;
+  box-shadow: var(--shadow-soft);
+  pointer-events: none; /* nicht die Maus-Auswahl stoeren */
+}
 
 /* Scrollbars dezent */
 .sessions::-webkit-scrollbar, .links::-webkit-scrollbar { width: 8px; }

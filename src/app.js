@@ -40,6 +40,7 @@ const state = {
 };
 let ws = null;
 let reconnectTimer = null;
+let copyMode = false; // Auswahl-/Kopier-Overlay aktiv?
 
 const statusEl = document.getElementById('conn-status');
 function setStatus(text, isErr) {
@@ -86,7 +87,7 @@ function connect() {
   ws.onopen = () => {
     setStatus(null);
     startActive();
-    term.focus();
+    if (!copyMode) term.focus();
   };
 
   ws.onmessage = (e) => {
@@ -154,6 +155,67 @@ const ro = new ResizeObserver(() => scheduleFit());
 ro.observe(workEl);
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFit);
 
+// ---------------------------------------------------------------- Copy-Mode
+// Im Copy-Mode legen wir den aktuellen Terminalinhalt als einfachen, markierbaren
+// Klartext ueber das Arbeitsfenster. So kann mit der Maus markiert und per Strg-C
+// (bzw. Cmd-C) mit den Bordmitteln des Systems kopiert werden — unabhaengig davon,
+// ob die laufende Anwendung (tmux mit 'mouse on', Claude Code, vim …) die Maus
+// selbst beansprucht. Das Overlay ist ein eingefrorener Schnappschuss: Markieren
+// wird dadurch nicht von nachlaufender Ausgabe gestoert (wie in tmux' Copy-Mode).
+const copyOverlay = document.createElement('div');
+copyOverlay.className = 'copy-overlay';
+copyOverlay.hidden = true;
+copyOverlay.tabIndex = -1;
+const copyText = document.createElement('pre');
+copyText.className = 'copy-text';
+copyOverlay.append(copyText);
+
+const copyHint = document.createElement('div');
+copyHint.className = 'copy-hint';
+copyHint.hidden = true;
+copyHint.textContent = 'Markieren + Strg-C kopiert · Esc beendet';
+
+workEl.append(copyOverlay, copyHint);
+
+// Sichtbaren Terminalinhalt (inkl. vorhandenem Scrollback) als Text einsammeln.
+function snapshotTerminal() {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    lines.push(line ? line.translateToString(true) : '');
+  }
+  // Leerzeilen am Rand kappen (haeufig leerer Scrollback ueber/unter dem Bild).
+  while (lines.length && lines[0] === '') lines.shift();
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+
+function enterCopyMode() {
+  if (copyMode) return;
+  copyMode = true;
+  copyText.textContent = snapshotTerminal();
+  copyOverlay.hidden = false;
+  copyHint.hidden = false;
+  copyOverlay.scrollTop = copyOverlay.scrollHeight; // unten (juengste Ausgabe) zeigen
+  copyOverlay.focus();
+}
+
+function exitCopyMode() {
+  if (!copyMode) return;
+  copyMode = false;
+  copyOverlay.hidden = true;
+  copyHint.hidden = true;
+  copyText.textContent = '';
+  renderSidebar(); // Toggle-Zustand spiegeln (z. B. bei Esc/Sessionwechsel)
+  term.focus();
+}
+
+// Esc beendet den Copy-Mode — fokusunabhaengig, solange er aktiv ist.
+document.addEventListener('keydown', (e) => {
+  if (copyMode && e.key === 'Escape') { e.preventDefault(); exitCopyMode(); }
+});
+
 // ---------------------------------------------------------------- Sidebar
 const sessionsEl = document.getElementById('sessions');
 
@@ -163,6 +225,7 @@ function isActive(mode, name) {
 
 function switchTo(mode, name) {
   if (isActive(mode, name)) { term.focus(); return; }
+  exitCopyMode();
   state.active = { mode, name: name || null };
   renderSidebar();
   if (ws && ws.readyState === WebSocket.OPEN) startActive();
@@ -213,24 +276,24 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick }) {
   return el;
 }
 
-function makeCopyToggle(session) {
+function makeCopyToggle() {
   const row = document.createElement('div');
   row.className = 'copy-row';
   const label = document.createElement('span');
   label.className = 'copy-label';
-  label.innerHTML = 'tmux <b>Copy-Mode</b>';
+  label.innerHTML = '<b>Markieren</b> &amp; Kopieren';
 
   const sw = document.createElement('label');
   sw.className = 'switch';
   const input = document.createElement('input');
   input.type = 'checkbox';
-  input.checked = !!session.copyMode;
+  input.checked = copyMode;
   const track = document.createElement('span'); track.className = 'track';
   const thumb = document.createElement('span'); thumb.className = 'thumb';
   sw.append(input, track, thumb);
   input.addEventListener('change', () => {
-    send({ t: 'copyMode', on: input.checked });
-    term.focus();
+    if (input.checked) enterCopyMode();
+    else exitCopyMode();
   });
   // Klick auf die Toggle-Zeile soll den Eintrag nicht erneut umschalten.
   row.addEventListener('click', (e) => e.stopPropagation());
@@ -269,7 +332,7 @@ function renderSidebar() {
       active,
       onClick: () => switchTo('session', s.name),
     });
-    if (active) entry.append(makeCopyToggle(s));
+    if (active) entry.append(makeCopyToggle());
     sessionsEl.append(entry);
   }
 }

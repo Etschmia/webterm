@@ -2,7 +2,7 @@
 // HTTP (Static + REST /api/sessions) + WebSocket (/ws) -> node-pty.
 //
 // Protokoll (WS):
-//   Client -> Server:  Text-Frame  = JSON-Control  { t: 'start'|'input'|'resize'|'copyMode', ... }
+//   Client -> Server:  Text-Frame  = JSON-Control  { t: 'start'|'input'|'resize', ... }
 //   Server -> Client:  Binaer-Frame = rohe PTY-Ausgabe
 //                      Text-Frame   = JSON-Control  { t: 'ready'|'exit'|'error', ... }
 //
@@ -285,13 +285,6 @@ wss.on('connection', (ws) => {
       case 'resize':
         if (term && msg.cols > 0 && msg.rows > 0) {
           try { term.resize(msg.cols, msg.rows); } catch {}
-        }
-        break;
-
-      case 'copyMode':
-        if (session) {
-          if (msg.on) await tmux(['copy-mode', '-t', session]);
-          else await tmux(['send-keys', '-t', session, '-X', 'cancel']);
         }
         break;
     }
