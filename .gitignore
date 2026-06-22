@@ -3,3 +3,7 @@ public/
 *.log
 .DS_Store
 _wstest.mjs
+
+# Von install.sh erzeugt (lokale Konfiguration / echte Zugangsdaten)
+.env
+deploy/*.local.*

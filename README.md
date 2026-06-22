@@ -1,7 +1,18 @@
 # term-web
 
-Web-Terminal unter **term.martuni.de** — Sidebar + Arbeitsfenster (xterm.js), abgesichert
-über Caddy (TLS + HTTP Basic Auth).
+Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
+(TLS + HTTP Basic Auth). Portabel betreibbar unter eigener Domain oder Unterpfad;
+die Referenz-Instanz läuft unter **term.martuni.de**.
+
+## Schnellstart
+```bash
+./install.sh
+```
+Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Build),
+richtet optional `claude-auto-retry` und tmux-Maussteuerung ein und hilft beim
+Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) inkl.
+bcrypt-Hash für Basic Auth. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
+woraus `server.js` die erlaubten WS-Origins ableitet.
 
 ## Funktionen
 - **Standard** (Default): interaktive Login-Shell (`bash -l`) im Home, mit `.bashrc`/Farben.
@@ -47,9 +58,10 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 ## Deployment
 - **Service**: `deploy/term-server.service` → `/etc/systemd/system/`,
   `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
-- **Caddy**: Hash via `caddy hash-password` erzeugen, in `deploy/term.martuni.de.caddy` als
-  `basic_auth { <user> <hash> }` eintragen, nach `/etc/caddy/sites/` kopieren, dann
-  `sudo systemctl reload caddy`.
+- **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
+  `.caddy`-Datei mit bcrypt-Hash). Manuell: Hash via `caddy hash-password` erzeugen, in
+  einer `deploy/<domain>.caddy` als `basic_auth { <user> <hash> }` eintragen, nach
+  `/etc/caddy/sites/` kopieren, dann `sudo systemctl reload caddy`.
   - Hinweis: Die Log-Datei muss vor dem ersten Reload existieren —
     `sudo touch /var/log/caddy/term.access.log && sudo chown caddy:caddy /var/log/caddy/term.access.log`.
 

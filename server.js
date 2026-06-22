@@ -19,6 +19,29 @@ import pty from 'node-pty';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Minimaler .env-Loader (keine Abhaengigkeit). Liest KEY=VALUE-Zeilen aus
+// <projekt>/.env. Bereits gesetzte Umgebungsvariablen (z. B. aus der
+// systemd-Unit oder einem Shell-Export) haben Vorrang und werden NICHT
+// ueberschrieben. Die Datei wird von install.sh erzeugt.
+function loadDotEnv(file) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
+}
+loadDotEnv(path.join(__dirname, '.env'));
+
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '7681', 10);
 const HOME = process.env.HOME || '/home/librechat';
@@ -26,12 +49,19 @@ const SHELL = process.env.SHELL || '/bin/bash';
 
 // Erlaubte Origins fuer den WS-Upgrade (gegen Cross-Site-WS-Hijacking).
 // Basic Auth (Caddy) bleibt die primaere Schranke.
+// Der oeffentliche Origin (Domain hinter Caddy) kommt portabel ueber
+// PUBLIC_ORIGIN aus der Umgebung/.env — mehrere kommagetrennt moeglich.
+// term.martuni.de bleibt als Default-Fallback erhalten.
 const ALLOWED_ORIGINS = new Set([
   'https://term.martuni.de',
   `http://${HOST}:${PORT}`,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ]);
+for (const o of (process.env.PUBLIC_ORIGIN || '').split(',')) {
+  const t = o.trim();
+  if (t) ALLOWED_ORIGINS.add(t);
+}
 
 // ---------------------------------------------------------------------------
 // tmux-Helfer

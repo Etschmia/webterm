@@ -50,9 +50,16 @@ function setStatus(text, isErr) {
 }
 
 // ---------------------------------------------------------------- WebSocket
+// Basis-Pfad der Anwendung. Leitet sich aus dem aktuellen Dokumentpfad ab und
+// traegt das fuehrende Verzeichnis (mit Slash). So laeuft das Frontend sowohl
+// unter der Domain-Wurzel (https://host/) als auch unter einem Unterpfad
+// (https://host/term/). Voraussetzung fuer den Unterpfad: abschliessender
+// Slash — Caddy sollte /term auf /term/ umleiten (siehe install.sh-Snippet).
+const BASE = location.pathname.replace(/[^/]*$/, '');
+
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/ws`;
+  return `${proto}://${location.host}${BASE}ws`;
 }
 
 function send(obj) {
@@ -269,7 +276,7 @@ function renderSidebar() {
 
 async function refreshSessions() {
   try {
-    const r = await fetch('/api/sessions', { cache: 'no-store' });
+    const r = await fetch(`${BASE}api/sessions`, { cache: 'no-store' });
     const data = await r.json();
     state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
   } catch {
@@ -337,6 +344,12 @@ function scheduleScan() {
 }
 
 // ---------------------------------------------------------------- Init
+// Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
+// term.martuni.de verdrahtet).
+const brandDim = document.querySelector('.brand-dim');
+if (brandDim && location.hostname) brandDim.textContent = '.' + location.hostname;
+if (location.hostname) document.title = 'term · ' + location.hostname;
+
 renderSidebar();
 refreshSessions();
 setInterval(refreshSessions, 4000);
