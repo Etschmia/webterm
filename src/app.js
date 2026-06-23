@@ -421,6 +421,45 @@ const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" st
 const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
 const ICON_UP = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V4M4.5 7.5 8 4l3.5 3.5"/></svg>';
 
+// Hover-Vorschau fuer Bilddateien: schwebendes, dem Cursor folgendes <img>.
+const IMG_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
+const fxPreviewEl = document.createElement('div');
+fxPreviewEl.className = 'fx-preview';
+fxPreviewEl.hidden = true;
+const fxPreviewImg = document.createElement('img');
+fxPreviewImg.alt = '';
+fxPreviewEl.append(fxPreviewImg);
+document.body.append(fxPreviewEl);
+let fxPrevX = 0, fxPrevY = 0, fxPrevUrl = null;
+
+function fxMovePreview(x, y) {
+  fxPrevX = x; fxPrevY = y;
+  if (fxPreviewEl.hidden) return;
+  const m = 16;
+  const pw = fxPreviewEl.offsetWidth || 320;
+  const ph = fxPreviewEl.offsetHeight || 320;
+  let left = x - pw - m;                  // bevorzugt links vom Cursor (Explorer ist rechts)
+  if (left < m) left = x + m;             // sonst rechts daneben
+  let top = Math.max(m, Math.min(y - ph / 2, window.innerHeight - ph - m));
+  fxPreviewEl.style.left = left + 'px';
+  fxPreviewEl.style.top = top + 'px';
+}
+function fxShowPreview(url) {
+  fxPrevUrl = url;
+  fxPreviewImg.onload = () => {
+    if (fxPrevUrl !== url) return;        // Cursor inzwischen weiter -> verwerfen
+    fxPreviewEl.hidden = false;
+    fxMovePreview(fxPrevX, fxPrevY);
+  };
+  fxPreviewImg.onerror = () => { if (fxPrevUrl === url) fxPreviewEl.hidden = true; };
+  fxPreviewImg.src = url;
+}
+function fxHidePreview() {
+  fxPrevUrl = null;
+  fxPreviewEl.hidden = true;
+  fxPreviewImg.removeAttribute('src');
+}
+
 function fxSetStatus(text, isErr) {
   if (!text) { fxStatusEl.hidden = true; return; }
   fxStatusEl.hidden = false;
@@ -479,6 +518,7 @@ function fxRenderCrumbs() {
 }
 
 function fxRenderList(entries) {
+  fxHidePreview(); // gehovertes Element wird ersetzt -> mouseleave faellt evtl. aus
   fxListEl.replaceChildren();
   if (fxPath) {
     fxListEl.append(fxItem({ name: '..', type: 'dir' }, ICON_UP, () => {
@@ -491,11 +531,14 @@ function fxRenderList(entries) {
     const onClick = e.type === 'dir'
       ? () => fxLoad(child)
       : () => fxDownload(child, e.name);
-    fxListEl.append(fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick));
+    const previewUrl = (e.type === 'file' && IMG_RE.test(e.name))
+      ? `${BASE}api/fs/raw?path=${encodeURIComponent(child)}`
+      : null;
+    fxListEl.append(fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl));
   }
 }
 
-function fxItem(e, iconSvg, onClick) {
+function fxItem(e, iconSvg, onClick, previewUrl) {
   const el = document.createElement('div');
   el.className = 'fx-item ' + (e.type === 'dir' ? 'dir' : 'file');
   const icon = document.createElement('span');
@@ -513,6 +556,13 @@ function fxItem(e, iconSvg, onClick) {
     el.append(sz);
   }
   el.addEventListener('click', onClick);
+  // Bilddatei: schwebende Vorschau, solange der Cursor darueber steht.
+  if (previewUrl) {
+    el.classList.add('img');
+    el.addEventListener('mouseenter', (ev) => { fxShowPreview(previewUrl); fxMovePreview(ev.clientX, ev.clientY); });
+    el.addEventListener('mousemove', (ev) => fxMovePreview(ev.clientX, ev.clientY));
+    el.addEventListener('mouseleave', fxHidePreview);
+  }
   return el;
 }
 

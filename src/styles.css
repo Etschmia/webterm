@@ -416,6 +416,28 @@ body {
 /* display:inline-flex wuerde sonst das hidden-Attribut aushebeln. */
 .fx-reopen[hidden] { display: none; }
 
+/* Schwebende Bild-Vorschau (Hover im Explorer) */
+.fx-preview {
+  position: fixed;
+  top: 0; left: 0;
+  z-index: 50;
+  pointer-events: none;
+  padding: 4px;
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+}
+.fx-preview[hidden] { display: none; }
+.fx-preview img {
+  display: block;
+  max-width: 320px;
+  max-height: 320px;
+  width: auto; height: auto;
+  border-radius: 4px;
+  background: var(--term-bg);
+}
+
 /* Scrollbars dezent */
 .sessions::-webkit-scrollbar, .links::-webkit-scrollbar, .fx-list::-webkit-scrollbar { width: 8px; }
 .sessions::-webkit-scrollbar-thumb, .links::-webkit-scrollbar-thumb, .fx-list::-webkit-scrollbar-thumb {

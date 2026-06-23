@@ -171,6 +171,13 @@ function safePath(rel) {
   return abs;
 }
 
+// Bild-MIME-Typen fuer die Inline-Auslieferung (/api/fs/raw, Hover-Vorschau).
+const IMG_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif',
+  '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+};
+
 async function handleFs(req, res, route) {
   const u = new URL(req.url, 'http://localhost');
   const rel = u.searchParams.get('path') || '';
@@ -207,6 +214,27 @@ async function handleFs(req, res, route) {
       // ASCII-Fallback + RFC-5987-codierter Name fuer Umlaute u. Ae.
       'Content-Disposition':
         `attachment; filename="${base.replace(/[\r\n"]/g, '')}"; filename*=UTF-8''${encodeURIComponent(base)}`,
+    });
+    const stream = fs.createReadStream(abs);
+    stream.on('error', () => { try { res.destroy(); } catch {} });
+    stream.pipe(res);
+    return;
+  }
+
+  // Datei inline ausliefern (Bild-Vorschau). MIME aus der Endung; unbekannt ->
+  // octet-stream + nosniff (kein HTML-Sniffing). CSP-Sandbox entschaerft zudem
+  // ein direkt aufgerufenes SVG (kein Skript-Ausfuehren).
+  if (route === '/api/fs/raw' && req.method === 'GET') {
+    let st;
+    try { st = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
+    if (st.isDirectory()) return sendJson(res, 400, { error: 'Ist ein Verzeichnis' });
+    const ext = path.extname(abs).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': IMG_MIME[ext] || 'application/octet-stream',
+      'Content-Length': st.size,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': 'sandbox',
     });
     const stream = fs.createReadStream(abs);
     stream.on('error', () => { try { res.destroy(); } catch {} });
