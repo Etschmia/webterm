@@ -413,6 +413,8 @@ body {
   box-shadow: var(--shadow-soft);
 }
 .fx-reopen:hover { border-color: var(--border-strong); }
+/* display:inline-flex wuerde sonst das hidden-Attribut aushebeln. */
+.fx-reopen[hidden] { display: none; }
 
 /* Scrollbars dezent */
 .sessions::-webkit-scrollbar, .links::-webkit-scrollbar, .fx-list::-webkit-scrollbar { width: 8px; }
