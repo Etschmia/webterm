@@ -406,6 +406,168 @@ function scheduleScan() {
   scanTimer = setTimeout(() => renderLinks(extractLinks()), 350);
 }
 
+// ---------------------------------------------------------------- Datei-Explorer
+// Rechte, einklappbare Spalte: Verzeichnisbaum unter $HOME (serverseitig auf
+// FS_ROOT begrenzt), Download per Klick, Upload per Drag & Drop vom Desktop.
+const appEl = document.querySelector('.app');
+const explorerEl = document.getElementById('explorer');
+const fxListEl = document.getElementById('fx-list');
+const fxCrumbsEl = document.getElementById('fx-crumbs');
+const fxStatusEl = document.getElementById('fx-status');
+const fxReopenBtn = document.getElementById('fx-reopen');
+let fxPath = ''; // aktuelles Verzeichnis, relativ zu FS_ROOT ('' = Wurzel)
+
+const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.6 4.2a1 1 0 0 1 1-1H6l1.3 1.5h6.1a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1z"/></svg>';
+const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
+const ICON_UP = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V4M4.5 7.5 8 4l3.5 3.5"/></svg>';
+
+function fxSetStatus(text, isErr) {
+  if (!text) { fxStatusEl.hidden = true; return; }
+  fxStatusEl.hidden = false;
+  fxStatusEl.textContent = text;
+  fxStatusEl.classList.toggle('err', !!isErr);
+}
+
+function fxFmtSize(n) {
+  if (!n) return '';
+  const u = ['B', 'K', 'M', 'G', 'T'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + u[i];
+}
+
+function fxCollapse(collapsed) {
+  appEl.classList.toggle('fx-collapsed', collapsed);
+  fxReopenBtn.hidden = !collapsed;
+  if (!collapsed) fxLoad(fxPath);
+  scheduleFit(); // Terminal an die geaenderte Breite anpassen
+}
+
+async function fxLoad(rel) {
+  fxSetStatus('Lade …');
+  let data;
+  try {
+    const r = await fetch(`${BASE}api/fs/list?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    data = await r.json();
+  } catch {
+    fxSetStatus('Konnte Verzeichnis nicht laden', true);
+    return;
+  }
+  fxPath = data.path || '';
+  fxSetStatus(null);
+  fxRenderCrumbs();
+  fxRenderList(data.entries || []);
+}
+
+function fxRenderCrumbs() {
+  fxCrumbsEl.replaceChildren();
+  const mk = (label, target) => {
+    const c = document.createElement('span');
+    c.className = 'fx-crumb';
+    c.textContent = label;
+    c.addEventListener('click', () => fxLoad(target));
+    return c;
+  };
+  fxCrumbsEl.append(mk('~', ''));
+  let acc = '';
+  for (const part of (fxPath ? fxPath.split('/').filter(Boolean) : [])) {
+    acc = acc ? acc + '/' + part : part;
+    const sep = document.createElement('span'); sep.className = 'fx-sep'; sep.textContent = '/';
+    fxCrumbsEl.append(sep, mk(part, acc));
+  }
+}
+
+function fxRenderList(entries) {
+  fxListEl.replaceChildren();
+  if (fxPath) {
+    fxListEl.append(fxItem({ name: '..', type: 'dir' }, ICON_UP, () => {
+      const parts = fxPath.split('/').filter(Boolean); parts.pop();
+      fxLoad(parts.join('/'));
+    }));
+  }
+  for (const e of entries) {
+    const child = fxPath ? fxPath + '/' + e.name : e.name;
+    const onClick = e.type === 'dir'
+      ? () => fxLoad(child)
+      : () => fxDownload(child, e.name);
+    fxListEl.append(fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick));
+  }
+}
+
+function fxItem(e, iconSvg, onClick) {
+  const el = document.createElement('div');
+  el.className = 'fx-item ' + (e.type === 'dir' ? 'dir' : 'file');
+  const icon = document.createElement('span');
+  icon.className = 'fx-icon';
+  icon.innerHTML = iconSvg;
+  const name = document.createElement('span');
+  name.className = 'fx-name';
+  name.textContent = e.name;
+  name.title = e.name;
+  el.append(icon, name);
+  if (e.type === 'file' && e.size) {
+    const sz = document.createElement('span');
+    sz.className = 'fx-size';
+    sz.textContent = fxFmtSize(e.size);
+    el.append(sz);
+  }
+  el.addEventListener('click', onClick);
+  return el;
+}
+
+function fxDownload(rel, name) {
+  const a = document.createElement('a');
+  a.href = `${BASE}api/fs/download?path=${encodeURIComponent(rel)}`;
+  a.download = name || '';
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+async function fxUpload(files) {
+  let ok = 0;
+  for (const f of files) {
+    fxSetStatus(`Lade hoch: ${f.name} …`);
+    try {
+      const r = await fetch(
+        `${BASE}api/fs/upload?path=${encodeURIComponent(fxPath)}&name=${encodeURIComponent(f.name)}`,
+        { method: 'POST', body: f },
+      );
+      if (r.ok) ok++;
+    } catch {}
+  }
+  fxSetStatus(ok ? `${ok}/${files.length} hochgeladen` : 'Upload fehlgeschlagen', !ok);
+  await fxLoad(fxPath);
+  setTimeout(() => fxSetStatus(null), 2500);
+}
+
+// Drag & Drop: Desktop-Dateien -> Upload ins aktuelle Verzeichnis.
+function fxDragOver(e) {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  explorerEl.classList.add('drag');
+}
+explorerEl.addEventListener('dragenter', fxDragOver);
+explorerEl.addEventListener('dragover', fxDragOver);
+explorerEl.addEventListener('dragleave', (e) => {
+  // Nur loslassen, wenn der Cursor den Explorer wirklich verlaesst.
+  if (!explorerEl.contains(e.relatedTarget)) explorerEl.classList.remove('drag');
+});
+explorerEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  explorerEl.classList.remove('drag');
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length) fxUpload(files);
+});
+// Versehentliches Ablegen ausserhalb des Explorers nicht im Browser oeffnen.
+window.addEventListener('dragover', (e) => { if (!explorerEl.contains(e.target)) e.preventDefault(); });
+window.addEventListener('drop', (e) => { if (!explorerEl.contains(e.target)) e.preventDefault(); });
+
+document.getElementById('fx-refresh').addEventListener('click', () => fxLoad(fxPath));
+document.getElementById('fx-collapse').addEventListener('click', () => fxCollapse(true));
+fxReopenBtn.addEventListener('click', () => fxCollapse(false));
+
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // term.martuni.de verdrahtet).
@@ -418,3 +580,6 @@ refreshSessions();
 setInterval(refreshSessions, 4000);
 fitTerminal();
 connect();
+
+// Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
+fxCollapse(window.innerWidth < 900);

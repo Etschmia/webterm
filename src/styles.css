@@ -36,9 +36,11 @@ body {
 
 .app {
   display: grid;
-  grid-template-columns: 264px 1fr;
+  grid-template-columns: 264px 1fr 320px;
   height: 100dvh;
 }
+.app.fx-collapsed { grid-template-columns: 264px 1fr 0; }
+.app.fx-collapsed .explorer { display: none; }
 
 /* ---------------------------------------------------------------- Sidebar */
 .sidebar {
@@ -277,13 +279,149 @@ body {
   pointer-events: none; /* nicht die Maus-Auswahl stoeren */
 }
 
+/* ---------------------------------------------------------------- Datei-Explorer */
+.explorer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+}
+.fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 14px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.fx-title { font-weight: 650; font-size: 14px; letter-spacing: -0.01em; }
+.fx-head-actions { display: flex; gap: 4px; }
+.fx-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  font-size: 15px; line-height: 1;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.fx-btn:hover { background: oklch(1 0 0 / 0.06); color: var(--foreground); }
+
+.fx-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  padding: 9px 12px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.fx-crumb { cursor: pointer; padding: 1px 4px; border-radius: 5px; }
+.fx-crumb:hover { background: oklch(1 0 0 / 0.06); color: var(--foreground); }
+.fx-sep { opacity: 0.5; }
+
+.fx-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.fx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.fx-item:hover { background: oklch(1 0 0 / 0.05); }
+.fx-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 16px; height: 16px;
+  color: var(--muted-foreground);
+}
+.fx-item.dir .fx-icon { color: var(--primary); }
+.fx-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fx-item.dir .fx-name { font-weight: 550; }
+.fx-size { flex: 0 0 auto; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+.fx-status {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border);
+}
+.fx-status.err { color: oklch(0.8 0.14 25); }
+
+/* Drop-Overlay (nur waehrend eines Drags sichtbar) */
+.fx-drop {
+  position: absolute;
+  inset: 8px;
+  z-index: 4;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  background: oklch(0.165 0.005 56 / 0.88);
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+.explorer.drag .fx-drop { display: flex; }
+
+/* Reopen-Knopf (oben rechts im Arbeitsfenster, nur wenn eingeklappt) */
+.fx-reopen {
+  position: absolute;
+  top: 10px; right: 14px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--foreground);
+  background: oklch(0.216 0.006 56 / 0.92);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+}
+.fx-reopen:hover { border-color: var(--border-strong); }
+
 /* Scrollbars dezent */
-.sessions::-webkit-scrollbar, .links::-webkit-scrollbar { width: 8px; }
-.sessions::-webkit-scrollbar-thumb, .links::-webkit-scrollbar-thumb {
+.sessions::-webkit-scrollbar, .links::-webkit-scrollbar, .fx-list::-webkit-scrollbar { width: 8px; }
+.sessions::-webkit-scrollbar-thumb, .links::-webkit-scrollbar-thumb, .fx-list::-webkit-scrollbar-thumb {
   background: oklch(1 0 0 / 0.1); border-radius: 999px;
 }
 
 /* Schmale Viewports: Sidebar etwas schmaler */
 @media (max-width: 720px) {
-  .app { grid-template-columns: 200px 1fr; }
+  .app { grid-template-columns: 200px 1fr 280px; }
+  .app.fx-collapsed { grid-template-columns: 200px 1fr 0; }
 }

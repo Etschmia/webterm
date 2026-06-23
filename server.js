@@ -46,6 +46,9 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '7681', 10);
 const HOME = process.env.HOME || '/home/librechat';
 const SHELL = process.env.SHELL || '/bin/bash';
+// Wurzel des Datei-Explorers. Die /api/fs/*-Endpunkte koennen NICHT darueber
+// hinaus (Schutz gegen Directory-Traversal in safePath). Default: Home.
+const FS_ROOT = path.resolve(process.env.FS_ROOT || HOME);
 
 // Erlaubte Origins fuer den WS-Upgrade (gegen Cross-Site-WS-Hijacking).
 // Basic Auth (Caddy) bleibt die primaere Schranke.
@@ -150,6 +153,93 @@ function serveStatic(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Datei-Explorer-API (/api/fs/*) — strikt auf FS_ROOT eingeschraenkt
+// ---------------------------------------------------------------------------
+
+function sendJson(res, code, obj) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(obj));
+}
+
+// Loest einen vom Client gelieferten (relativen) Pfad sicher gegen FS_ROOT auf.
+// Fuehrender Slash + normalize neutralisieren jegliche '..'-Anteile, sodass ein
+// Ausbruch aus FS_ROOT unmoeglich ist. Rueckgabe: absoluter Pfad oder null.
+function safePath(rel) {
+  const cleaned = path.normalize('/' + String(rel || '')).replace(/^\/+/, '');
+  const abs = path.resolve(FS_ROOT, cleaned);
+  if (abs !== FS_ROOT && !abs.startsWith(FS_ROOT + path.sep)) return null;
+  return abs;
+}
+
+async function handleFs(req, res, route) {
+  const u = new URL(req.url, 'http://localhost');
+  const rel = u.searchParams.get('path') || '';
+  const abs = safePath(rel);
+  if (!abs) return sendJson(res, 400, { error: 'Ungueltiger Pfad' });
+
+  // Verzeichnis auflisten -> { path, entries: [{name,type,size,mtime}] }
+  if (route === '/api/fs/list' && req.method === 'GET') {
+    let dirents;
+    try {
+      dirents = await fs.promises.readdir(abs, { withFileTypes: true });
+    } catch {
+      return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden' });
+    }
+    const entries = await Promise.all(dirents.map(async (d) => {
+      let size = 0, mtime = 0;
+      try { const st = await fs.promises.stat(path.join(abs, d.name)); size = st.size; mtime = st.mtimeMs; } catch {}
+      return { name: d.name, type: d.isDirectory() ? 'dir' : 'file', size, mtime };
+    }));
+    // Verzeichnisse zuerst, dann alphabetisch.
+    entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1)));
+    return sendJson(res, 200, { path: rel, entries });
+  }
+
+  // Datei herunterladen (als Attachment).
+  if (route === '/api/fs/download' && req.method === 'GET') {
+    let st;
+    try { st = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
+    if (st.isDirectory()) return sendJson(res, 400, { error: 'Ist ein Verzeichnis' });
+    const base = path.basename(abs);
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': st.size,
+      // ASCII-Fallback + RFC-5987-codierter Name fuer Umlaute u. Ae.
+      'Content-Disposition':
+        `attachment; filename="${base.replace(/[\r\n"]/g, '')}"; filename*=UTF-8''${encodeURIComponent(base)}`,
+    });
+    const stream = fs.createReadStream(abs);
+    stream.on('error', () => { try { res.destroy(); } catch {} });
+    stream.pipe(res);
+    return;
+  }
+
+  // Datei hochladen: Roh-Body in <dir>/<name>. Kein Multipart -> keine Abhaengigkeit.
+  if (route === '/api/fs/upload' && req.method === 'POST') {
+    const name = u.searchParams.get('name') || '';
+    if (!name || name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
+      return sendJson(res, 400, { error: 'Ungueltiger Dateiname' });
+    }
+    let dirStat;
+    try { dirStat = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Zielverzeichnis fehlt' }); }
+    if (!dirStat.isDirectory()) return sendJson(res, 400, { error: 'Kein Verzeichnis' });
+    const dest = safePath(path.posix.join(String(rel).replace(/\\/g, '/'), name));
+    if (!dest) return sendJson(res, 400, { error: 'Ungueltiger Pfad' });
+
+    const out = fs.createWriteStream(dest);
+    let done = false;
+    const fail = (code, m) => { if (done) return; done = true; try { out.destroy(); } catch {} sendJson(res, code, { error: m }); };
+    req.on('error', () => fail(400, 'Uebertragung abgebrochen'));
+    out.on('error', () => fail(500, 'Schreibfehler'));
+    out.on('finish', () => { if (!done) { done = true; sendJson(res, 200, { ok: true, name }); } });
+    req.pipe(out);
+    return;
+  }
+
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -161,6 +251,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ sessions }));
     return;
+  }
+
+  if (url.startsWith('/api/fs/')) {
+    return handleFs(req, res, url);
   }
 
   if (url === '/healthz') {

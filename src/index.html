@@ -32,7 +32,24 @@
     <main class="work">
       <div id="terminal"></div>
       <div class="conn-status" id="conn-status" hidden></div>
+      <button class="fx-reopen" id="fx-reopen" hidden title="Dateien anzeigen">
+        <span aria-hidden="true">‹</span> Dateien
+      </button>
     </main>
+
+    <aside class="explorer" id="explorer" aria-label="Dateien">
+      <div class="fx-head">
+        <span class="fx-title">Dateien</span>
+        <div class="fx-head-actions">
+          <button class="fx-btn" id="fx-refresh" title="Aktualisieren" aria-label="Aktualisieren">⟳</button>
+          <button class="fx-btn" id="fx-collapse" title="Einklappen" aria-label="Einklappen">›</button>
+        </div>
+      </div>
+      <div class="fx-crumbs" id="fx-crumbs" aria-label="Pfad"></div>
+      <div class="fx-list" id="fx-list" aria-label="Dateiliste"></div>
+      <div class="fx-status" id="fx-status" hidden></div>
+      <div class="fx-drop" id="fx-drop" aria-hidden="true">Zum Hochladen ablegen</div>
+    </aside>
   </div>
 
   <script type="module" src="app.bundle.js"></script>
