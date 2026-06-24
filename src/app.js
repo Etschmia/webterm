@@ -311,13 +311,19 @@ function renderSidebar() {
   sessionsEl.append(heading);
 
   // Standard
-  sessionsEl.append(makeEntry({
+  const stdActive = isActive('standard', null);
+  const stdEntry = makeEntry({
     label: 'Standard',
     dotClass: '',
     badge: 'ssh',
-    active: isActive('standard', null),
+    active: stdActive,
     onClick: () => switchTo('standard', null),
-  }));
+  });
+  // Copy-Mode auch im Standard-Modus: das Overlay ist modusunabhaengig und
+  // hilft genauso, sobald hier eine maus-greifende Anwendung laeuft (Claude
+  // Code, vim, htop …), die die native xterm-Auswahl unterbindet.
+  if (stdActive) stdEntry.append(makeCopyToggle());
+  sessionsEl.append(stdEntry);
 
   // tmux-Sessions
   for (const s of state.sessions) {
