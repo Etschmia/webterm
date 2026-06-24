@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# term-restart — startet term-server.service neu, OHNE laufende Claude-Sessions zu verlieren.
+#
+# Hintergrund: Das Webterminal (server.js) hostet ALLE tmux-Sessions im cgroup von
+# term-server.service. Ein einfaches `systemctl restart term-server` reißt wegen
+# KillMode=control-group das gesamte cgroup ab — also den tmux-Server samt jeder
+# darin laufenden Claude-Sitzung (auch fremder!). Genau das ist am 24.06.2026 passiert.
+#
+# Dieser Wrapper:
+#   1. snapshottet alle tmux-Panes, die gerade `claude` laufen (Session-Name + cwd),
+#   2. führt den Restart aus einer ENTKOPPELTEN transienten systemd-Unit aus, die den
+#      cgroup-Abriss überlebt (KillMode=none, eigenes cgroup unter system.slice),
+#   3. setzt nach dem Restart jede Sitzung per `claude --resume <neueste-session-id>`
+#      wieder auf — die Konversationen kommen also mit voller Historie zurück.
+#
+# Benutze IMMER diesen Befehl statt `systemctl restart term-server`, wenn du aus einer
+# Sitzung heraus neu startest, die selbst im Webterminal läuft.
+#
+# Aufruf:  deploy/term-restart           (normaler entkoppelter Restart + Restore)
+#          deploy/term-restart --restore <snapfile>   (intern, von der Unit aufgerufen)
+set -euo pipefail
+
+SERVICE="term-server"
+PROJECTS="$HOME/.claude/projects"
+
+log(){ printf '[term-restart] %s\n' "$*" >&2; }
+
+# cwd -> Name des Claude-Projektverzeichnisses (Claude ersetzt '/' und '.' durch '-').
+enc_dir(){ printf '%s' "$1" | sed 's#[/.]#-#g'; }
+
+# Neueste Top-Level-Session-ID (*.jsonl) für ein cwd, ohne subagents/.
+newest_session_id(){
+  local dir="$PROJECTS/$(enc_dir "$1")" f
+  [ -d "$dir" ] || return 1
+  f=$(find "$dir" -maxdepth 1 -name '*.jsonl' -printf '%T@ %f\n' 2>/dev/null \
+        | sort -rn | head -1 | awk '{print $2}')
+  [ -n "$f" ] && printf '%s' "${f%.jsonl}"
+}
+
+# name<TAB>cwd je tmux-Pane, in dessen Prozess-Subtree ein `claude` läuft.
+# (Robust gegen den claude-auto-retry-Wrapper: dort meldet pane_current_command
+#  'bash'/'node'; verlässlich ist nur der Prozessname comm=claude irgendwo im Baum.)
+snapshot(){
+  local panes
+  panes=$(tmux list-panes -a -F '#{pane_pid}|#{session_name}|#{pane_current_path}' 2>/dev/null) || return 0
+  [ -n "$panes" ] || return 0
+  ps -e -o pid=,ppid=,comm= | awk -v panes="$panes" '
+    BEGIN{
+      n=split(panes, rows, "\n");
+      for(i=1;i<=n;i++){ if(rows[i]=="") continue; split(rows[i], a, "|"); paneinfo[a[1]]=a[2]"\t"a[3] }
+    }
+    { ppid[$1]=$2; comm[$1]=$3 }
+    END{
+      for(pid in comm){
+        if(comm[pid]!="claude") continue
+        x=pid
+        while(x!="" && x!=0 && (x in ppid)){
+          if(x in paneinfo){ found[x]=1; break }
+          x=ppid[x]
+        }
+      }
+      for(p in found) print paneinfo[p]
+    }' | sort -u
+}
+
+# Phase 2 (in der entkoppelten Unit): warten bis Service zurück ist, dann Sessions resumen.
+restore(){
+  local snapfile="$1" name cwd sid i
+  for i in $(seq 1 60); do
+    systemctl is-active --quiet "$SERVICE" && break
+    sleep 0.5
+  done
+  while IFS=$'\t' read -r name cwd; do
+    [ -n "${name:-}" ] || continue
+    if tmux has-session -t "$name" 2>/dev/null; then
+      log "Session '$name' existiert bereits — übersprungen."
+      continue
+    fi
+    tmux new-session -d -s "$name" -c "$cwd"
+    if sid=$(newest_session_id "$cwd"); then
+      log "Restore '$name' ($cwd) -> claude --resume $sid"
+      tmux send-keys -t "$name" "claude --resume $sid" Enter
+    else
+      log "Kein Transkript für $cwd — leere Session '$name' angelegt."
+    fi
+  done < "$snapfile"
+  rm -f "$snapfile"
+  log "Restore abgeschlossen."
+}
+
+case "${1:-}" in
+  --restore) shift; restore "${1:?snapfile fehlt}"; exit 0 ;;
+esac
+
+# ---- Phase 1: Snapshot, dann Übergabe an entkoppelte Unit ----
+command -v tmux   >/dev/null || { log "tmux nicht gefunden."; exit 1; }
+command -v sudo   >/dev/null || { log "sudo nicht gefunden."; exit 1; }
+
+SNAP=$(mktemp /tmp/term-restart.XXXXXX)
+snapshot > "$SNAP"
+log "$(wc -l < "$SNAP") aktive Claude-Session(s) gesichert."
+
+SELF=$(readlink -f "$0")
+UNIT="term-restart-$$-$(id -u)"
+# Robuster PATH für die Unit (claude/node/tmux/systemctl/sudo erreichbar).
+RUN_PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v25.2.1/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+log "Starte entkoppelten Restart in Unit '$UNIT' …"
+sudo systemd-run --collect --quiet --unit="$UNIT" \
+  --uid="$(id -u)" --gid="$(id -g)" \
+  -p KillMode=none \
+  --setenv=HOME="$HOME" \
+  --setenv=PATH="$RUN_PATH" \
+  --setenv=LANG="${LANG:-C.UTF-8}" \
+  --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
+  bash -c "sudo -n systemctl restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+
+log "Restart entkoppelt angestoßen. Diese Sitzung wird gleich beendet —"
+log "die Claude-Sessions kommen automatisch per 'claude --resume' zurück."

@@ -61,6 +61,13 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 ## Deployment
 - **Service**: `deploy/term-server.service` → `/etc/systemd/system/`,
   `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
+- **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
+  Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
+  direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab
+  und killt damit jede laufende Claude-Sitzung (auch fremde) — genau das ist am
+  24.06.2026 passiert. `deploy/term-restart` snapshottet die aktiven Claude-Panes, startet
+  aus einer **entkoppelten** transienten systemd-Unit neu (überlebt den cgroup-Abriss) und
+  setzt jede Sitzung danach automatisch per `claude --resume` wieder auf.
 - **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
   `.caddy`-Datei mit bcrypt-Hash). Manuell: Hash via `caddy hash-password` erzeugen, in
   einer `deploy/<domain>.caddy` als `basic_auth { <user> <hash> }` eintragen, nach
