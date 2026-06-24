@@ -50,6 +50,17 @@ const SHELL = process.env.SHELL || '/bin/bash';
 // hinaus (Schutz gegen Directory-Traversal in safePath). Default: Home.
 const FS_ROOT = path.resolve(process.env.FS_ROOT || HOME);
 
+// Sammelverzeichnis fuer Bilder aus der Browser-Zwischenablage (/api/clip).
+// Liegt unter HOME, ist damit auch fuer den Datei-Explorer (FS_ROOT=HOME)
+// sichtbar. Alte Clips werden beim Hochladen nach CLIP_TTL_MS aufgeraeumt.
+const CLIP_DIR = path.join(HOME, '.term-clips');
+const CLIP_MAX_BYTES = 25 * 1024 * 1024;        // harte Obergrenze pro Bild
+const CLIP_TTL_MS = 7 * 24 * 60 * 60 * 1000;    // Aufbewahrung: 7 Tage
+const CLIP_EXT = {                               // erlaubte Bildtypen -> Endung
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
+  'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp',
+};
+
 // Erlaubte Origins fuer den WS-Upgrade (gegen Cross-Site-WS-Hijacking).
 // Basic Auth (Caddy) bleibt die primaere Schranke.
 // Der oeffentliche Origin (Domain hinter Caddy) kommt portabel ueber
@@ -268,6 +279,75 @@ async function handleFs(req, res, route) {
 }
 
 // ---------------------------------------------------------------------------
+// Zwischenablage-Bilder (/api/clip) — Browser-Paste -> Datei -> Pfad
+// ---------------------------------------------------------------------------
+// Nimmt rohe Bild-Bytes (POST-Body, Content-Type = image/*) entgegen, legt sie
+// als Datei unter CLIP_DIR ab und gibt den absoluten Pfad zurueck. Das Frontend
+// schreibt diesen Pfad dann als Text in die laufende Anwendung (z. B. Claude
+// Code), die das Bild ueber den Pfad einliest. Loest das Headless-Problem:
+// der Host hat keine System-Zwischenablage.
+
+// Kollisionssicherer, lesbarer Dateiname-Stempel: JJJJMMTT-HHMMSS-mmm.
+function clipStamp() {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-`
+       + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
+}
+
+// Alte Clips entfernen (best effort, blockiert die Antwort nicht).
+async function pruneClips() {
+  let names;
+  try { names = await fs.promises.readdir(CLIP_DIR); } catch { return; }
+  const now = Date.now();
+  await Promise.all(names.map(async (n) => {
+    if (!n.startsWith('clip-')) return;
+    const fp = path.join(CLIP_DIR, n);
+    try {
+      const st = await fs.promises.stat(fp);
+      if (now - st.mtimeMs > CLIP_TTL_MS) await fs.promises.unlink(fp);
+    } catch {}
+  }));
+}
+
+async function handleClip(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'Methode nicht erlaubt' });
+  const ctype = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const ext = CLIP_EXT[ctype];
+  if (!ext) return sendJson(res, 415, { error: 'Kein unterstuetztes Bildformat' });
+  if (Number(req.headers['content-length'] || 0) > CLIP_MAX_BYTES) {
+    return sendJson(res, 413, { error: 'Bild zu gross' });
+  }
+
+  try { await fs.promises.mkdir(CLIP_DIR, { recursive: true }); }
+  catch { return sendJson(res, 500, { error: 'Clip-Verzeichnis nicht anlegbar' }); }
+
+  const name = `clip-${clipStamp()}.${ext}`;
+  const dest = path.join(CLIP_DIR, name);
+  const out = fs.createWriteStream(dest);
+  let total = 0, done = false;
+  const fail = (code, m) => {
+    if (done) return; done = true;
+    try { out.destroy(); } catch {}
+    fs.promises.unlink(dest).catch(() => {});
+    sendJson(res, code, { error: m });
+  };
+  req.on('data', (chunk) => {
+    total += chunk.length;
+    // Laufende Groessenkontrolle (Content-Length ist nur ein Hinweis).
+    if (total > CLIP_MAX_BYTES) { try { req.destroy(); } catch {} fail(413, 'Bild zu gross'); }
+  });
+  req.on('error', () => fail(400, 'Uebertragung abgebrochen'));
+  out.on('error', () => fail(500, 'Schreibfehler'));
+  out.on('finish', () => {
+    if (done) return; done = true;
+    pruneClips().catch(() => {});
+    sendJson(res, 200, { ok: true, path: dest, name });
+  });
+  req.pipe(out);
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -283,6 +363,10 @@ const server = http.createServer(async (req, res) => {
 
   if (url.startsWith('/api/fs/')) {
     return handleFs(req, res, url);
+  }
+
+  if (url === '/api/clip') {
+    return handleClip(req, res);
   }
 
   if (url === '/healthz') {

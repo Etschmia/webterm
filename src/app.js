@@ -216,6 +216,65 @@ document.addEventListener('keydown', (e) => {
   if (copyMode && e.key === 'Escape') { e.preventDefault(); exitCopyMode(); }
 });
 
+// ---------------------------------------------------------------- Bild-Paste -> Pfad
+// Bild aus der (Browser-)Zwischenablage: hochladen und den resultierenden
+// Dateipfad als Tastatureingabe in die laufende Anwendung schreiben. Claude Code
+// (und andere Tools) lesen das Bild dann ueber diesen Pfad ein. Der Umweg ist
+// noetig, weil der Server headless ist: er hat keine System-Zwischenablage, das
+// Bild lebt allein im Browser des Nutzers. Text-Paste bleibt unberuehrt (xterm).
+async function uploadClip(file) {
+  const r = await fetch(`${BASE}api/clip`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  if (!r.ok) {
+    let m = 'Upload fehlgeschlagen';
+    try { m = (await r.json()).error || m; } catch {}
+    throw new Error(m);
+  }
+  return (await r.json()).path;
+}
+
+function imageFromClipboard(e) {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return null;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+      const f = it.getAsFile();
+      if (f) return f;
+    }
+  }
+  return null;
+}
+
+// Capture-Phase: vor xterms eigenem Paste-Handler. Nur bei einem Bild greifen
+// wir ein (preventDefault + stopPropagation); reine Text-Paste laeuft normal
+// durch zu xterm.
+document.addEventListener('paste', async (e) => {
+  if (copyMode) return;                     // Overlay-Auswahl nicht stoeren
+  if (!workEl.contains(e.target)) return;   // nur wenn das Terminal den Fokus hat
+  const file = imageFromClipboard(e);
+  if (!file) return;                        // kein Bild -> normale Text-Paste
+  e.preventDefault();
+  e.stopPropagation();
+  if (!(ws && ws.readyState === WebSocket.OPEN)) { setStatus('Nicht verbunden', true); return; }
+  setStatus('Screenshot wird übertragen …');
+  try {
+    const p = await uploadClip(file);
+    // Pfad als getippten Text in die PTY; kein Enter — der Nutzer formuliert
+    // seinen Prompt drumherum. Fuehrendes Leerzeichen trennt den Pfad sicher vom
+    // zuletzt getippten Wort (sonst klebt er daran), das abschliessende vom
+    // folgenden Text. Ein evtl. ueberzaehliges Leerzeichen ist harmlos.
+    send({ t: 'input', d: ' ' + p + ' ' });
+    setStatus('Screenshot eingefügt ✓');
+    setTimeout(() => { if (statusEl.textContent === 'Screenshot eingefügt ✓') setStatus(null); }, 2500);
+  } catch (err) {
+    setStatus(err.message || 'Übertragung fehlgeschlagen', true);
+  }
+}, true);
+
 // ---------------------------------------------------------------- Sidebar
 const sessionsEl = document.getElementById('sessions');
 
