@@ -43,11 +43,16 @@ let reconnectTimer = null;
 let copyMode = false; // Auswahl-/Kopier-Overlay aktiv?
 
 const statusEl = document.getElementById('conn-status');
-function setStatus(text, isErr) {
+let statusTimer = null;
+function setStatus(text, isErr, autoHideMs) {
+  if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
   if (!text) { statusEl.hidden = true; return; }
   statusEl.hidden = false;
   statusEl.textContent = text;
   statusEl.classList.toggle('err', !!isErr);
+  // Optionales Auto-Ausblenden. Jeder neue setStatus-Aufruf loescht den Timer
+  // zuvor, daher blendet er nie eine inzwischen aktuellere Meldung aus.
+  if (autoHideMs) statusTimer = setTimeout(() => setStatus(null), autoHideMs);
 }
 
 // ---------------------------------------------------------------- WebSocket
@@ -95,7 +100,7 @@ function connect() {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.t === 'error') {
-        setStatus(msg.m, true);
+        setStatus(msg.m, true, 30000);
       }
       // 'exit': der Server schliesst die Verbindung; der Reconnect (onclose)
       // liefert automatisch eine frische Shell.
