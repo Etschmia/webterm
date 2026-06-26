@@ -24,7 +24,7 @@ const term = new Terminal({
   cursorBlink: true,
   scrollback: 20000,
   allowProposedApi: true,
-  macOptionIsMeta: true,
+  macOptionIsMeta: false,
   theme,
 });
 const fitAddon = new FitAddon();
