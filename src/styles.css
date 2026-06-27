@@ -311,6 +311,7 @@ body {
   cursor: pointer;
 }
 .fx-btn:hover { background: oklch(1 0 0 / 0.06); color: var(--foreground); }
+.fx-btn.active { color: var(--foreground); opacity: 1; }
 
 .fx-crumbs {
   display: flex;

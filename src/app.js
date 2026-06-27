@@ -486,6 +486,7 @@ const fxCrumbsEl = document.getElementById('fx-crumbs');
 const fxStatusEl = document.getElementById('fx-status');
 const fxReopenBtn = document.getElementById('fx-reopen');
 let fxPath = ''; // aktuelles Verzeichnis, relativ zu FS_ROOT ('' = Wurzel)
+let fxShowHidden = false;
 
 const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.6 4.2a1 1 0 0 1 1-1H6l1.3 1.5h6.1a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1z"/></svg>';
 const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
@@ -596,7 +597,8 @@ function fxRenderList(entries) {
       fxLoad(parts.join('/'));
     }));
   }
-  for (const e of entries) {
+  const visible = fxShowHidden ? entries : entries.filter(e => !e.name.startsWith('.'));
+  for (const e of visible) {
     const child = fxPath ? fxPath + '/' + e.name : e.name;
     const onClick = e.type === 'dir'
       ? () => fxLoad(child)
@@ -686,6 +688,14 @@ window.addEventListener('drop', (e) => { if (!explorerEl.contains(e.target)) e.p
 
 document.getElementById('fx-refresh').addEventListener('click', () => fxLoad(fxPath));
 document.getElementById('fx-collapse').addEventListener('click', () => fxCollapse(true));
+const fxToggleHiddenBtn = document.getElementById('fx-toggle-hidden');
+fxToggleHiddenBtn.addEventListener('click', () => {
+  fxShowHidden = !fxShowHidden;
+  fxToggleHiddenBtn.classList.toggle('active', fxShowHidden);
+  fxToggleHiddenBtn.setAttribute('aria-pressed', fxShowHidden);
+  fxToggleHiddenBtn.title = fxShowHidden ? 'Versteckte Dateien ausblenden' : 'Versteckte Dateien einblenden';
+  fxLoad(fxPath);
+});
 fxReopenBtn.addEventListener('click', () => fxCollapse(false));
 
 // ---------------------------------------------------------------- Init
