@@ -12,7 +12,8 @@ die Referenz-Instanz läuft unter **term.martuni.de**.
 ./install.sh
 ```
 Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Build),
-richtet optional `claude-auto-retry` und tmux-Maussteuerung ein und hilft beim
+richtet optional `claude-auto-retry` (inkl. täglichem Update-Check per Cron —
+`deploy/claude-auto-retry-update.sh`) und tmux-Maussteuerung ein und hilft beim
 Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) inkl.
 bcrypt-Hash für Basic Auth. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
 woraus `server.js` die erlaubten WS-Origins ableitet.
@@ -86,3 +87,8 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   `set -g window-size largest` (bzw. `manual`) umstellen.
 - **Sicherheit**: Voller Shell-Zugriff als `librechat`. Schutz = TLS + Basic Auth (Caddy) +
   localhost-Bindung. Credentials geheim halten.
+- **claude-auto-retry-Update-Check**: Das Paket hat keinen eigenen Update-Mechanismus —
+  `./install.sh` richtet dafür optional einen täglichen Cron ein
+  (`deploy/claude-auto-retry-update.sh`, Log unter `~/.claude-auto-retry/logs/update-check.log`).
+  Startet laufende `monitor.js`-Prozesse bei einem Versionswechsel automatisch neu, da deren
+  ES-Module-Code sonst bis zum nächsten Prozessstart auf dem alten Stand bleibt.

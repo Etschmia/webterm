@@ -5,7 +5,8 @@
 # Fuehrt schrittweise durch die Einrichtung:
 #   1. Prueft, ob der vorgesehene Port frei ist (sonst Alternative erfragen).
 #   2. Findet npm/node und baut das Projekt (npm install + npm run build).
-#   3. Prueft tmux; bietet ggf. die Installation von claude-auto-retry an.
+#   3. Prueft tmux; bietet ggf. die Installation von claude-auto-retry an
+#      (inkl. taeglichem Update-Check per Cron, siehe deploy/claude-auto-retry-update.sh).
 #   4. Sorgt fuer "set -g mouse on" in ~/.tmux.conf.
 #   5. Hilft optional beim Erstellen einer Caddy-Datei (Subdomain oder Unterpfad),
 #      inkl. sofortiger bcrypt-Hash-Erzeugung fuer Basic Auth.
@@ -332,6 +333,7 @@ if command -v tmux >/dev/null 2>&1; then
           note "    source ~/.bashrc   (oder ein neues Terminal oeffnen)"
         fi
         ok "claude-auto-retry eingerichtet."
+        have_car=1
       else
         warn "claude-auto-retry-Binary nach der Installation nicht gefunden — PATH/npm-Prefix pruefen."
       fi
@@ -340,6 +342,27 @@ if command -v tmux >/dev/null 2>&1; then
     fi
   else
     info "claude-auto-retry uebersprungen."
+  fi
+
+  # claude-auto-retry hat keinen eigenen Update-Mechanismus. Ohne regelmaessigen
+  # Check bleibt ein installiertes Paket auf ewig auf dem Stand der Erstinstallation —
+  # so geschehen bei einem Bug im Enter/Paste-Handling, der Monate nach Erscheinen
+  # des offiziellen Fixes noch aktiv war, weil nichts das Update angestossen hat.
+  if [ "$have_car" -eq 1 ]; then
+    CRON_SCRIPT="$DEPLOY_DIR/claude-auto-retry-update.sh"
+    if crontab -l 2>/dev/null | grep -qF "$CRON_SCRIPT"; then
+      ok "Taeglicher claude-auto-retry-Update-Check ist bereits im Crontab eingetragen."
+    elif ! command -v crontab >/dev/null 2>&1; then
+      warn "crontab nicht gefunden — taeglicher claude-auto-retry-Update-Check uebersprungen."
+      note "    Manuell einrichten: $CRON_SCRIPT"
+    elif ask_yes_no "Taeglichen Update-Check fuer claude-auto-retry per Cron einrichten (07:45 Uhr)?" "y"; then
+      CRON_LINE="45 7 * * * $CRON_SCRIPT >/dev/null 2>&1"
+      { crontab -l 2>/dev/null || true; printf '%s\n' "$CRON_LINE"; } | crontab -
+      ok "Cron-Eintrag hinzugefuegt: $CRON_LINE"
+      note "    Log: \$HOME/.claude-auto-retry/logs/update-check.log"
+    else
+      info "Cron-Update-Check uebersprungen."
+    fi
   fi
 else
   warn "tmux ist NICHT installiert. Die Sidebar-Session-Funktion bleibt ohne tmux leer."
