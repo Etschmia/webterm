@@ -145,6 +145,26 @@ function fitTerminal() {
       if (term.rows > maxRows) term.resize(term.cols, maxRows);
     }
   }
+  // Verwandte FitAddon-Schwaeche (horizontal statt vertikal): die fuer die
+  // Spaltenzahl reservierte Scrollbar-Breite (core.viewport.scrollBarWidth) wird
+  // einmalig beim Erzeugen des Terminals gemessen, oft bevor ueberhaupt Layout
+  // existiert, und danach nie aktualisiert. Der gerenderte Screen (.xterm-screen)
+  // kann dadurch breiter ausfallen als die tatsaechlich sichtbare Breite des
+  // Viewports (ohne Scrollbar) -> die rechte Textspalte rutscht optisch unter
+  // die Scrollbar. Daher real messen statt der FitAddon-Annahme vertrauen: reale
+  // Screen-Breite gegen die reale (Scrollbar-bereinigte) Viewport-Breite pruefen
+  // und Spalten ggf. nachkorrigieren.
+  const viewportEl = term.element.querySelector('.xterm-viewport');
+  const screenEl = term.element.querySelector('.xterm-screen');
+  if (viewportEl && screenEl && term.cols > 0) {
+    const screenWidth = screenEl.getBoundingClientRect().width;
+    const availWidth = viewportEl.clientWidth;
+    const perCol = screenWidth / term.cols;
+    if (perCol > 0 && availWidth > 0 && screenWidth > availWidth) {
+      const maxCols = Math.max(2, Math.floor(availWidth / perCol));
+      if (term.cols > maxCols) term.resize(maxCols, term.rows);
+    }
+  }
   sendResize();
 }
 
