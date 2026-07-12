@@ -2,6 +2,22 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+// Editor-Fenster (Datei-Explorer -> Bearbeiten)
+import { basicSetup } from 'codemirror';
+import { EditorView, keymap } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
+import { indentWithTab } from '@codemirror/commands';
+import { StreamLanguage, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { javascript } from '@codemirror/lang-javascript';
+import { html } from '@codemirror/lang-html';
+import { css } from '@codemirror/lang-css';
+import { markdown } from '@codemirror/lang-markdown';
+import { json } from '@codemirror/lang-json';
+import { python } from '@codemirror/lang-python';
+import { yaml } from '@codemirror/lang-yaml';
+import { xml } from '@codemirror/lang-xml';
+import { shell } from '@codemirror/legacy-modes/mode/shell';
+import { tags } from '@lezer/highlight';
 
 // ---------------------------------------------------------------- Terminal
 const theme = {
@@ -176,7 +192,7 @@ function scheduleFit() {
 }
 
 // ResizeObserver deckt alle Groessenaenderungen ab (Fenster, Zoom, DevTools).
-const ro = new ResizeObserver(() => scheduleFit());
+const ro = new ResizeObserver(() => { scheduleFit(); edClampToWork(); });
 ro.observe(workEl);
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFit);
 
@@ -626,7 +642,20 @@ function fxRenderList(entries) {
     const previewUrl = (e.type === 'file' && IMG_RE.test(e.name))
       ? `${BASE}api/fs/raw?path=${encodeURIComponent(child)}`
       : null;
-    fxListEl.append(fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl));
+    const item = fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl);
+    // Kontextmenue fuer Dateien: Bearbeiten (Textdateien) + Herunterladen.
+    if (e.type === 'file') {
+      item.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        fxShowMenu(ev.clientX, ev.clientY, [
+          { label: 'Bearbeiten', icon: ICON_EDIT, disabled: !fxEditable(e.name),
+            onClick: () => edOpen(child, e.name, e.size) },
+          { label: 'Herunterladen', icon: ICON_DOWNLOAD,
+            onClick: () => fxDownload(child, e.name) },
+        ]);
+      });
+    }
+    fxListEl.append(item);
   }
 }
 
@@ -717,6 +746,331 @@ fxToggleHiddenBtn.addEventListener('click', () => {
   fxLoad(fxPath);
 });
 fxReopenBtn.addEventListener('click', () => fxCollapse(false));
+
+// ---------------------------------------------------------------- Kontextmenü (Datei-Explorer)
+const ICON_EDIT = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11.1 2.4 2.5 2.5L5.4 13l-3 .6.6-3z"/></svg>';
+const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5V10M4.8 7.2 8 10.4l3.2-3.2M3 13h10"/></svg>';
+
+const fxMenuEl = document.createElement('div');
+fxMenuEl.className = 'fx-menu';
+fxMenuEl.hidden = true;
+document.body.append(fxMenuEl);
+
+function fxHideMenu() {
+  fxMenuEl.hidden = true;
+  fxMenuEl.replaceChildren();
+}
+
+function fxShowMenu(x, y, items) {
+  fxHidePreview(); // schwebende Bild-Vorschau nicht unter dem Menue stehen lassen
+  fxMenuEl.replaceChildren();
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.disabled = !!it.disabled;
+    const ic = document.createElement('span');
+    ic.className = 'fx-mi';
+    ic.innerHTML = it.icon || '';
+    const label = document.createElement('span');
+    label.textContent = it.label;
+    b.append(ic, label);
+    b.addEventListener('click', () => { fxHideMenu(); it.onClick(); });
+    fxMenuEl.append(b);
+  }
+  fxMenuEl.hidden = false;
+  // Im Viewport halten (Explorer sitzt am rechten Rand).
+  const m = 6;
+  fxMenuEl.style.left = Math.max(m, Math.min(x, window.innerWidth - fxMenuEl.offsetWidth - m)) + 'px';
+  fxMenuEl.style.top = Math.max(m, Math.min(y, window.innerHeight - fxMenuEl.offsetHeight - m)) + 'px';
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (!fxMenuEl.hidden && !fxMenuEl.contains(e.target)) fxHideMenu();
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !fxMenuEl.hidden) fxHideMenu();
+});
+window.addEventListener('blur', fxHideMenu);
+fxListEl.addEventListener('scroll', fxHideMenu);
+
+// Als Text bearbeitbare Dateien: bekannte Endungen + bekannte Namen.
+const EDIT_EXT = new Set([
+  'md', 'markdown', 'txt', 'text', 'log', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx',
+  'json', 'jsonc', 'map', 'html', 'htm', 'css', 'scss', 'less', 'sh', 'bash', 'zsh',
+  'py', 'rb', 'pl', 'php', 'lua', 'sql', 'xml', 'svg', 'yml', 'yaml', 'toml', 'ini',
+  'cfg', 'conf', 'env', 'csv', 'tsv', 'service', 'timer', 'socket', 'desktop',
+  'gitignore', 'gitattributes', 'editorconfig', 'npmrc', 'bashrc', 'zshrc', 'profile',
+]);
+const EDIT_NAMES = new Set(['dockerfile', 'makefile', 'caddyfile', 'license', 'readme']);
+
+function fxEditable(name) {
+  const n = String(name || '').toLowerCase();
+  if (EDIT_NAMES.has(n)) return true;
+  const i = n.lastIndexOf('.');
+  // Ohne Endung (z. B. "notiz"): optimistisch anbieten — ob es wirklich Text
+  // ist, prueft edOpen beim Laden (Binaer-Erkennung).
+  if (i <= 0) return true; // i==0: Dotfile ohne weitere Endung (.bashrc & Co.)
+  return EDIT_EXT.has(n.slice(i + 1));
+}
+
+// ---------------------------------------------------------------- Editor-Fenster
+// Verschieb- und skalierbares Fenster im Arbeitsbereich mit CodeMirror.
+// Lesen ueber /api/fs/download (fetch ignoriert Content-Disposition), Schreiben
+// ueber /api/fs/upload (schreibt den rohen Body) — kein neuer Server-Endpunkt.
+const ED_MAX_BYTES = 2 * 1024 * 1024;
+
+const edWin = document.createElement('div');
+edWin.className = 'ed-win';
+edWin.hidden = true;
+edWin.innerHTML = `
+  <div class="ed-head">
+    <span class="ed-dirty" hidden title="Ungespeicherte Änderungen"></span>
+    <span class="ed-title"></span>
+    <button class="ed-save" type="button">Speichern</button>
+    <button class="ed-close fx-btn" type="button" title="Schließen" aria-label="Schließen">×</button>
+  </div>
+  <div class="ed-body"></div>
+  <div class="ed-foot">
+    <span class="ed-path"></span>
+    <span class="ed-status" hidden></span>
+    <span class="ed-hint">Strg+S speichert</span>
+  </div>`;
+workEl.append(edWin);
+
+const edHeadEl = edWin.querySelector('.ed-head');
+const edBodyEl = edWin.querySelector('.ed-body');
+const edTitleEl = edWin.querySelector('.ed-title');
+const edDirtyEl = edWin.querySelector('.ed-dirty');
+const edPathEl = edWin.querySelector('.ed-path');
+const edStatusEl = edWin.querySelector('.ed-status');
+
+const ed = { path: null, name: null, dirty: false, saving: false };
+let edView = null;
+let edPlaced = false; // Position/Groesse einmal gesetzt? (bleibt ueber Dateien erhalten)
+let edStatusTimer = null;
+
+function edSetStatus(text, isErr, autoHideMs) {
+  if (edStatusTimer) { clearTimeout(edStatusTimer); edStatusTimer = null; }
+  if (!text) { edStatusEl.hidden = true; return; }
+  edStatusEl.hidden = false;
+  edStatusEl.textContent = text;
+  edStatusEl.classList.toggle('err', !!isErr);
+  if (autoHideMs) edStatusTimer = setTimeout(() => edSetStatus(null), autoHideMs);
+}
+
+function edSetDirty(d) {
+  ed.dirty = d;
+  edDirtyEl.hidden = !d;
+}
+
+// Syntaxfarben aus der Terminal-Palette (theme oben) — fuegt sich ins Dark-Theme.
+const edHighlight = HighlightStyle.define([
+  { tag: [tags.keyword, tags.moduleKeyword, tags.operatorKeyword, tags.controlKeyword], color: '#c79bf0' },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: '#35c692' },
+  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: '#8a8274', fontStyle: 'italic' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: '#e3c46b' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#6cb7f0' },
+  { tag: [tags.propertyName, tags.attributeName, tags.labelName], color: '#5fd4c4' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: '#e3c46b' },
+  { tag: tags.tagName, color: '#f2766b' },
+  { tag: tags.attributeValue, color: '#35c692' },
+  { tag: tags.heading, color: '#8fccff', fontWeight: '650' },
+  { tag: [tags.link, tags.url], color: '#8fccff', textDecoration: 'underline' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strong, fontWeight: '650' },
+  { tag: [tags.meta, tags.processingInstruction], color: '#8a8274' },
+  { tag: tags.invalid, color: '#ff8f84' },
+]);
+
+const edTheme = EditorView.theme({
+  '&': { backgroundColor: 'var(--term-bg)', color: '#f5f3ee', height: '100%', fontSize: '12.5px' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.5' },
+  '.cm-content': { caretColor: '#35c692' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#35c692' },
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
+    { backgroundColor: 'rgba(53,198,146,0.28)' },
+  '.cm-activeLine': { backgroundColor: 'rgba(255,255,255,0.035)' },
+  '.cm-gutters': {
+    backgroundColor: 'var(--term-bg)', color: '#5b554b',
+    border: 'none', borderRight: '1px solid rgba(255,255,255,0.08)',
+  },
+  '.cm-activeLineGutter': { backgroundColor: 'rgba(255,255,255,0.06)', color: '#8a8274' },
+  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': { backgroundColor: 'rgba(53,198,146,0.22)' },
+  '.cm-selectionMatch': { backgroundColor: 'rgba(227,196,107,0.18)' },
+  '.cm-searchMatch': { backgroundColor: 'rgba(227,196,107,0.28)' },
+  '.cm-searchMatch-selected': { backgroundColor: 'rgba(53,198,146,0.4)' },
+}, { dark: true });
+
+// Sprache anhand des Dateinamens waehlen (null = reiner Text).
+function edLanguage(name) {
+  const n = String(name || '').toLowerCase();
+  const i = n.lastIndexOf('.');
+  const ext = i === -1 ? '' : n.slice(i + 1);
+  switch (ext) {
+    case 'js': case 'mjs': case 'cjs': case 'jsx': return javascript({ jsx: true });
+    case 'ts': case 'tsx': return javascript({ typescript: true, jsx: true });
+    case 'json': case 'jsonc': case 'map': return json();
+    case 'html': case 'htm': return html();
+    case 'css': case 'scss': case 'less': return css();
+    case 'md': case 'markdown': return markdown();
+    case 'py': return python();
+    case 'yml': case 'yaml': return yaml();
+    case 'xml': case 'svg': return xml();
+    case 'sh': case 'bash': case 'zsh': case 'env':
+    case 'bashrc': case 'zshrc': case 'profile':
+      return StreamLanguage.define(shell);
+    default:
+      if (n === 'dockerfile' || n === 'makefile' || n === 'caddyfile') return StreamLanguage.define(shell);
+      return null;
+  }
+}
+
+const edBaseExtensions = [
+  basicSetup,
+  keymap.of([
+    { key: 'Mod-s', run: () => { edSave(); return true; } },
+    indentWithTab,
+  ]),
+  edTheme,
+  syntaxHighlighting(edHighlight),
+  EditorView.updateListener.of((u) => { if (u.docChanged) edSetDirty(true); }),
+];
+
+async function edOpen(rel, name, size) {
+  if (ed.dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')) return;
+  if (size > ED_MAX_BYTES) { fxSetStatus('Zu groß zum Bearbeiten (max. 2 MB)', true); return; }
+  fxSetStatus(`Öffne ${name} …`);
+  let text;
+  try {
+    const r = await fetch(`${BASE}api/fs/download?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    text = await r.text();
+  } catch {
+    fxSetStatus('Konnte Datei nicht laden', true);
+    return;
+  }
+  // Binaer-Erkennung (fuer Dateien ohne aussagekraeftige Endung): NUL-Bytes
+  // oder ein hoher Anteil an UTF-8-Dekodierfehlern (U+FFFD) -> kein Text.
+  if (text.includes('\u0000') ||
+      (text.length > 0 && (text.split('�').length - 1) / text.length > 0.05)) {
+    fxSetStatus(`${name} ist keine Textdatei`, true);
+    return;
+  }
+  fxSetStatus(null);
+  ed.path = rel;
+  ed.name = name;
+  edTitleEl.textContent = name;
+  edTitleEl.title = '~/' + rel;
+  edPathEl.textContent = '~/' + rel;
+  edPathEl.title = '~/' + rel;
+  edSetDirty(false);
+  edSetStatus(null);
+  if (edView) edView.destroy();
+  const lang = edLanguage(name);
+  const wrap = /\.(md|markdown|txt|text|log)$/i.test(name); // Prosa umbrechen, Code scrollen
+  edView = new EditorView({
+    state: EditorState.create({
+      doc: text,
+      extensions: [
+        ...edBaseExtensions,
+        ...(lang ? [lang] : []),
+        ...(wrap ? [EditorView.lineWrapping] : []),
+      ],
+    }),
+    parent: edBodyEl,
+  });
+  edShow();
+  edView.focus();
+}
+
+async function edSave() {
+  if (!ed.path || !edView || ed.saving) return;
+  ed.saving = true;
+  edSetStatus('Speichere …');
+  const content = edView.state.doc.toString();
+  const i = ed.path.lastIndexOf('/');
+  const dir = i === -1 ? '' : ed.path.slice(0, i);
+  try {
+    const r = await fetch(
+      `${BASE}api/fs/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(ed.name)}`,
+      { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: content },
+    );
+    if (!r.ok) throw new Error();
+    edSetDirty(false);
+    edSetStatus('Gespeichert ✓', false, 2500);
+    if (dir === fxPath) fxLoad(fxPath); // Groesse in der Liste auffrischen
+  } catch {
+    edSetStatus('Speichern fehlgeschlagen', true);
+  }
+  ed.saving = false;
+}
+
+function edClose() {
+  if (ed.dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')) return;
+  edWin.hidden = true;
+  if (edView) { edView.destroy(); edView = null; }
+  ed.path = null;
+  ed.name = null;
+  edSetDirty(false);
+  edSetStatus(null);
+  term.focus();
+}
+
+function edShow() {
+  edWin.hidden = false;
+  if (!edPlaced) {
+    edPlaced = true;
+    const w = Math.max(320, Math.min(720, workEl.clientWidth - 48));
+    const h = Math.max(220, Math.min(560, Math.round(workEl.clientHeight * 0.7)));
+    edWin.style.width = w + 'px';
+    edWin.style.height = h + 'px';
+    edWin.style.left = Math.max(12, Math.round((workEl.clientWidth - w) / 2)) + 'px';
+    edWin.style.top = '32px';
+  }
+  edClampToWork();
+}
+
+// Fenster im Arbeitsbereich halten (auch wenn dieser schrumpft).
+function edClampToWork() {
+  if (edWin.hidden) return;
+  const maxW = Math.max(280, workEl.clientWidth - 24);
+  const maxH = Math.max(180, workEl.clientHeight - 24);
+  if (edWin.offsetWidth > maxW) edWin.style.width = maxW + 'px';
+  if (edWin.offsetHeight > maxH) edWin.style.height = maxH + 'px';
+  const maxX = Math.max(0, workEl.clientWidth - edWin.offsetWidth);
+  const maxY = Math.max(0, workEl.clientHeight - edWin.offsetHeight);
+  edWin.style.left = Math.max(0, Math.min(edWin.offsetLeft, maxX)) + 'px';
+  edWin.style.top = Math.max(0, Math.min(edWin.offsetTop, maxY)) + 'px';
+}
+
+// Verschieben per Titelleiste (Pointer-Capture: bleibt auch ueber dem Terminal dran).
+let edDrag = null;
+edHeadEl.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button')) return;
+  edDrag = { dx: e.clientX - edWin.offsetLeft, dy: e.clientY - edWin.offsetTop };
+  edHeadEl.setPointerCapture(e.pointerId);
+});
+edHeadEl.addEventListener('pointermove', (e) => {
+  if (!edDrag) return;
+  const maxX = Math.max(0, workEl.clientWidth - edWin.offsetWidth);
+  const maxY = Math.max(0, workEl.clientHeight - edWin.offsetHeight);
+  edWin.style.left = Math.max(0, Math.min(e.clientX - edDrag.dx, maxX)) + 'px';
+  edWin.style.top = Math.max(0, Math.min(e.clientY - edDrag.dy, maxY)) + 'px';
+});
+edHeadEl.addEventListener('pointerup', () => { edDrag = null; });
+edHeadEl.addEventListener('pointercancel', () => { edDrag = null; });
+
+edWin.querySelector('.ed-save').addEventListener('click', edSave);
+edWin.querySelector('.ed-close').addEventListener('click', edClose);
+// Strg+S auch, wenn der Fokus im Fenster, aber nicht im Editor liegt. (Der
+// saving-Guard in edSave faengt das Doppel-Feuern mit der CodeMirror-Keymap ab.)
+edWin.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); edSave(); }
+});
+// Ungespeicherte Aenderungen nicht kommentarlos mit dem Tab verlieren.
+window.addEventListener('beforeunload', (e) => {
+  if (ed.dirty) { e.preventDefault(); e.returnValue = ''; }
+});
 
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf

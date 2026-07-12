@@ -439,6 +439,168 @@ body {
   background: var(--term-bg);
 }
 
+/* ---------------------------------------------------------------- Kontextmenü (Datei-Explorer) */
+.fx-menu {
+  position: fixed;
+  top: 0; left: 0;
+  z-index: 60;
+  min-width: 168px;
+  padding: 5px;
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+}
+.fx-menu[hidden] { display: none; }
+.fx-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.fx-menu button:hover:not(:disabled) { background: oklch(1 0 0 / 0.06); }
+.fx-menu button:disabled { color: var(--muted-foreground); opacity: 0.55; cursor: default; }
+.fx-menu .fx-mi {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 15px; height: 15px;
+  color: var(--muted-foreground);
+}
+.fx-menu button:hover:not(:disabled) .fx-mi { color: var(--primary); }
+
+/* ---------------------------------------------------------------- Editor-Fenster */
+.ed-win {
+  position: absolute;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  min-height: 200px;
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  resize: both;
+  overflow: hidden;
+}
+.ed-win[hidden] { display: none; }
+
+.ed-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: oklch(0 0 0 / 0.16);
+  cursor: move;
+  user-select: none;
+  touch-action: none; /* Pointer-Drag auch auf Touch */
+}
+.ed-dirty {
+  flex: 0 0 auto;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #e3c46b;
+  box-shadow: 0 0 0 3px oklch(0.85 0.12 90 / 0.15);
+}
+.ed-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ed-save {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.ed-save:hover { filter: brightness(1.08); }
+.ed-close { font-size: 16px; }
+
+.ed-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--term-bg);
+}
+.ed-body .cm-editor { height: 100%; }
+.ed-body .cm-editor.cm-focused { outline: none; }
+
+.ed-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.ed-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.ed-status { flex: 0 0 auto; }
+.ed-status.err { color: oklch(0.8 0.14 25); }
+.ed-hint { flex: 0 0 auto; opacity: 0.7; }
+
+/* CodeMirror-Panels (Suche via Strg+F) und Tooltips ans Theme angleichen */
+.ed-win .cm-panels {
+  background: var(--sidebar);
+  color: var(--foreground);
+  border-color: var(--border);
+  font-size: 11.5px;
+}
+.ed-win .cm-panel input, .ed-win .cm-panel button, .ed-win .cm-panel select {
+  font: inherit;
+  color: var(--foreground);
+  background: oklch(1 0 0 / 0.06);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 2px 7px;
+  background-image: none;
+}
+.ed-win .cm-panel button:hover { background: oklch(1 0 0 / 0.1); }
+.ed-win .cm-panel label { color: var(--muted-foreground); }
+.ed-win .cm-textfield:focus { border-color: var(--primary); outline: none; }
+.ed-win .cm-tooltip {
+  background: var(--sidebar);
+  color: var(--foreground);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.ed-win .cm-tooltip-autocomplete ul li[aria-selected] {
+  background: oklch(0.696 0.17 162.48 / 0.2);
+  color: var(--foreground);
+}
+
+.ed-body .cm-scroller::-webkit-scrollbar { width: 8px; height: 8px; }
+.ed-body .cm-scroller::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 0.1); border-radius: 999px; }
+
 /* Scrollbars dezent */
 .sessions::-webkit-scrollbar, .links::-webkit-scrollbar, .fx-list::-webkit-scrollbar { width: 8px; }
 .sessions::-webkit-scrollbar-thumb, .links::-webkit-scrollbar-thumb, .fx-list::-webkit-scrollbar-thumb {
