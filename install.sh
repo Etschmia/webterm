@@ -566,9 +566,11 @@ if [ -z "$NODE_BIN" ]; then
   warn "node-Pfad unbekannt — systemd-Unit kann nicht zuverlaessig erzeugt werden."
   note "Installiere node bzw. setze den Pfad und fuehre das Skript erneut aus."
 else
-  SERVICE_NAME="$(ask_value 'Service-Name' 'term-web')"
+  # Default 'term-server': README, CLAUDE.md und deploy/term-restart gehen von diesem
+  # Namen aus. Ein abweichender Name muss term-restart per TERM_SERVICE mitgegeben werden.
+  SERVICE_NAME="$(ask_value 'Service-Name' 'term-server')"
   SERVICE_NAME="$(printf '%s' "$SERVICE_NAME" | tr -cd 'A-Za-z0-9_-')"
-  [ -z "$SERVICE_NAME" ] && SERVICE_NAME="term-web"
+  [ -z "$SERVICE_NAME" ] && SERVICE_NAME="term-server"
   UNIT_OUT="$DEPLOY_DIR/${SERVICE_NAME}.local.service"
   CUR_USER="$(id -un)"
   cat > "$UNIT_OUT" <<EOF

@@ -45,7 +45,8 @@ Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → N
   prüft den WS-`Origin`.
 - `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
 - `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
-- `deploy/` — systemd-Unit und Caddy-Site (Vorlagen für das Deployment).
+- `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check). systemd-Unit und
+  Caddy-Site erzeugt `./install.sh` hostspezifisch als gitignorte `*.local.*`-Datei.
 
 ### WS-Protokoll
 - Client → Server: JSON-Text-Frames `{t:'start'|'input'|'resize'|'copyMode', …}`.
@@ -60,8 +61,12 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 ```
 
 ## Deployment
-- **Service**: `deploy/term-server.service` → `/etc/systemd/system/`,
+- **Service**: am einfachsten über `./install.sh` — es erzeugt die Unit mit den Pfaden
+  dieses Hosts als `deploy/<service>.local.service` (gitignort, Default-Name `term-server`).
+  Danach: `sudo cp deploy/term-server.local.service /etc/systemd/system/term-server.service`,
   `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
+  - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
+    `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
 - **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
   Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
   direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab

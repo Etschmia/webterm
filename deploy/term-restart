@@ -20,13 +20,31 @@
 #          deploy/term-restart --restore <snapfile>   (intern, von der Unit aufgerufen)
 set -euo pipefail
 
-SERVICE="term-server"
+SERVICE="${TERM_SERVICE:-term-server}"
 PROJECTS="$HOME/.claude/projects"
 
 log(){ printf '[term-restart] %s\n' "$*" >&2; }
 
 # cwd -> Name des Claude-Projektverzeichnisses (Claude ersetzt '/' und '.' durch '-').
 enc_dir(){ printf '%s' "$1" | sed 's#[/.]#-#g'; }
+
+# bin-Verzeichnis der aktiven node-Installation (fuer den PATH der Unit, s.u.).
+# Suchreihenfolge wie install.sh: PATH, gaengige Orte, dann neueste nvm-Version.
+node_bin_dir(){
+  local p latest
+  if p="$(command -v node 2>/dev/null)"; then dirname "$p"; return 0; fi
+  for p in "$HOME/.local/bin/node" "$HOME/.volta/bin/node" /usr/local/bin/node \
+           /usr/bin/node /opt/homebrew/bin/node; do
+    [ -x "$p" ] && { dirname "$p"; return 0; }
+  done
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    latest="$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n1)"
+    if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/node" ]; then
+      printf '%s\n' "$HOME/.nvm/versions/node/$latest/bin"; return 0
+    fi
+  fi
+  return 1
+}
 
 # Neueste Top-Level-Session-ID (*.jsonl) für ein cwd, ohne subagents/.
 newest_session_id(){
@@ -103,7 +121,11 @@ log "$(wc -l < "$SNAP") aktive Claude-Session(s) gesichert."
 SELF=$(readlink -f "$0")
 UNIT="term-restart-$$-$(id -u)"
 # Robuster PATH für die Unit (claude/node/tmux/systemctl/sudo erreichbar).
-RUN_PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v25.2.1/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# node zur Laufzeit suchen: ein hartkodierter nvm-Pfad zeigt nach jedem Node-Update
+# ins Leere, und der Restore-Teil findet dann weder 'node' noch 'claude'.
+NODE_DIR="$(node_bin_dir || true)"
+[ -n "$NODE_DIR" ] || log "WARNUNG: kein node gefunden — 'claude --resume' schlaegt evtl. fehl."
+RUN_PATH="$HOME/.local/bin${NODE_DIR:+:$NODE_DIR}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 log "Starte entkoppelten Restart in Unit '$UNIT' …"
 sudo systemd-run --collect --quiet --unit="$UNIT" \
