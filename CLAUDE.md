@@ -72,3 +72,28 @@ Beide Terminals sind in Caddy (`/etc/caddy/sites/login.but-konto.de.caddy`) dopp
 abgesichert: IP-Filter auf `213.217.118.51` **plus** `basic_auth`. `server.js` hat **keine**
 eigene Authentifizierung — dahinter liegt eine volle Shell (butlive hat sudo). Niemals einen
 dieser Pfade ohne beide Schranken exponieren.
+
+## claude-auto-retry unter bun (nur butlive)
+
+Bei butlive ist das Paket per `bun add -g claude-auto-retry` installiert, bei csc/martuni
+weiterhin per npm. `deploy/claude-auto-retry-update.sh` erkennt beides automatisch (es
+richtet sich danach, **wo** das Paket liegt, nicht danach, welcher Paketmanager existiert)
+und läuft für butlive täglich um 07:45 per Cron.
+
+Das Paket ruft an drei Stellen hart `node` auf, was hier ohne globales node scheitert.
+Deshalb gibt es drei Abweichungen — alle **außerhalb** dieses Repos:
+
+| Stelle | Problem | Lösung |
+|--------|---------|--------|
+| `bun add -g` verlinkt auf `bin/cli.js` (Shebang `#!/usr/bin/env node`) | CLI nicht startbar | Wrapper `~/.local/bin/claude-auto-retry` ruft bun auf (liegt im PATH **vor** `~/.bun/bin`) |
+| `src/wrapper.sh` schreibt `node <launcher>` in die `~/.bashrc` | `claude` wäre tot | Block in `~/.bashrc` auf bun geändert |
+| `launcher.js:150` schreibt sich als `node <launcher>` in die tmux-Session | Session stirbt sofort | `node`-Shim in `~/.claude-auto-retry/nodeshim/`, den die `claude()`-Funktion dem PATH voranstellt; tmux erbt ihn (`launcher.js:157-164` forwardet die Umgebung) |
+
+⚠️ Der Shim liegt bewusst **nicht** im normalen PATH. Ein global auffindbares `node` wäre
+eine Falle: `install.sh` fände es per `find_cmd node` und baute eine systemd-Unit, die
+`server.js` unter bun startet — womit node-pty tot wäre.
+
+Paket-Updates (auch der Cron) überschreiben nur `launcher.js`/`cli.js`, nicht die `~/.bashrc`
+und nicht den Shim — die Anpassungen überleben also. Nur ein erneutes
+`claude-auto-retry install` schreibt den `~/.bashrc`-Block mit der `node`-Vorlage zurück;
+danach die beiden Zeilen dort wieder herstellen (der Block ist entsprechend kommentiert).

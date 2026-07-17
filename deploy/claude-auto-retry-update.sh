@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # claude-auto-retry-update.sh — taeglicher Update-Check fuer das global installierte
-# npm-Paket claude-auto-retry (per Cron).
+# Paket claude-auto-retry (per Cron).
 #
 # Hintergrund: claude-auto-retry hat keinen eigenen Update-Mechanismus. Ein Fix im
 # Paket selbst (z.B. der Enter/Paste-Bug aus Version 0.5.0: Text+Enter in EINEM
@@ -10,15 +10,22 @@
 # das Paket nie aktualisiert wird.
 #
 # Dieses Skript:
-#   1. Prueft die installierte gegen die neueste npm-Version.
-#   2. Aktualisiert bei Bedarf (npm i -g claude-auto-retry@latest).
+#   1. Findet heraus, unter WELCHEM Paketmanager claude-auto-retry global liegt.
+#   2. Prueft die installierte gegen die neueste Version und aktualisiert bei Bedarf.
 #   3. Startet laufende monitor.js-Hintergrundprozesse neu, falls sich die
 #      Version geaendert hat — der ES-Module-Code eines bereits laufenden
 #      Prozesses bleibt sonst bis zu dessen Neustart auf dem alten Stand
-#      eingefroren, auch nach einem erfolgreichen npm-Update.
+#      eingefroren, auch nach einem erfolgreichen Update.
 #
-# Portabel: npm/node werden zur Laufzeit gesucht (PATH, ~/.local/bin, nvm, volta,
-# /usr/local, /usr/bin, homebrew) — kein hartkodierter nvm-Node-Pfad. Cron hat
+# bun ODER npm: Auf Maschinen ohne globales node (z.B. neben einem bun-Projekt,
+# siehe webterm/CLAUDE.md) liegt das Paket unter bun, sonst unter npm. Massgeblich
+# ist nicht, welcher Paketmanager existiert, sondern wo das Paket TATSAECHLICH
+# installiert ist — sonst aktualisiert das Skript einen anderen Ort als den, aus
+# dem der Wrapper laedt. claude-auto-retry hat null Dependencies und nutzt nur
+# node:-Builtins, laeuft unter bun also unveraendert.
+#
+# Portabel: Binaries werden zur Laufzeit gesucht (PATH, ~/.bun/bin, ~/.local/bin,
+# nvm, volta, /usr/local, /usr/bin, homebrew) — keine hartkodierten Pfade. Cron hat
 # kaum Umgebung, daher wird $HOME explizit gesetzt und die Suche deckt gaengige
 # Installationsorte ab.
 set -euo pipefail
@@ -32,10 +39,11 @@ mkdir -p "$LOG_DIR"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
 find_cmd() {
-  # Sucht $1 in PATH und gaengigen Node-Installationsorten. Pfad -> stdout.
+  # Sucht $1 in PATH und gaengigen Installationsorten. Pfad -> stdout.
   local name="$1" p latest
   if p="$(command -v "$name" 2>/dev/null)"; then printf '%s' "$p"; return 0; fi
   for p in \
+    "${BUN_INSTALL:-$HOME/.bun}/bin/$name" \
     "$HOME/.local/bin/$name" \
     "$HOME/.volta/bin/$name" \
     "/usr/local/bin/$name" \
@@ -52,19 +60,40 @@ find_cmd() {
   return 1
 }
 
+BUN_BIN="$(find_cmd bun || true)"
 NPM_BIN="$(find_cmd npm || true)"
 NODE_BIN="$(find_cmd node || true)"
 
 log "=== claude-auto-retry-Update gestartet ==="
 
-if [ -z "$NPM_BIN" ] || [ -z "$NODE_BIN" ]; then
-  log "FEHLER: npm/node nicht gefunden (PATH, ~/.local/bin, nvm, volta, /usr/local, /usr/bin, homebrew geprueft)."
-  exit 1
+# Installationsort bestimmen. Reihenfolge: bun zuerst, dann npm. Gesetzt werden
+# PM (Anzeige), PKG_ROOT (globales node_modules) und RUNTIME_BIN (fuer monitor.js).
+PM=""; PKG_ROOT=""; RUNTIME_BIN=""
+if [ -n "$BUN_BIN" ]; then
+  cand="${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules"
+  if [ -r "$cand/claude-auto-retry/package.json" ]; then
+    PM="bun"; PKG_ROOT="$cand"; RUNTIME_BIN="$BUN_BIN"
+  fi
+fi
+if [ -z "$PM" ] && [ -n "$NPM_BIN" ]; then
+  cand="$("$NPM_BIN" root -g 2>/dev/null || true)"
+  if [ -n "$cand" ] && [ -r "$cand/claude-auto-retry/package.json" ]; then
+    if [ -z "$NODE_BIN" ]; then
+      log "FEHLER: claude-auto-retry liegt unter npm ($cand), aber node fehlt — Monitor-Neustart unmoeglich."
+      exit 1
+    fi
+    PM="npm"; PKG_ROOT="$cand"; RUNTIME_BIN="$NODE_BIN"
+  fi
 fi
 
-GLOBAL_ROOT="$("$NPM_BIN" root -g 2>/dev/null || true)"
-PKG_JSON="$GLOBAL_ROOT/claude-auto-retry/package.json"
-MONITOR_JS="$GLOBAL_ROOT/claude-auto-retry/src/monitor.js"
+if [ -z "$PM" ]; then
+  log "claude-auto-retry ist global weder unter bun noch unter npm installiert — nichts zu tun."
+  log "=== claude-auto-retry-Update beendet ==="
+  exit 0
+fi
+
+PKG_JSON="$PKG_ROOT/claude-auto-retry/package.json"
+MONITOR_JS="$PKG_ROOT/claude-auto-retry/src/monitor.js"
 
 read_version() {
   if [ -r "$PKG_JSON" ]; then
@@ -76,15 +105,18 @@ read_version() {
 }
 
 VOR="$(read_version)"
+log "Paketmanager: $PM ($PKG_ROOT)"
 log "Vor Update: $VOR"
 
-if [ "$VOR" = "nicht installiert" ]; then
-  log "claude-auto-retry ist nicht global installiert — nichts zu tun."
-  log "=== claude-auto-retry-Update beendet ==="
-  exit 0
+# 'bun add -g <pkg>@latest' entspricht 'npm i -g <pkg>@latest': beide ziehen die
+# neueste Version. 'bun update -g' bliebe dagegen im Semver-Range des Eintrags.
+if [ "$PM" = "bun" ]; then
+  UPDATE_CMD=("$BUN_BIN" add -g claude-auto-retry@latest)
+else
+  UPDATE_CMD=("$NPM_BIN" install -g claude-auto-retry@latest)
 fi
 
-if "$NPM_BIN" install -g claude-auto-retry@latest >> "$LOG" 2>&1; then
+if "${UPDATE_CMD[@]}" >> "$LOG" 2>&1; then
   NACH="$(read_version)"
   if [ "$VOR" = "$NACH" ]; then
     log "Update OK – Version unveraendert ($NACH, bereits aktuell)"
@@ -97,7 +129,7 @@ if "$NPM_BIN" install -g claude-auto-retry@latest >> "$LOG" 2>&1; then
       [ -z "$PID" ] && continue
       kill "$PID" 2>/dev/null || true
       sleep 1
-      nohup "$NODE_BIN" "$MONITOR_JS" "$PANE" "$CLAUDE_PID" </dev/null >/dev/null 2>&1 &
+      nohup "$RUNTIME_BIN" "$MONITOR_JS" "$PANE" "$CLAUDE_PID" </dev/null >/dev/null 2>&1 &
       disown
       RESTARTED=$((RESTARTED + 1))
       log "Monitor fuer Pane $PANE (claude PID $CLAUDE_PID) neu gestartet (alter PID $PID)"
