@@ -29,10 +29,15 @@ log(){ printf '[term-restart] %s\n' "$*" >&2; }
 enc_dir(){ printf '%s' "$1" | sed 's#[/.]#-#g'; }
 
 # bin-Verzeichnis der aktiven node-Installation (fuer den PATH der Unit, s.u.).
-# Suchreihenfolge wie install.sh: PATH, gaengige Orte, dann neueste nvm-Version.
+# Suchreihenfolge wie install.sh: PATH, projekt-lokales vendor/node, gaengige Orte,
+# dann neueste nvm-Version.
 node_bin_dir(){
   local p latest
   if p="$(command -v node 2>/dev/null)"; then dirname "$p"; return 0; fi
+  # Deployments ohne globales node (z. B. neben einem bun-Projekt) halten node
+  # projekt-lokal in vendor/node und bewusst aus dem PATH heraus.
+  p="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)/vendor/node/bin/node"
+  [ -x "$p" ] && { dirname "$p"; return 0; }
   for p in "$HOME/.local/bin/node" "$HOME/.volta/bin/node" /usr/local/bin/node \
            /usr/bin/node /opt/homebrew/bin/node; do
     [ -x "$p" ] && { dirname "$p"; return 0; }
@@ -106,8 +111,28 @@ restore(){
   log "Restore abgeschlossen."
 }
 
+usage(){
+  cat >&2 <<USAGE
+term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-Sessions.
+
+  deploy/term-restart                       entkoppelter Restart + Restore
+  deploy/term-restart --restore <snapfile>  intern, von der Unit aufgerufen
+  deploy/term-restart --help                diese Hilfe
+
+Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
+mehreren Instanzen ZWINGEND setzen, sonst trifft es die fremde Instanz:
+  TERM_SERVICE=tbterm deploy/term-restart
+USAGE
+}
+
+# Unbekannte Argumente MUESSEN abbrechen: ohne diesen Zweig fiel z. B. ein
+# harmlos gemeintes '--help' in den Normalpfad und hat produktiv durchgestartet
+# (am 17.07.2026 so passiert — traf die fremde Instanz 'term-server').
 case "${1:-}" in
-  --restore) shift; restore "${1:?snapfile fehlt}"; exit 0 ;;
+  --restore)  shift; restore "${1:?snapfile fehlt}"; exit 0 ;;
+  --help|-h)  usage; exit 0 ;;
+  '')         ;;
+  *)          log "Unbekanntes Argument: $1"; usage; exit 2 ;;
 esac
 
 # ---- Phase 1: Snapshot, dann Übergabe an entkoppelte Unit ----

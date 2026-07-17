@@ -7,3 +7,10 @@ _wstest.mjs
 # Von install.sh erzeugt (lokale Konfiguration / echte Zugangsdaten)
 .env
 deploy/*.local.*
+
+# Projekt-lokale node-Installation (vendor/node) samt gekapselter npm-Konfiguration.
+# Bewusst NICHT im PATH: nebenan liegt ein bun-Projekt, das ein globales node/npm
+# bzw. ein ~/.npmrc stoeren wuerde. Immer ueber absolute Pfade ansprechen.
+vendor/
+.npm-cache/
+.npmrc
