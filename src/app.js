@@ -415,11 +415,11 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameVal
       const finish = (commit) => {
         if (done) return;
         done = true;
-        if (commit && input.value.trim() && input.value.trim() !== renameValue) {
-          onRename(input.value.trim());
-        } else {
-          renderSidebar(); // Original wiederherstellen
-        }
+        const val = input.value.trim();
+        // Original-Label zurücktauschen — gibt zugleich die Render-Sperre
+        // (renderSidebar prüft auf .entry-edit) wieder frei.
+        row.replaceChild(name, input);
+        if (commit && val && val !== renameValue) onRename(val);
       };
       input.addEventListener('click', (e) => e.stopPropagation());
       input.addEventListener('keydown', (e) => {
@@ -480,6 +480,9 @@ function makeCopyToggle() {
 }
 
 function renderSidebar() {
+  // Offenes Inline-Edit nicht zerstoeren: das 4s-Session-Polling (und andere
+  // Render-Anlaesse) warten, bis das Eingabefeld geschlossen ist.
+  if (sessionsEl.querySelector('.entry-edit')) return;
   sessionsEl.replaceChildren();
 
   const heading = document.createElement('div');
