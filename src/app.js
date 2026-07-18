@@ -20,7 +20,7 @@ import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { tags } from '@lezer/highlight';
 
 // ---------------------------------------------------------------- Terminal
-const theme = {
+const themeDark = {
   background: '#12100c',
   foreground: '#f5f3ee',
   cursor: '#35c692',
@@ -32,6 +32,20 @@ const theme = {
   brightYellow: '#f2d98a', brightBlue: '#8fccff', brightMagenta: '#dab6ff',
   brightCyan: '#83e6d8', brightWhite: '#f7f4ee',
 };
+// Helle Variante (warmes Cream, ANSI-Farben abgedunkelt fuer Kontrast auf hell).
+const themeLight = {
+  background: '#fbfaf6',
+  foreground: '#3a352e',
+  cursor: '#0f9d6c',
+  cursorAccent: '#fbfaf6',
+  selectionBackground: 'rgba(15,157,108,0.25)',
+  black: '#3a352e', red: '#c2453a', green: '#0f8a5f', yellow: '#9a7b1f',
+  blue: '#2f6fb0', magenta: '#8a5bc2', cyan: '#0e8b80', white: '#c9c4b8',
+  brightBlack: '#7a7264', brightRed: '#d95f52', brightGreen: '#16a173',
+  brightYellow: '#b08f2a', brightBlue: '#3f83c9', brightMagenta: '#9d70d6',
+  brightCyan: '#149a8d', brightWhite: '#f5f3ee',
+};
+const theme = document.documentElement.dataset.theme === 'light' ? themeLight : themeDark;
 
 const term = new Terminal({
   fontFamily: 'ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
@@ -48,6 +62,20 @@ term.loadAddon(fitAddon);
 // Links im Terminal selbst klickbar (oeffnen in neuem Tab).
 term.loadAddon(new WebLinksAddon((event, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
 term.open(document.getElementById('terminal'));
+
+// ---------------------------------------------------------------- Theme-Umschalter
+// data-theme setzt bereits ein Inline-Skript im <head> (vor dem ersten Paint);
+// hier nur Schalterzustand, Persistenz und xterm-Palette nachziehen.
+const themeToggle = document.getElementById('theme-toggle');
+function applyTheme(mode) {
+  document.documentElement.dataset.theme = mode;
+  document.querySelector('meta[name="color-scheme"]').content = mode;
+  localStorage.setItem('term-theme', mode);
+  term.options.theme = mode === 'light' ? themeLight : themeDark;
+  themeToggle.checked = mode !== 'light';
+}
+themeToggle.checked = document.documentElement.dataset.theme !== 'light';
+themeToggle.addEventListener('change', () => applyTheme(themeToggle.checked ? 'dark' : 'light'));
 
 // ---------------------------------------------------------------- State
 const state = {
@@ -867,43 +895,44 @@ function edSetDirty(d) {
   edDirtyEl.hidden = !d;
 }
 
-// Syntaxfarben aus der Terminal-Palette (theme oben) — fuegt sich ins Dark-Theme.
+// Syntax- und Editorfarben ueber CSS-Variablen (styles.css definiert sie je Theme),
+// dadurch schaltet der Hell-/Dunkel-Umschalter auch offene Editoren live um.
 const edHighlight = HighlightStyle.define([
-  { tag: [tags.keyword, tags.moduleKeyword, tags.operatorKeyword, tags.controlKeyword], color: '#c79bf0' },
-  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: '#35c692' },
-  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: '#8a8274', fontStyle: 'italic' },
-  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: '#e3c46b' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#6cb7f0' },
-  { tag: [tags.propertyName, tags.attributeName, tags.labelName], color: '#5fd4c4' },
-  { tag: [tags.typeName, tags.className, tags.namespace], color: '#e3c46b' },
-  { tag: tags.tagName, color: '#f2766b' },
-  { tag: tags.attributeValue, color: '#35c692' },
-  { tag: tags.heading, color: '#8fccff', fontWeight: '650' },
-  { tag: [tags.link, tags.url], color: '#8fccff', textDecoration: 'underline' },
+  { tag: [tags.keyword, tags.moduleKeyword, tags.operatorKeyword, tags.controlKeyword], color: 'var(--syn-keyword)' },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: 'var(--syn-string)' },
+  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: 'var(--syn-comment)', fontStyle: 'italic' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--syn-number)' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--syn-function)' },
+  { tag: [tags.propertyName, tags.attributeName, tags.labelName], color: 'var(--syn-property)' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--syn-number)' },
+  { tag: tags.tagName, color: 'var(--syn-tag)' },
+  { tag: tags.attributeValue, color: 'var(--syn-string)' },
+  { tag: tags.heading, color: 'var(--syn-heading)', fontWeight: '650' },
+  { tag: [tags.link, tags.url], color: 'var(--syn-heading)', textDecoration: 'underline' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strong, fontWeight: '650' },
-  { tag: [tags.meta, tags.processingInstruction], color: '#8a8274' },
-  { tag: tags.invalid, color: '#ff8f84' },
+  { tag: [tags.meta, tags.processingInstruction], color: 'var(--syn-comment)' },
+  { tag: tags.invalid, color: 'var(--syn-invalid)' },
 ]);
 
 const edTheme = EditorView.theme({
-  '&': { backgroundColor: 'var(--term-bg)', color: '#f5f3ee', height: '100%', fontSize: '12.5px' },
+  '&': { backgroundColor: 'var(--term-bg)', color: 'var(--ed-fg)', height: '100%', fontSize: '12.5px' },
   '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.5' },
-  '.cm-content': { caretColor: '#35c692' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#35c692' },
+  '.cm-content': { caretColor: 'var(--ed-caret)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--ed-caret)' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
-    { backgroundColor: 'rgba(53,198,146,0.28)' },
-  '.cm-activeLine': { backgroundColor: 'rgba(255,255,255,0.035)' },
+    { backgroundColor: 'var(--ed-selection)' },
+  '.cm-activeLine': { backgroundColor: 'var(--ed-activeline)' },
   '.cm-gutters': {
-    backgroundColor: 'var(--term-bg)', color: '#5b554b',
-    border: 'none', borderRight: '1px solid rgba(255,255,255,0.08)',
+    backgroundColor: 'var(--term-bg)', color: 'var(--ed-gutter-fg)',
+    border: 'none', borderRight: '1px solid var(--ed-gutter-border)',
   },
-  '.cm-activeLineGutter': { backgroundColor: 'rgba(255,255,255,0.06)', color: '#8a8274' },
-  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': { backgroundColor: 'rgba(53,198,146,0.22)' },
-  '.cm-selectionMatch': { backgroundColor: 'rgba(227,196,107,0.18)' },
-  '.cm-searchMatch': { backgroundColor: 'rgba(227,196,107,0.28)' },
-  '.cm-searchMatch-selected': { backgroundColor: 'rgba(53,198,146,0.4)' },
-}, { dark: true });
+  '.cm-activeLineGutter': { backgroundColor: 'var(--ed-activeline)', color: 'var(--ed-gutter-fg)' },
+  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': { backgroundColor: 'var(--ed-match)' },
+  '.cm-selectionMatch': { backgroundColor: 'var(--ed-match)' },
+  '.cm-searchMatch': { backgroundColor: 'var(--ed-search)' },
+  '.cm-searchMatch-selected': { backgroundColor: 'var(--ed-selection)' },
+});
 
 // Sprache anhand des Dateinamens waehlen (null = reiner Text).
 function edLanguage(name) {

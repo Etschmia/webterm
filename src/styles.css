@@ -1,5 +1,53 @@
-/* term-web Dark-Theme — Tokens aus depot3/app/globals.css (.dark), warmes Emerald-Dunkel. */
+/* term-web — Tokens nach Depot Design System (warm cream / emerald / stone).
+   Hell auf :root, Dunkel auf [data-theme="dark"]; Umschalter in der Sidebar
+   setzt document.documentElement.dataset.theme (Persistenz: localStorage). */
 :root {
+  --background: oklch(0.977 0.008 84);
+  --sidebar: oklch(1 0 0);
+  --foreground: oklch(0.245 0.012 56);
+  --muted: oklch(0.951 0.012 84);
+  --muted-foreground: oklch(0.52 0.018 60);
+  --primary: oklch(0.596 0.145 163);
+  --primary-foreground: oklch(0.985 0.001 106.423);
+  --accent: oklch(0.954 0.038 80);
+  --border: oklch(0.912 0.014 84);
+  --border-strong: oklch(0.86 0.016 84);
+  --link: oklch(0.47 0.12 164);
+  --link-hover: oklch(0.38 0.11 164);
+  --radius: 1rem;
+  --radius-md: 0.625rem;
+  --radius-sm: 0.45rem;
+  --shadow-soft: 0 1px 2px oklch(0.25 0.04 70 / 0.05), 0 16px 40px -20px oklch(0.3 0.08 70 / 0.16);
+  --term-bg: oklch(0.99 0.004 84); /* helles Arbeitsfenster */
+  /* Overlays/Tints (statt fester Weiss-/Schwarz-Alphas, themetauglich) */
+  --hover: oklch(0 0 0 / 0.05);
+  --hover-strong: oklch(0 0 0 / 0.09);
+  --panel-tint: oklch(0 0 0 / 0.03);
+  --scroll-thumb: oklch(0 0 0 / 0.16);
+  --sidebar-glow: radial-gradient(620px 320px at 50% -12%, oklch(0.94 0.05 163 / 0.5), transparent 62%);
+  /* Editor (CodeMirror) */
+  --ed-fg: oklch(0.245 0.012 56);
+  --ed-caret: #0f9d6c;
+  --ed-selection: rgba(15, 157, 108, 0.2);
+  --ed-activeline: oklch(0 0 0 / 0.035);
+  --ed-gutter-fg: oklch(0.66 0.015 60);
+  --ed-gutter-border: oklch(0 0 0 / 0.08);
+  --ed-match: rgba(15, 157, 108, 0.18);
+  --ed-search: rgba(154, 123, 31, 0.2);
+  --syn-keyword: #7a4fc9;
+  --syn-string: #0f8a5f;
+  --syn-comment: #8d8574;
+  --syn-number: #9a7b1f;
+  --syn-function: #2f6fb0;
+  --syn-property: #0e8b80;
+  --syn-tag: #c2453a;
+  --syn-heading: #2f6fb0;
+  --syn-invalid: #c2453a;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
   --background: oklch(0.165 0.005 56);
   --sidebar: oklch(0.216 0.006 56.043);
   --foreground: oklch(0.985 0.001 106.423);
@@ -12,13 +60,30 @@
   --border-strong: oklch(1 0 0 / 0.16);
   --link: oklch(0.8 0.14 163);
   --link-hover: oklch(0.88 0.12 163);
-  --radius: 1rem;
-  --radius-md: 0.625rem;
-  --radius-sm: 0.45rem;
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 44px -22px rgba(0, 0, 0, 0.6);
   --term-bg: #12100c; /* solider, warmer Near-Black fuer das Arbeitsfenster */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
+  --hover: oklch(1 0 0 / 0.05);
+  --hover-strong: oklch(1 0 0 / 0.1);
+  --panel-tint: oklch(0 0 0 / 0.17);
+  --scroll-thumb: oklch(1 0 0 / 0.1);
+  --sidebar-glow: radial-gradient(620px 320px at 50% -12%, oklch(0.5 0.09 163 / 0.16), transparent 62%);
+  --ed-fg: #f5f3ee;
+  --ed-caret: #35c692;
+  --ed-selection: rgba(53, 198, 146, 0.28);
+  --ed-activeline: rgba(255, 255, 255, 0.035);
+  --ed-gutter-fg: #5b554b;
+  --ed-gutter-border: rgba(255, 255, 255, 0.08);
+  --ed-match: rgba(53, 198, 146, 0.22);
+  --ed-search: rgba(227, 196, 107, 0.28);
+  --syn-keyword: #c79bf0;
+  --syn-string: #35c692;
+  --syn-comment: #8a8274;
+  --syn-number: #e3c46b;
+  --syn-function: #6cb7f0;
+  --syn-property: #5fd4c4;
+  --syn-tag: #f2766b;
+  --syn-heading: #8fccff;
+  --syn-invalid: #ff8f84;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -48,7 +113,7 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--sidebar);
-  background-image: radial-gradient(620px 320px at 50% -12%, oklch(0.5 0.09 163 / 0.16), transparent 62%);
+  background-image: var(--sidebar-glow);
   border-right: 1px solid var(--border);
 }
 
@@ -67,8 +132,8 @@ body {
   width: 28px; height: 28px;
   border-radius: 8px;
   color: var(--primary);
-  background: oklch(0.696 0.17 162.48 / 0.14);
-  border: 1px solid oklch(0.696 0.17 162.48 / 0.3);
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);
 }
 .brand-name { font-weight: 650; }
 .brand-dim { color: var(--muted-foreground); font-weight: 500; }
@@ -106,10 +171,10 @@ body {
   gap: 9px;
   padding: 9px 11px;
 }
-.entry:hover { background: oklch(1 0 0 / 0.04); }
+.entry:hover { background: var(--hover); }
 .entry.active {
-  background: oklch(0.696 0.17 162.48 / 0.13);
-  border-color: oklch(0.696 0.17 162.48 / 0.32);
+  background: color-mix(in oklab, var(--primary) 13%, transparent);
+  border-color: color-mix(in oklab, var(--primary) 32%, transparent);
 }
 
 .entry-dot {
@@ -118,7 +183,7 @@ body {
   border-radius: 50%;
   background: var(--muted-foreground);
 }
-.entry.active .entry-dot { background: var(--primary); box-shadow: 0 0 0 3px oklch(0.696 0.17 162.48 / 0.18); }
+.entry.active .entry-dot { background: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 18%, transparent); }
 .entry-dot.attached { background: var(--primary); }
 
 .entry-name {
@@ -134,7 +199,7 @@ body {
   flex: 0 0 auto;
   font-size: 10.5px;
   color: var(--muted-foreground);
-  background: oklch(1 0 0 / 0.06);
+  background: var(--hover);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 1px 7px;
@@ -149,7 +214,7 @@ body {
   margin: 0 8px 9px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
-  background: oklch(0 0 0 / 0.18);
+  background: var(--panel-tint);
   border: 1px solid var(--border);
 }
 .copy-label { font-size: 12px; color: var(--muted-foreground); }
@@ -160,7 +225,7 @@ body {
 .switch .track {
   width: 38px; height: 22px;
   border-radius: 999px;
-  background: oklch(1 0 0 / 0.12);
+  background: var(--hover-strong);
   border: 1px solid var(--border-strong);
   transition: background-color 0.15s ease;
 }
@@ -184,7 +249,7 @@ body {
   flex-direction: column;
   min-height: 0;
   border-top: 1px solid var(--border-strong);
-  background: oklch(0 0 0 / 0.16);
+  background: var(--panel-tint);
 }
 .links-head {
   padding: 10px 16px 6px;
@@ -213,7 +278,26 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.links a:hover { background: oklch(1 0 0 / 0.05); color: var(--link-hover); text-decoration: underline; }
+.links a:hover { background: var(--hover); color: var(--link-hover); text-decoration: underline; }
+
+/* Theme-Umschalter (unten in der Sidebar) */
+.theme-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.theme-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.theme-label svg { flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------- Arbeitsfenster */
 .work {
@@ -234,7 +318,7 @@ body {
   bottom: 14px; right: 16px;
   font-size: 12px;
   color: var(--muted-foreground);
-  background: oklch(0.216 0.006 56 / 0.92);
+  background: color-mix(in oklab, var(--sidebar) 92%, transparent);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 5px 12px;
@@ -263,7 +347,7 @@ body {
   -webkit-user-select: text;
   cursor: text;
 }
-.copy-text::selection { background: rgba(53, 198, 146, 0.45); }
+.copy-text::selection { background: color-mix(in oklab, var(--primary) 45%, transparent); }
 .copy-hint {
   position: absolute;
   bottom: 14px; left: 50%;
@@ -310,7 +394,7 @@ body {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.fx-btn:hover { background: oklch(1 0 0 / 0.06); color: var(--foreground); }
+.fx-btn:hover { background: var(--hover); color: var(--foreground); }
 .fx-btn.active { color: var(--foreground); opacity: 1; }
 
 .fx-crumbs {
@@ -324,7 +408,7 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .fx-crumb { cursor: pointer; padding: 1px 4px; border-radius: 5px; }
-.fx-crumb:hover { background: oklch(1 0 0 / 0.06); color: var(--foreground); }
+.fx-crumb:hover { background: var(--hover); color: var(--foreground); }
 .fx-sep { opacity: 0.5; }
 
 .fx-list {
@@ -345,7 +429,7 @@ body {
   cursor: pointer;
   user-select: none;
 }
-.fx-item:hover { background: oklch(1 0 0 / 0.05); }
+.fx-item:hover { background: var(--hover); }
 .fx-icon {
   flex: 0 0 auto;
   display: inline-grid;
@@ -388,7 +472,7 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: var(--primary);
-  background: oklch(0.165 0.005 56 / 0.88);
+  background: color-mix(in oklab, var(--background) 88%, transparent);
   border: 2px dashed var(--primary);
   border-radius: var(--radius-md);
   pointer-events: none;
@@ -406,7 +490,7 @@ body {
   font-size: 12px;
   font-weight: 550;
   color: var(--foreground);
-  background: oklch(0.216 0.006 56 / 0.92);
+  background: color-mix(in oklab, var(--sidebar) 92%, transparent);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 5px 12px;
@@ -468,7 +552,7 @@ body {
   cursor: pointer;
   text-align: left;
 }
-.fx-menu button:hover:not(:disabled) { background: oklch(1 0 0 / 0.06); }
+.fx-menu button:hover:not(:disabled) { background: var(--hover); }
 .fx-menu button:disabled { color: var(--muted-foreground); opacity: 0.55; cursor: default; }
 .fx-menu .fx-mi {
   flex: 0 0 auto;
@@ -502,7 +586,7 @@ body {
   gap: 9px;
   padding: 8px 9px 8px 12px;
   border-bottom: 1px solid var(--border);
-  background: oklch(0 0 0 / 0.16);
+  background: var(--panel-tint);
   cursor: move;
   user-select: none;
   touch-action: none; /* Pointer-Drag auch auf Touch */
@@ -578,13 +662,13 @@ body {
 .ed-win .cm-panel input, .ed-win .cm-panel button, .ed-win .cm-panel select {
   font: inherit;
   color: var(--foreground);
-  background: oklch(1 0 0 / 0.06);
+  background: var(--hover);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 2px 7px;
   background-image: none;
 }
-.ed-win .cm-panel button:hover { background: oklch(1 0 0 / 0.1); }
+.ed-win .cm-panel button:hover { background: var(--hover-strong); }
 .ed-win .cm-panel label { color: var(--muted-foreground); }
 .ed-win .cm-textfield:focus { border-color: var(--primary); outline: none; }
 .ed-win .cm-tooltip {
@@ -594,17 +678,17 @@ body {
   border-radius: var(--radius-sm);
 }
 .ed-win .cm-tooltip-autocomplete ul li[aria-selected] {
-  background: oklch(0.696 0.17 162.48 / 0.2);
+  background: color-mix(in oklab, var(--primary) 20%, transparent);
   color: var(--foreground);
 }
 
 .ed-body .cm-scroller::-webkit-scrollbar { width: 8px; height: 8px; }
-.ed-body .cm-scroller::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 0.1); border-radius: 999px; }
+.ed-body .cm-scroller::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
 
 /* Scrollbars dezent */
 .sessions::-webkit-scrollbar, .links::-webkit-scrollbar, .fx-list::-webkit-scrollbar { width: 8px; }
 .sessions::-webkit-scrollbar-thumb, .links::-webkit-scrollbar-thumb, .fx-list::-webkit-scrollbar-thumb {
-  background: oklch(1 0 0 / 0.1); border-radius: 999px;
+  background: var(--scroll-thumb); border-radius: 999px;
 }
 
 /* Schmale Viewports: Sidebar etwas schmaler */
