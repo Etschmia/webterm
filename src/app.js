@@ -56,6 +56,10 @@ const term = new Terminal({
   allowProposedApi: true,
   macOptionIsMeta: false,
   theme,
+  // Hellmodus: TUI-Apps (z. B. Claude Code) waehlen 256-/Truecolor-Farben fuer
+  // dunklen Hintergrund; xterm hellt/dunkelt den Vordergrund pro Zelle nach,
+  // bis der Mindestkontrast erreicht ist. Dunkel: aus (Palette unveraendert).
+  minimumContrastRatio: theme === themeLight ? 4.5 : 1,
 });
 const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
@@ -72,6 +76,7 @@ function applyTheme(mode) {
   document.querySelector('meta[name="color-scheme"]').content = mode;
   localStorage.setItem('term-theme', mode);
   term.options.theme = mode === 'light' ? themeLight : themeDark;
+  term.options.minimumContrastRatio = mode === 'light' ? 4.5 : 1;
   themeToggle.checked = mode !== 'light';
 }
 themeToggle.checked = document.documentElement.dataset.theme !== 'light';
