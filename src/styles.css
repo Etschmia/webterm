@@ -137,6 +137,21 @@ body {
 }
 .brand-name { font-weight: 650; }
 .brand-dim { color: var(--muted-foreground); font-weight: 500; }
+.help-btn {
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted-foreground);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.help-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
 
 /* Session-Liste */
 .sessions {
@@ -343,6 +358,51 @@ body {
   padding: 10px 6px 12px 12px;
 }
 .xterm { height: 100%; }
+
+/* Scrollback-Suche (oben rechts im Arbeitsfenster, Strg+F) */
+.search-bar {
+  position: absolute;
+  top: 10px; right: 14px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 10px;
+  background: color-mix(in oklab, var(--sidebar) 96%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-soft);
+}
+.search-bar[hidden] { display: none; }
+.search-bar input {
+  width: 200px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--foreground);
+  background: none;
+  border: none;
+  outline: none;
+}
+.search-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
+}
+.search-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  font: inherit;
+  font-size: 13px; line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.search-btn:hover { background: var(--hover); color: var(--foreground); }
 
 .conn-status {
   position: absolute;
@@ -727,3 +787,89 @@ body {
   .app { grid-template-columns: 200px 1fr 280px; }
   .app.fx-collapsed { grid-template-columns: 200px 1fr 0; }
 }
+
+/* ---------------------------------------------------------------- Hilfe-Panel */
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: oklch(0 0 0 / 0.45);
+  backdrop-filter: blur(2px);
+}
+.help-overlay[hidden] { display: none; }
+.help-card {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(80dvh, 720px);
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--border);
+}
+.help-close {
+  display: inline-grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  font: inherit;
+  font-size: 17px; line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.help-close:hover { background: var(--hover); color: var(--foreground); }
+.help-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 18px 16px;
+}
+.help-body section { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.help-body section:last-child { border-bottom: none; }
+.help-body h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--primary);
+  letter-spacing: -0.01em;
+}
+.help-body p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--foreground); }
+.help-body b { font-weight: 650; }
+.help-body code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--hover);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.help-body kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--foreground);
+  background: var(--hover);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 3px 5px;
+  margin: 0 1px;
+}
+.help-body::-webkit-scrollbar { width: 8px; }
+.help-body::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }

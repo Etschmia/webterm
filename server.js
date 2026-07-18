@@ -120,12 +120,13 @@ async function listSessions() {
         // Vom Nutzer umbenannt (Session-Option @user-named): Sidebar zeigt
         // dann den Session-Namen statt des pane_title.
         userNamed: userNamed === '1',
+        // Die Standard-Session steckt hinter dem "Standard"-Eintrag der
+        // Sidebar; das Frontend blendet sie in der tmux-Liste aus, nutzt sie
+        // aber fuer die "Claude ist fertig"-Erkennung.
+        standard: name === STANDARD_SESSION,
         title: (title || '').trim(),
       };
-    })
-    // Die Standard-Session steckt bereits hinter dem "Standard"-Eintrag der
-    // Sidebar — nicht zusaetzlich als tmux-Session listen.
-    .filter((s) => s.name !== STANDARD_SESSION);
+    });
 }
 
 // Validiert einen vom Client gelieferten Session-Namen gegen die echte Liste.
@@ -377,6 +378,9 @@ const server = http.createServer(async (req, res) => {
     const q = new URL(req.url, 'http://localhost').searchParams;
     const from = q.get('name') || '';
     const to = (q.get('new') || '').trim();
+    if (from === STANDARD_SESSION) {
+      return sendJson(res, 400, { error: 'Standard-Session kann nicht umbenannt werden' });
+    }
     if (!(await sessionExists(from))) {
       return sendJson(res, 404, { error: `Session '${from}' nicht gefunden` });
     }

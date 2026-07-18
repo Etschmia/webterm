@@ -1,6 +1,7 @@
 // term-web Frontend: xterm + Sidebar (Standard / tmux-Sessions / Copy-Mode) + URL-Parsing.
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 // Editor-Fenster (Datei-Explorer -> Bearbeiten)
 import { basicSetup } from 'codemirror';
@@ -63,6 +64,8 @@ const term = new Terminal({
 });
 const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
+const searchAddon = new SearchAddon();
+term.loadAddon(searchAddon);
 // Links im Terminal selbst klickbar (oeffnen in neuem Tab).
 term.loadAddon(new WebLinksAddon((event, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
 term.open(document.getElementById('terminal'));
@@ -81,6 +84,67 @@ function applyTheme(mode) {
 }
 themeToggle.checked = document.documentElement.dataset.theme !== 'light';
 themeToggle.addEventListener('change', () => applyTheme(themeToggle.checked ? 'dark' : 'light'));
+
+// ---------------------------------------------------------------- Scrollback-Suche
+const searchBar = document.getElementById('search-bar');
+const searchInput = document.getElementById('search-input');
+const searchCount = document.getElementById('search-count');
+const SEARCH_DECOR = {
+  matchBackground: '#e3c46b66',
+  activeMatchBackground: '#35c692aa',
+  matchOverviewRuler: '#e3c46b',
+  activeMatchColorOverviewRuler: '#35c692',
+};
+
+function doSearch(dir, incremental) {
+  const q = searchInput.value;
+  if (!q) {
+    searchAddon.clearDecorations();
+    searchCount.textContent = '';
+    return;
+  }
+  const opts = { decorations: SEARCH_DECOR, incremental: !!incremental };
+  if (dir === 'prev') searchAddon.findPrevious(q, opts);
+  else searchAddon.findNext(q, opts);
+}
+function openSearch() {
+  searchBar.hidden = false;
+  searchInput.focus();
+  searchInput.select();
+}
+function closeSearch() {
+  searchBar.hidden = true;
+  searchAddon.clearDecorations();
+  searchCount.textContent = '';
+  term.focus();
+}
+searchInput.addEventListener('input', () => doSearch('next', true));
+searchInput.addEventListener('keydown', (e) => {
+  e.stopPropagation(); // Esc soll nicht zusaetzlich den Copy-Mode beenden
+  if (e.key === 'Enter') doSearch(e.shiftKey ? 'prev' : 'next', false);
+  else if (e.key === 'Escape') closeSearch();
+});
+document.getElementById('search-prev').addEventListener('click', () => doSearch('prev', false));
+document.getElementById('search-next').addEventListener('click', () => doSearch('next', false));
+document.getElementById('search-close').addEventListener('click', closeSearch);
+searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
+  searchCount.textContent = resultCount > 0 ? `${resultIndex + 1}/${resultCount}` : '0';
+});
+// Strg+F im Terminal abfangen (statt Browser-Suche); F3/Shift+F3 blaettern.
+term.attachCustomKeyEventHandler((e) => {
+  if (e.type !== 'keydown') return true;
+  if (e.ctrlKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault();
+    openSearch();
+    return false;
+  }
+  if (e.key === 'F3' && !searchBar.hidden) {
+    e.preventDefault();
+    doSearch(e.shiftKey ? 'prev' : 'next', false);
+    return false;
+  }
+  return true;
+});
 
 // ---------------------------------------------------------------- State
 const state = {
@@ -509,6 +573,7 @@ function renderSidebar() {
 
   // tmux-Sessions
   for (const s of state.sessions) {
+    if (s.standard) continue; // steckt bereits hinter dem Standard-Eintrag
     const active = isActive('session', s.name);
     const label = sessionLabel(s);
     const entry = makeEntry({
@@ -554,6 +619,7 @@ async function refreshSessions() {
   } catch {
     state.sessions = [];
   }
+  updateBusyAndNotify();
   // Aktive Session verschwunden? -> zurueck auf Standard.
   if (state.active.mode === 'session' &&
       !state.sessions.some((s) => s.name === state.active.name)) {
@@ -562,6 +628,79 @@ async function refreshSessions() {
   }
   renderSidebar();
 }
+
+// ---------------------------------------------------------------- "Claude ist fertig"
+// Claude Code setzt waehrend der Arbeit einen Braille-Spinner (⠋⠙⠸ …) an den
+// Anfang des pane_title. Verschwindet der Spinner zwischen zwei Polls, ist die
+// Session fertig: Badge im Tab-Titel/Favicon, optional Desktop-Benachrichtigung.
+const notifyToggle = document.getElementById('notify-toggle');
+let notifyEnabled = localStorage.getItem('term-notify') === '1';
+notifyToggle.checked = notifyEnabled;
+notifyToggle.addEventListener('change', async () => {
+  if (notifyToggle.checked && 'Notification' in window && Notification.permission === 'default') {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') setStatus('Browser-Benachrichtigungen sind blockiert — es bleibt beim Tab-Badge', true, 5000);
+  }
+  notifyEnabled = notifyToggle.checked;
+  localStorage.setItem('term-notify', notifyEnabled ? '1' : '0');
+});
+
+const faviconEl = document.querySelector('link[rel="icon"]');
+const FAVICON_IDLE = faviconEl.href;
+const FAVICON_DONE = FAVICON_IDLE.replace('%3C/svg%3E', "%3Ccircle cx='12' cy='4' r='3.2' fill='%23e3a008'/%3E%3C/svg%3E");
+let doneBadge = false;
+function setDoneBadge(on) {
+  if (doneBadge === on) return;
+  doneBadge = on;
+  document.title = on ? '● term' : 'term';
+  faviconEl.href = on ? FAVICON_DONE : FAVICON_IDLE;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setDoneBadge(false); });
+window.addEventListener('focus', () => setDoneBadge(false));
+
+const busyByName = new Map(); // Session-Name -> war beim letzten Poll beschaeftigt?
+let busyInitialized = false;  // erster Poll setzt nur den Grundzustand
+function isClaudeBusy(s) { return /^[⠀-⣿]/.test((s.title || '').trim()); }
+
+function updateBusyAndNotify() {
+  const current = new Map();
+  for (const s of state.sessions) current.set(s.name, s);
+  if (busyInitialized) {
+    for (const [name, s] of current) {
+      if (busyByName.get(name) === true && !isClaudeBusy(s)) claudeDone(s);
+    }
+  }
+  busyByName.clear();
+  for (const [name, s] of current) busyByName.set(name, isClaudeBusy(s));
+  busyInitialized = true;
+}
+
+function claudeDone(s) {
+  const label = s.standard ? 'Standard' : sessionLabel(s);
+  const watching = !document.hidden && (s.standard
+    ? state.active.mode === 'standard'
+    : state.active.mode === 'session' && state.active.name === s.name);
+  if (!watching) setStatus(`${label}: Claude ist fertig ✓`, false, 6000);
+  if (document.hidden) setDoneBadge(true);
+  if (notifyEnabled && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification('Claude ist fertig', { body: label, tag: 'term-done-' + s.name });
+    n.onclick = () => {
+      window.focus();
+      if (s.standard) switchTo('standard', null);
+      else switchTo('session', s.name);
+      n.close();
+    };
+  }
+}
+
+// ---------------------------------------------------------------- Hilfe-Panel
+const helpOverlay = document.getElementById('help-overlay');
+document.getElementById('help-btn').addEventListener('click', () => { helpOverlay.hidden = false; });
+document.getElementById('help-close').addEventListener('click', () => { helpOverlay.hidden = true; });
+helpOverlay.addEventListener('click', (e) => { if (e.target === helpOverlay) helpOverlay.hidden = true; });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !helpOverlay.hidden) { e.stopPropagation(); helpOverlay.hidden = true; }
+}, true); // Capture: vor dem Copy-Mode-Esc-Handler
 
 // ---------------------------------------------------------------- URL-Parsing
 const linksPanel = document.getElementById('links-panel');
