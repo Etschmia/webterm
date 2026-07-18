@@ -46,6 +46,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '7681', 10);
 const HOME = process.env.HOME || '/home/librechat';
 const SHELL = process.env.SHELL || '/bin/bash';
+// Persistente tmux-Session hinter dem "Standard"-Eintrag: attach falls
+// vorhanden, sonst neu anlegen (tmux new-session -A). Ueberlebt Reloads
+// und Verbindungsabbrueche.
+const STANDARD_SESSION = process.env.TERM_STANDARD_SESSION || 'Standard-Webterm';
 // Wurzel des Datei-Explorers. Die /api/fs/*-Endpunkte koennen NICHT darueber
 // hinaus (Schutz gegen Directory-Traversal in safePath). Default: Home.
 const FS_ROOT = path.resolve(process.env.FS_ROOT || HOME);
@@ -115,7 +119,10 @@ async function listSessions() {
         command: command || '',
         title: (title || '').trim(),
       };
-    });
+    })
+    // Die Standard-Session steckt bereits hinter dem "Standard"-Eintrag der
+    // Sidebar — nicht zusaetzlich als tmux-Session listen.
+    .filter((s) => s.name !== STANDARD_SESSION);
 }
 
 // Validiert einen vom Client gelieferten Session-Namen gegen die echte Liste.
@@ -433,7 +440,7 @@ wss.on('connection', (ws) => {
     };
     const p = mode === 'session'
       ? pty.spawn('tmux', ['attach-session', '-t', session], opts)
-      : pty.spawn(SHELL, ['-l'], opts);
+      : pty.spawn('tmux', ['new-session', '-A', '-s', STANDARD_SESSION], opts);
     term = p;
 
     disposables.push(p.onData((d) => {

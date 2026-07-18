@@ -442,8 +442,10 @@ function renderSidebar() {
   const stdActive = isActive('standard', null);
   const stdEntry = makeEntry({
     label: 'Standard',
+    // Dahinter liegt serverseitig die persistente tmux-Session
+    // "Standard-Webterm" (tmux new-session -A).
     dotClass: '',
-    badge: 'ssh',
+    badge: 'tmux',
     active: stdActive,
     onClick: () => switchTo('standard', null),
   });
