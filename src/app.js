@@ -473,7 +473,11 @@ function extractLinks() {
   let text = '';
   for (let i = start; i < end; i++) {
     const line = buf.getLine(i);
-    if (line) text += line.translateToString(true) + '\n';
+    if (!line) continue;
+    // Umgebrochene Fortsetzungszeilen (isWrapped) direkt anhaengen, sonst
+    // zerreisst ein langer URL an der Terminalbreite.
+    if (i > start && !line.isWrapped) text += '\n';
+    text += line.translateToString(true);
   }
   const seen = new Set();
   const found = [];
