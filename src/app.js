@@ -373,13 +373,15 @@ function cleanTitle(t) {
 // den Session-Namen zurueck, wenn der Titel nur ein Shell-Default ist
 // (leer, = laufendes Kommando wie "bash", oder ein "user@host"-Prompt-Titel).
 function sessionLabel(s) {
+  // Vom Nutzer vergebener Name (Inline-Edit) hat Vorrang vor dem pane_title.
+  if (s.userNamed) return s.name;
   const clean = cleanTitle(s.title);
   const cmd = (s.command || '').toLowerCase();
   const looksDefault = !clean || clean.toLowerCase() === cmd || /^\S+@\S+/.test(clean);
   return looksDefault ? s.name : clean;
 }
 
-function makeEntry({ label, tooltip, dotClass, badge, active, onClick }) {
+function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename }) {
   const el = document.createElement('div');
   el.className = 'entry' + (active ? ' active' : '');
   const row = document.createElement('div');
@@ -392,6 +394,48 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick }) {
   name.textContent = label;
   name.title = tooltip || label;
   row.append(dot, name);
+
+  // Inline-Umbenennen (nur tmux-Sessions): Stift-Knopf oder Doppelklick auf
+  // den Namen oeffnet ein Eingabefeld; Enter speichert, Esc/Fokusverlust bricht ab.
+  if (onRename) {
+    const startEdit = () => {
+      if (row.querySelector('.entry-edit')) return; // schon im Edit-Modus
+      const input = document.createElement('input');
+      input.className = 'entry-edit';
+      input.value = renameValue;
+      input.maxLength = 50;
+      input.spellcheck = false;
+      row.replaceChild(input, name);
+      let done = false;
+      const finish = (commit) => {
+        if (done) return;
+        done = true;
+        if (commit && input.value.trim() && input.value.trim() !== renameValue) {
+          onRename(input.value.trim());
+        } else {
+          renderSidebar(); // Original wiederherstellen
+        }
+      };
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') finish(true);
+        else if (e.key === 'Escape') finish(false);
+      });
+      input.addEventListener('blur', () => finish(false));
+      input.focus();
+      input.select();
+    };
+    name.addEventListener('dblclick', (e) => { e.stopPropagation(); startEdit(); });
+
+    const pencil = document.createElement('button');
+    pencil.className = 'entry-rename';
+    pencil.title = 'Umbenennen';
+    pencil.setAttribute('aria-label', 'Umbenennen');
+    pencil.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.3a1.6 1.6 0 0 1 2.3 2.3L5.5 12.7 2.5 13.5l.8-3L11.3 2.3z"/></svg>';
+    pencil.addEventListener('click', (e) => { e.stopPropagation(); startEdit(); });
+    row.append(pencil);
+  }
 
   if (badge) {
     const b = document.createElement('span');
@@ -467,10 +511,31 @@ function renderSidebar() {
       badge: `${s.windows}▦`,
       active,
       onClick: () => switchTo('session', s.name),
+      renameValue: s.name,
+      onRename: (newName) => renameSession(s.name, newName),
     });
     if (active) entry.append(makeCopyToggle());
     sessionsEl.append(entry);
   }
+}
+
+// Session serverseitig umbenennen (tmux rename-session). Ein attachter
+// tmux-Client bleibt dabei verbunden; nur die aktive Auswahl muss nachziehen.
+async function renameSession(oldName, newName) {
+  try {
+    const r = await fetch(
+      `${BASE}api/sessions/rename?name=${encodeURIComponent(oldName)}&new=${encodeURIComponent(newName)}`,
+      { method: 'POST' },
+    );
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Umbenennen fehlgeschlagen');
+    if (state.active.mode === 'session' && state.active.name === oldName) {
+      state.active.name = data.name;
+    }
+  } catch (e) {
+    setStatus(String(e.message || e), true, 4000);
+  }
+  refreshSessions();
 }
 
 async function refreshSessions() {

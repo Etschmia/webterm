@@ -100,7 +100,7 @@ async function listSessions() {
   // Titeln unueblich), so bleibt das Splitten der Fixfelder stabil.
   const fmt = [
     '#{session_name}', '#{session_attached}', '#{session_windows}',
-    '#{pane_in_mode}', '#{pane_current_command}', '#{pane_title}',
+    '#{pane_in_mode}', '#{pane_current_command}', '#{@user-named}', '#{pane_title}',
   ].join('\t');
   const r = await tmux(['list-sessions', '-F', fmt]);
   if (!r.ok) return []; // kein tmux-Server -> leere Liste
@@ -109,14 +109,17 @@ async function listSessions() {
     .filter(Boolean)
     .map((line) => {
       const parts = line.split('\t');
-      const [name, attached, windows, inMode, command] = parts;
-      const title = parts.slice(5).join('\t'); // Rest = pane_title (robust ggü. Tabs)
+      const [name, attached, windows, inMode, command, userNamed] = parts;
+      const title = parts.slice(6).join('\t'); // Rest = pane_title (robust ggü. Tabs)
       return {
         name,
         attached: Number(attached) > 0,
         windows: Number(windows) || 0,
         copyMode: inMode === '1',
         command: command || '',
+        // Vom Nutzer umbenannt (Session-Option @user-named): Sidebar zeigt
+        // dann den Session-Namen statt des pane_title.
+        userNamed: userNamed === '1',
         title: (title || '').trim(),
       };
     })
@@ -366,6 +369,30 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ sessions }));
     return;
+  }
+
+  // Session umbenennen (Inline-Edit in der Sidebar): tmux rename-session plus
+  // Markierung @user-named, damit das Label ab dann der Session-Name ist.
+  if (url === '/api/sessions/rename' && req.method === 'POST') {
+    const q = new URL(req.url, 'http://localhost').searchParams;
+    const from = q.get('name') || '';
+    const to = (q.get('new') || '').trim();
+    if (!(await sessionExists(from))) {
+      return sendJson(res, 404, { error: `Session '${from}' nicht gefunden` });
+    }
+    // Buchstaben/Ziffern plus Leerzeichen, _ und -; kein ':' oder '.'
+    // (tmux-Target-Syntax), max. 50 Zeichen.
+    if (!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,49}$/u.test(to)) {
+      return sendJson(res, 400, { error: 'Ungueltiger Name' });
+    }
+    if (to === from) return sendJson(res, 200, { ok: true, name: to });
+    if (to === STANDARD_SESSION || (await sessionExists(to))) {
+      return sendJson(res, 409, { error: 'Name bereits vergeben' });
+    }
+    const r = await tmux(['rename-session', '-t', from, to]);
+    if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
+    await tmux(['set-option', '-t', to, '@user-named', '1']);
+    return sendJson(res, 200, { ok: true, name: to });
   }
 
   if (url.startsWith('/api/fs/')) {

@@ -195,6 +195,37 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Inline-Umbenennen: Stift nur bei Hover sichtbar, Eingabefeld ersetzt den Namen */
+.entry-rename {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 20px; height: 20px;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.entry:hover .entry-rename, .entry-rename:focus-visible { opacity: 1; }
+.entry-rename:hover { color: var(--primary); background: var(--hover); }
+
+.entry-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--foreground);
+  background: var(--panel-tint);
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  padding: 1px 6px;
+  outline: none;
+}
+
 .entry-badge {
   flex: 0 0 auto;
   font-size: 10.5px;
