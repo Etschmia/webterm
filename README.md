@@ -67,6 +67,12 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
   - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
     `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
+- **claude/codex/grok in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
+  tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
+  `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
+  legt beim Aufruf von `claude`/`codex`/`grok` aus der Standard-Sitzung automatisch eine
+  neue tmux-Session an (`<tool>-<verzeichnis>`) und wechselt dorthin; eine vorhandene
+  `claude`-Funktion (claude-auto-retry) wird gesichert und weiter durchgereicht.
 - **Ohne sudo (User ohne Root-Rechte)**: `install.sh` bietet alternativ eine
   **systemd-User-Unit** an (`~/.config/systemd/user/<service>.service`,
   `systemctl --user enable --now <service>`). Installation *und* spätere Restarts kommen

@@ -387,6 +387,22 @@ else
   fi
 fi
 
+# claude/codex/grok aus der Standard-Sitzung (selbst eine tmux-Session) heraus
+# in eigene tmux-Sessions umlenken — sonst laufen sie IN der Standard-Sitzung
+# und tauchen nicht als eigene Session in der Sidebar auf.
+# WICHTIG: ans ENDE der ~/.bashrc, damit der Wrapper NACH claude-auto-retry
+# definiert wird und dessen Funktion sichern/durchreichen kann.
+WRAP_SRC="$DEPLOY_DIR/standard-session-wrappers.sh"
+BASHRC="$HOME/.bashrc"
+if grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
+  ok "Standard-Session-Wrapper sind in ~/.bashrc bereits eingebunden."
+else
+  printf '\n# term-web: claude/codex/grok aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
+    "$WRAP_SRC" "$WRAP_SRC" >> "$BASHRC"
+  ok "Standard-Session-Wrapper in ~/.bashrc eingebunden."
+  note "    Gilt fuer neue Shells — in offenen Sitzungen: source ~/.bashrc"
+fi
+
 # --------------------------------------------------------------------------
 # 5. Caddy-Datei
 # --------------------------------------------------------------------------
