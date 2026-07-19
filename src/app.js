@@ -432,6 +432,17 @@ function switchTo(mode, name) {
   requestAnimationFrame(() => term.focus());
 }
 
+// Auto-Wechsel zu neu gestarteten Tool-Sessions: die Wrapper der Standard-
+// Sitzung (deploy/standard-session-wrappers.sh) melden die frisch angelegte
+// Session per OSC 5522 (tmux-Passthrough) durch die PTY. Sidebar nachladen
+// und direkt dorthin attachen — die Sequenz erreicht nur Clients, die gerade
+// die Standard-Sitzung anzeigen, also genau die richtigen.
+term.parser.registerOscHandler(5522, (data) => {
+  const name = String(data || '').trim();
+  if (name) refreshSessions().then(() => switchTo('session', name));
+  return true;
+});
+
 // Bereinigt den tmux pane_title: entfernt fuehrende Status-Glyphe (z. B. ⠂ / ✳,
 // die Claude Code als Aktivitaets-Spinner setzt) und Whitespace.
 function cleanTitle(t) {

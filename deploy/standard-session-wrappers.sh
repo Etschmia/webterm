@@ -50,6 +50,14 @@ _term_tool_session() {
   # laeuft. Nach Programmende ersetzt `exec bash -i` den Prozess durch eine
   # normale Shell — die Session bleibt erhalten.
   tmux new-session -d -s "$name" -c "$PWD" -- bash -ic "$cmd; exec bash -i"
+  # Das Webterminal sofort auf die neue Session umschalten: den Session-Namen
+  # als OSC 5522 durch die PTY reichen (tmux-Passthrough, BEL-terminiert). Das
+  # Frontend faengt die Sequenz ab und wechselt Sidebar + Attach dorthin;
+  # andere Terminal-Emulatoren ignorieren die unbekannte Sequenz stillschweigend.
+  tmux set-option -p allow-passthrough on 2>/dev/null
+  printf '\033Ptmux;\033\033]5522;%s\007\033\\' "$name"
+  # Fuer echte tmux-Clients (z. B. SSH-Attach an die Standard-Session) den
+  # Client zusaetzlich klassisch umschalten.
   tmux switch-client -t "$name" 2>/dev/null \
     || printf 'Neue Session "%s" gestartet (siehe Sidebar).\n' "$name"
 }
