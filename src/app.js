@@ -461,7 +461,7 @@ function sessionLabel(s) {
   return looksDefault ? s.name : clean;
 }
 
-function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename }) {
+function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename, onKill }) {
   const el = document.createElement('div');
   el.className = 'entry' + (active ? ' active' : '');
   const row = document.createElement('div');
@@ -517,6 +517,17 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameVal
     row.append(pencil);
   }
 
+  // Session beenden (nur tmux-Sessions): ×-Knopf, Rueckfrage in killSession.
+  if (onKill) {
+    const x = document.createElement('button');
+    x.className = 'entry-kill';
+    x.title = 'Session beenden';
+    x.setAttribute('aria-label', 'Session beenden');
+    x.textContent = '×';
+    x.addEventListener('click', (e) => { e.stopPropagation(); onKill(); });
+    row.append(x);
+  }
+
   if (badge) {
     const b = document.createElement('span');
     b.className = 'entry-badge';
@@ -562,7 +573,15 @@ function renderSidebar() {
 
   const heading = document.createElement('div');
   heading.className = 'group-label';
-  heading.textContent = 'Sessions';
+  const headText = document.createElement('span');
+  headText.textContent = 'Sessions';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'group-add';
+  addBtn.title = 'Neue Session anlegen';
+  addBtn.setAttribute('aria-label', 'Neue Session anlegen');
+  addBtn.textContent = '+';
+  addBtn.addEventListener('click', startCreateSession);
+  heading.append(headText, addBtn);
   sessionsEl.append(heading);
 
   // Standard
@@ -597,10 +616,78 @@ function renderSidebar() {
       onClick: () => switchTo('session', s.name),
       renameValue: s.name,
       onRename: (newName) => renameSession(s.name, newName),
+      onKill: () => killSession(s.name, label),
     });
     if (active) entry.append(makeCopyToggle());
     sessionsEl.append(entry);
   }
+}
+
+// Neue Session anlegen: Eingabezeile direkt unter der Ueberschrift. Nutzt die
+// .entry-edit-Klasse — dadurch greift auch die Render-Sperre in renderSidebar
+// (das 4s-Polling zerstoert die offene Eingabe nicht).
+function startCreateSession() {
+  if (sessionsEl.querySelector('.entry-edit')) return; // schon eine Eingabe offen
+  const row = document.createElement('div');
+  row.className = 'entry';
+  const inner = document.createElement('div');
+  inner.className = 'entry-row';
+  const dot = document.createElement('span');
+  dot.className = 'entry-dot';
+  const input = document.createElement('input');
+  input.className = 'entry-edit';
+  input.placeholder = 'Session-Name';
+  input.maxLength = 50;
+  input.spellcheck = false;
+  inner.append(dot, input);
+  row.append(inner);
+  sessionsEl.insertBefore(row, sessionsEl.children[1] || null);
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    const val = input.value.trim();
+    row.remove();
+    if (commit && val) createSession(val);
+  };
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(false));
+  input.focus();
+}
+
+async function createSession(name) {
+  try {
+    const r = await fetch(`${BASE}api/sessions/create?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Anlegen fehlgeschlagen');
+    await refreshSessions();
+    switchTo('session', data.name);
+    return;
+  } catch (e) {
+    setStatus(String(e.message || e), true, 4000);
+  }
+  refreshSessions();
+}
+
+// Session beenden — mit Rueckfrage, denn kill-session beendet auch alle darin
+// laufenden Prozesse (z. B. eine arbeitende Claude-Instanz).
+async function killSession(name, label) {
+  const what = label && label !== name ? `${label} (${name})` : name;
+  if (!window.confirm(`Session „${what}" wirklich beenden?\nAlle darin laufenden Prozesse werden beendet.`)) return;
+  try {
+    const r = await fetch(`${BASE}api/sessions/kill?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Beenden fehlgeschlagen');
+  } catch (e) {
+    setStatus(String(e.message || e), true, 4000);
+  }
+  // War es die aktive Session, faellt refreshSessions auf Standard zurueck.
+  refreshSessions();
 }
 
 // Session serverseitig umbenennen (tmux rename-session). Ein attachter

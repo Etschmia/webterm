@@ -164,6 +164,9 @@ body {
   gap: 4px;
 }
 .group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 6px 8px 4px;
   font-size: 10.5px;
   font-weight: 650;
@@ -171,6 +174,21 @@ body {
   text-transform: uppercase;
   color: var(--muted-foreground);
 }
+/* "+"-Knopf in der Ueberschrift: neue Session anlegen */
+.group-add {
+  display: inline-grid;
+  place-items: center;
+  width: 20px; height: 20px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.group-add:hover { color: var(--primary); background: var(--hover); }
 
 .entry {
   border-radius: var(--radius-md);
@@ -226,6 +244,25 @@ body {
 }
 .entry:hover .entry-rename, .entry-rename:focus-visible { opacity: 1; }
 .entry-rename:hover { color: var(--primary); background: var(--hover); }
+
+/* ×-Knopf: Session beenden (wie der Stift nur bei Hover sichtbar) */
+.entry-kill {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 20px; height: 20px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.entry:hover .entry-kill, .entry-kill:focus-visible { opacity: 1; }
+.entry-kill:hover { color: oklch(0.65 0.19 25); background: var(--hover); }
 
 .entry-edit {
   flex: 1 1 auto;

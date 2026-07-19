@@ -399,6 +399,41 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, name: to });
   }
 
+  // Session anlegen ("+"-Knopf in der Sidebar): tmux new-session -d. Der
+  // eingegebene Name ist gewollt — @user-named setzt ihn als Sidebar-Label
+  // (statt eines spaeteren pane_title), wie beim Umbenennen.
+  if (url === '/api/sessions/create' && req.method === 'POST') {
+    const q = new URL(req.url, 'http://localhost').searchParams;
+    const name = (q.get('name') || '').trim();
+    if (!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,49}$/u.test(name)) {
+      return sendJson(res, 400, { error: 'Ungueltiger Name' });
+    }
+    if (name === STANDARD_SESSION || (await sessionExists(name))) {
+      return sendJson(res, 409, { error: 'Name bereits vergeben' });
+    }
+    const r = await tmux(['new-session', '-d', '-s', name, '-c', HOME]);
+    if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
+    await tmux(['set-option', '-t', '=' + name, '@user-named', '1']);
+    return sendJson(res, 200, { ok: true, name });
+  }
+
+  // Session beenden (×-Knopf, Rueckfrage im Frontend): tmux kill-session.
+  // '=' erzwingt exakten Namens-Match — tmux' Praefix-Matching koennte sonst
+  // eine andere Session treffen.
+  if (url === '/api/sessions/kill' && req.method === 'POST') {
+    const q = new URL(req.url, 'http://localhost').searchParams;
+    const name = q.get('name') || '';
+    if (name === STANDARD_SESSION) {
+      return sendJson(res, 400, { error: 'Standard-Session kann nicht beendet werden' });
+    }
+    if (!(await sessionExists(name))) {
+      return sendJson(res, 404, { error: `Session '${name}' nicht gefunden` });
+    }
+    const r = await tmux(['kill-session', '-t', '=' + name]);
+    if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (url.startsWith('/api/fs/')) {
     return handleFs(req, res, url);
   }
