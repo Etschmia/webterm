@@ -67,6 +67,16 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
   - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
     `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
+- **Ohne sudo (User ohne Root-Rechte)**: `install.sh` bietet alternativ eine
+  **systemd-User-Unit** an (`~/.config/systemd/user/<service>.service`,
+  `systemctl --user enable --now <service>`). Installation *und* spätere Restarts kommen
+  dann komplett ohne sudo aus; `deploy/term-restart` erkennt die User-Unit automatisch
+  (Override: `TERM_USER_UNIT=1/0`). Wichtig: **Lingering** muss aktiv sein
+  (`loginctl enable-linger`, zur Not einmalig als Admin
+  `sudo loginctl enable-linger <user>`), sonst stoppt der Service beim Logout.
+  Migration von einer bestehenden System-Unit: erst `sudo systemctl disable --now
+  <service>` (einmalig, Admin), dann `install.sh` mit Option User-Unit — parallel geht
+  nicht, beide würden denselben Port binden.
 - **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
   Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
   direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab

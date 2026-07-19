@@ -18,12 +18,37 @@
 #
 # Aufruf:  deploy/term-restart           (normaler entkoppelter Restart + Restore)
 #          deploy/term-restart --restore <snapfile>   (intern, von der Unit aufgerufen)
+#
+# Der Service kann als System-Unit (/etc/systemd/system, Restart braucht sudo) ODER als
+# User-Unit (~/.config/systemd/user, komplett ohne sudo) laufen. Das Skript erkennt
+# automatisch, wo die Unit liegt; Override per TERM_USER_UNIT=1 bzw. =0.
 set -euo pipefail
 
 SERVICE="${TERM_SERVICE:-term-server}"
 PROJECTS="$HOME/.claude/projects"
 
 log(){ printf '[term-restart] %s\n' "$*" >&2; }
+
+# PTY-Umgebungen (z. B. das Webterminal selbst) setzen XDG_RUNTIME_DIR oft nicht —
+# ohne das erreicht `systemctl --user` den User-Manager nicht, und die Auto-Erkennung
+# unten fiele faelschlich auf die System-Unit zurueck.
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
+# System- oder User-Unit? Auto-Erkennung: liegt die Unit im User-Manager, wird sie dort
+# verwaltet (kein sudo noetig — wichtig fuer Nutzer, die keins haben sollen).
+# Die Restore-Phase laeuft in der transienten Unit; dorthin wird das Ergebnis per
+# --setenv=TERM_USER_UNIT weitergereicht, damit beide Phasen sicher dasselbe tun.
+case "${TERM_USER_UNIT:-}" in
+  1|yes|true)  USER_UNIT=1 ;;
+  0|no|false)  USER_UNIT=0 ;;
+  *) if systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
+esac
+
+sysctl(){
+  if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi
+}
 
 # cwd -> Name des Claude-Projektverzeichnisses (Claude ersetzt '/' und '.' durch '-').
 enc_dir(){ printf '%s' "$1" | sed 's#[/.]#-#g'; }
@@ -90,7 +115,7 @@ snapshot(){
 restore(){
   local snapfile="$1" name cwd sid i
   for i in $(seq 1 60); do
-    systemctl is-active --quiet "$SERVICE" && break
+    sysctl is-active --quiet "$SERVICE" && break
     sleep 0.5
   done
   while IFS=$'\t' read -r name cwd; do
@@ -122,6 +147,9 @@ term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-Sessions.
 Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
 mehreren Instanzen ZWINGEND setzen, sonst trifft es die fremde Instanz:
   TERM_SERVICE=tbterm deploy/term-restart
+
+System- vs. User-Unit wird automatisch erkannt (User-Unit => kein sudo noetig).
+Override: TERM_USER_UNIT=1 (User-Unit) bzw. TERM_USER_UNIT=0 (System-Unit).
 USAGE
 }
 
@@ -137,7 +165,9 @@ esac
 
 # ---- Phase 1: Snapshot, dann Übergabe an entkoppelte Unit ----
 command -v tmux   >/dev/null || { log "tmux nicht gefunden."; exit 1; }
-command -v sudo   >/dev/null || { log "sudo nicht gefunden."; exit 1; }
+if [ "$USER_UNIT" -eq 0 ]; then
+  command -v sudo >/dev/null || { log "sudo nicht gefunden (System-Unit braucht sudo — oder Service als User-Unit betreiben, siehe --help)."; exit 1; }
+fi
 
 SNAP=$(mktemp /tmp/term-restart.XXXXXX)
 snapshot > "$SNAP"
@@ -153,14 +183,31 @@ NODE_DIR="$(node_bin_dir || true)"
 RUN_PATH="$HOME/.local/bin${NODE_DIR:+:$NODE_DIR}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 log "Starte entkoppelten Restart in Unit '$UNIT' …"
-sudo systemd-run --collect --quiet --unit="$UNIT" \
-  --uid="$(id -u)" --gid="$(id -g)" \
-  -p KillMode=none \
-  --setenv=HOME="$HOME" \
-  --setenv=PATH="$RUN_PATH" \
-  --setenv=LANG="${LANG:-C.UTF-8}" \
-  --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
-  bash -c "sudo -n systemctl restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+if [ "$USER_UNIT" -eq 1 ]; then
+  # User-Modus: transiente Unit im User-Manager — eigener cgroup neben der Service-Unit,
+  # ueberlebt deren Abriss genauso; kein sudo an keiner Stelle.
+  systemd-run --user --collect --quiet --unit="$UNIT" \
+    -p KillMode=none \
+    --setenv=HOME="$HOME" \
+    --setenv=PATH="$RUN_PATH" \
+    --setenv=LANG="${LANG:-C.UTF-8}" \
+    --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
+    --setenv=XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    --setenv=TERM_SERVICE="$SERVICE" \
+    --setenv=TERM_USER_UNIT=1 \
+    bash -c "systemctl --user restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+else
+  sudo systemd-run --collect --quiet --unit="$UNIT" \
+    --uid="$(id -u)" --gid="$(id -g)" \
+    -p KillMode=none \
+    --setenv=HOME="$HOME" \
+    --setenv=PATH="$RUN_PATH" \
+    --setenv=LANG="${LANG:-C.UTF-8}" \
+    --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
+    --setenv=TERM_SERVICE="$SERVICE" \
+    --setenv=TERM_USER_UNIT=0 \
+    bash -c "sudo -n systemctl restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+fi
 
 log "Restart entkoppelt angestoßen. Diese Sitzung wird gleich beendet —"
 log "die Claude-Sessions kommen automatisch per 'claude --resume' zurück."

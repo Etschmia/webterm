@@ -571,9 +571,82 @@ else
   SERVICE_NAME="$(ask_value 'Service-Name' 'term-server')"
   SERVICE_NAME="$(printf '%s' "$SERVICE_NAME" | tr -cd 'A-Za-z0-9_-')"
   [ -z "$SERVICE_NAME" ] && SERVICE_NAME="term-server"
-  UNIT_OUT="$DEPLOY_DIR/${SERVICE_NAME}.local.service"
   CUR_USER="$(id -un)"
-  cat > "$UNIT_OUT" <<EOF
+
+  printf '%s\n' "Wie soll der Service laufen?"
+  printf '%s\n' "  1) System-Unit  (/etc/systemd/system — Installation und Restart brauchen sudo)"
+  printf '%s\n' "  2) User-Unit    (~/.config/systemd/user — komplett ohne sudo, auch spaeter"
+  printf '%s\n' "                   beim deploy/term-restart; richtig fuer Nutzer ohne sudo)"
+  UNIT_MODE="$(ask_value 'Auswahl (1/2)' '1')"
+
+  if [ "$UNIT_MODE" = "2" ]; then
+    # ---- User-Unit: laeuft ohnehin als dieser Nutzer, daher kein User=;
+    # default.target ist das multi-user.target des User-Managers.
+    # PTY-/SSH-Umgebungen setzen XDG_RUNTIME_DIR nicht immer — ohne das
+    # erreicht `systemctl --user` den User-Manager nicht.
+    if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    fi
+    UNIT_OUT="$DEPLOY_DIR/${SERVICE_NAME}.local.service"
+    cat > "$UNIT_OUT" <<EOF
+[Unit]
+Description=term-web — Web-Terminal (User-Unit)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$SCRIPT_DIR
+Environment=HOME=$HOME
+Environment=LANG=en_US.UTF-8
+# Port/HOST/PUBLIC_ORIGIN kommen aus der .env (von install.sh gepflegt).
+EnvironmentFile=-$ENV_FILE
+ExecStart=$NODE_BIN $SCRIPT_DIR/server.js
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+    ok "systemd-User-Unit geschrieben: $UNIT_OUT"
+
+    if ask_yes_no "User-Unit jetzt installieren und starten (ohne sudo)?" "y"; then
+      USER_UNIT_DIR="$HOME/.config/systemd/user"
+      if mkdir -p "$USER_UNIT_DIR" \
+         && cp "$UNIT_OUT" "$USER_UNIT_DIR/${SERVICE_NAME}.service" \
+         && systemctl --user daemon-reload \
+         && systemctl --user enable --now "$SERVICE_NAME"; then
+        ok "User-Service '${SERVICE_NAME}' installiert und gestartet."
+        note "    Status:  systemctl --user status $SERVICE_NAME"
+        note "    Logs:    journalctl --user -u $SERVICE_NAME -f"
+      else
+        err "Installation der User-Unit fehlgeschlagen."
+      fi
+    else
+      printf '%s\n' "Manuelle Installation:"
+      note "    mkdir -p ~/.config/systemd/user && cp '$UNIT_OUT' ~/.config/systemd/user/${SERVICE_NAME}.service"
+      note "    systemctl --user daemon-reload && systemctl --user enable --now $SERVICE_NAME"
+    fi
+
+    # Ohne Lingering beendet systemd alle User-Units beim letzten Logout —
+    # der Service waere dann kein Dauerdienst. Aktive Sitzungen duerfen das
+    # per polkit meist fuer sich selbst setzen (set-self-linger), sonst muss
+    # einmalig ein Admin ran.
+    if loginctl show-user "$CUR_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+      ok "Lingering ist aktiv — der Service laeuft auch ohne offene Sitzung weiter."
+    elif loginctl enable-linger 2>/dev/null; then
+      ok "Lingering aktiviert (loginctl enable-linger) — Service ueberlebt den Logout."
+    else
+      warn "Lingering konnte nicht aktiviert werden — ohne Lingering stoppt der Service beim Logout!"
+      note "    Einmalig als Admin ausfuehren: sudo loginctl enable-linger $CUR_USER"
+    fi
+    note "deploy/term-restart erkennt die User-Unit automatisch und kommt dann ohne sudo aus."
+
+  else
+    # ---- System-Unit (bisheriger Weg) -----------------------------------
+    UNIT_OUT="$DEPLOY_DIR/${SERVICE_NAME}.local.service"
+    cat > "$UNIT_OUT" <<EOF
 [Unit]
 Description=term-web — Web-Terminal
 After=network.target
@@ -595,22 +668,23 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-  ok "systemd-Unit geschrieben: $UNIT_OUT"
+    ok "systemd-Unit geschrieben: $UNIT_OUT"
 
-  if ask_yes_no "Service jetzt per sudo installieren und starten?" "n"; then
-    if sudo cp "$UNIT_OUT" "/etc/systemd/system/${SERVICE_NAME}.service" \
-       && sudo systemctl daemon-reload \
-       && sudo systemctl enable --now "$SERVICE_NAME"; then
-      ok "Service '${SERVICE_NAME}' installiert und gestartet."
-      note "    Status:  sudo systemctl status $SERVICE_NAME"
-      note "    Logs:    journalctl -u $SERVICE_NAME -f"
+    if ask_yes_no "Service jetzt per sudo installieren und starten?" "n"; then
+      if sudo cp "$UNIT_OUT" "/etc/systemd/system/${SERVICE_NAME}.service" \
+         && sudo systemctl daemon-reload \
+         && sudo systemctl enable --now "$SERVICE_NAME"; then
+        ok "Service '${SERVICE_NAME}' installiert und gestartet."
+        note "    Status:  sudo systemctl status $SERVICE_NAME"
+        note "    Logs:    journalctl -u $SERVICE_NAME -f"
+      else
+        err "Installation des Service fehlgeschlagen."
+      fi
     else
-      err "Installation des Service fehlgeschlagen."
+      printf '%s\n' "Manuelle Installation:"
+      note "    sudo cp '$UNIT_OUT' /etc/systemd/system/${SERVICE_NAME}.service"
+      note "    sudo systemctl daemon-reload && sudo systemctl enable --now $SERVICE_NAME"
     fi
-  else
-    printf '%s\n' "Manuelle Installation:"
-    note "    sudo cp '$UNIT_OUT' /etc/systemd/system/${SERVICE_NAME}.service"
-    note "    sudo systemctl daemon-reload && sudo systemctl enable --now $SERVICE_NAME"
   fi
 fi
 
