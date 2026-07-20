@@ -13,7 +13,8 @@ die Referenz-Instanz läuft unter **term.martuni.de**.
 ```
 Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Build),
 richtet optional `claude-auto-retry` (inkl. täglichem Update-Check per Cron —
-`deploy/claude-auto-retry-update.sh`) und tmux-Maussteuerung ein und hilft beim
+`deploy/claude-auto-retry-update.sh`) sowie die tmux-Konfiguration (Maussteuerung +
+git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`) ein und hilft beim
 Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) inkl.
 bcrypt-Hash für Basic Auth. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
 woraus `server.js` die erlaubten WS-Origins ableitet.
@@ -45,8 +46,9 @@ Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → N
   prüft den WS-`Origin`.
 - `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
 - `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
-- `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check). systemd-Unit und
-  Caddy-Site erzeugt `./install.sh` hostspezifisch als gitignorte `*.local.*`-Datei.
+- `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check, `git-status.sh` für die
+  tmux-Statuszeile). systemd-Unit und Caddy-Site erzeugt `./install.sh` hostspezifisch als
+  gitignorte `*.local.*`-Datei.
 
 ### WS-Protokoll
 - Client → Server: JSON-Text-Frames `{t:'start'|'input'|'resize'|'copyMode', …}`.

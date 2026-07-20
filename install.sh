@@ -7,7 +7,8 @@
 #   2. Findet npm/node und baut das Projekt (npm install + npm run build).
 #   3. Prueft tmux; bietet ggf. die Installation von claude-auto-retry an
 #      (inkl. taeglichem Update-Check per Cron, siehe deploy/claude-auto-retry-update.sh).
-#   4. Sorgt fuer "set -g mouse on" in ~/.tmux.conf.
+#   4. Sorgt fuer "set -g mouse on" in ~/.tmux.conf und rollt die git-Statuszeile
+#      aus (deploy/git-status.sh -> ~/.tmux/, status-right in ~/.tmux.conf).
 #   5. Hilft optional beim Erstellen einer Caddy-Datei (Subdomain oder Unterpfad),
 #      inkl. sofortiger bcrypt-Hash-Erzeugung fuer Basic Auth.
 #   6. Generiert eine systemd-Unit und bietet die Aktivierung an.
@@ -409,21 +410,62 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 4. ~/.tmux.conf: set -g mouse on
+# 4. ~/.tmux.conf: Maus-Unterstuetzung + git-Status in der Statuszeile
 # --------------------------------------------------------------------------
-step "4/6  tmux-Maus-Unterstuetzung"
+step "4/6  tmux-Konfiguration (Maus + git-Status)"
+
+# 4a) git-status.sh nach ~/.tmux/ ausrollen — die Statuszeile ruft es dort per
+#     fixem Pfad auf. Quelle liegt im Repo (deploy/git-status.sh); Zielverzeichnis
+#     ggf. anlegen, Skript aktuell halten und ausfuehrbar machen.
+GITSTATUS_SRC="$DEPLOY_DIR/git-status.sh"
+TMUX_DIR="$HOME/.tmux"
+GITSTATUS_DST="$TMUX_DIR/git-status.sh"
+if [ ! -f "$GITSTATUS_SRC" ]; then
+  warn "deploy/git-status.sh fehlt im Repo — git-Statuszeile wird uebersprungen."
+else
+  mkdir -p "$TMUX_DIR"
+  if [ ! -f "$GITSTATUS_DST" ] || ! cmp -s "$GITSTATUS_SRC" "$GITSTATUS_DST"; then
+    cp "$GITSTATUS_SRC" "$GITSTATUS_DST"
+    ok "git-status.sh nach ~/.tmux/ kopiert."
+  else
+    ok "~/.tmux/git-status.sh ist aktuell."
+  fi
+  if [ ! -x "$GITSTATUS_DST" ]; then
+    chmod +x "$GITSTATUS_DST"
+    info "~/.tmux/git-status.sh ausfuehrbar gemacht."
+  fi
+fi
+
+# 4b) ~/.tmux.conf sicherstellen: mouse on, status-interval und die git-Statuszeile.
 TMUX_CONF="$HOME/.tmux.conf"
+TMUX_CHANGED=0
+[ -f "$TMUX_CONF" ] || info "~/.tmux.conf existiert nicht — wird angelegt."
+
 if grep -Eq '^[[:space:]]*[^#].*\bmouse[[:space:]]+on\b' "$TMUX_CONF" 2>/dev/null; then
   ok "'mouse on' ist in ~/.tmux.conf bereits gesetzt."
 else
-  if [ ! -f "$TMUX_CONF" ]; then
-    info "~/.tmux.conf existiert nicht — wird angelegt."
-  fi
   printf '\n# Maus-Unterstuetzung (von term-web/install.sh hinzugefuegt)\nset -g mouse on\n' >> "$TMUX_CONF"
   ok "'set -g mouse on' zu ~/.tmux.conf hinzugefuegt."
-  if [ "$HAVE_TMUX" -eq 1 ] && tmux info >/dev/null 2>&1; then
-    tmux source-file "$TMUX_CONF" >/dev/null 2>&1 && info "Laufende tmux-Server neu geladen." || true
-  fi
+  TMUX_CHANGED=1
+fi
+
+# git-Status erkennbar am Aufruf von git-status.sh in einer status-right-Zeile.
+# Nur ausrollen, wenn das Skript im Repo vorhanden ist (sonst zeigt die Zeile nichts).
+if grep -Eq '^[[:space:]]*[^#].*git-status\.sh' "$TMUX_CONF" 2>/dev/null; then
+  ok "git-Status in der tmux-Statuszeile ist bereits konfiguriert."
+elif [ -f "$GITSTATUS_SRC" ]; then
+  cat >> "$TMUX_CONF" <<'EOF'
+
+# git Infos anzeigen (von term-web/install.sh hinzugefuegt)
+set -g status-interval 10
+set -g status-right '#[fg=colour245]#(~/.tmux/git-status.sh #{pane_current_path})#[default] | %H:%M'
+EOF
+  ok "git-Statuszeile (status-interval + status-right) zu ~/.tmux.conf hinzugefuegt."
+  TMUX_CHANGED=1
+fi
+
+if [ "$TMUX_CHANGED" -eq 1 ] && [ "$HAVE_TMUX" -eq 1 ] && tmux info >/dev/null 2>&1; then
+  tmux source-file "$TMUX_CONF" >/dev/null 2>&1 && info "Laufende tmux-Server neu geladen." || true
 fi
 
 # claude/codex/grok aus der Standard-Sitzung (selbst eine tmux-Session) heraus
