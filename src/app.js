@@ -753,8 +753,17 @@ function setDoneBadge(on) {
   document.title = on ? '● term' : 'term';
   faviconEl.href = on ? FAVICON_DONE : FAVICON_IDLE;
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) setDoneBadge(false); });
-window.addEventListener('focus', () => setDoneBadge(false));
+// Beim Zurueckkehren zum Tab nicht nur das Fertig-Badge loeschen, sondern auch
+// die Session-Liste sofort neu laden. Hintergrund: Browser drosseln/pausieren
+// setInterval in Hintergrund-Tabs (Chrome bis auf ~1x/min oder ganz einfrieren).
+// Wer parallel per SSH/Termux eine tmux-Session spawnt (z. B.
+// tagesbericht-aktualisieren.sh) und dann zum Webterminal zurueckwechselt, sah
+// sie sonst erst beim naechsten (gedrosselten) Poll. Jetzt ist die Sidebar in
+// dem Moment aktuell, in dem der Nutzer wieder hinschaut.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { setDoneBadge(false); refreshSessions(); }
+});
+window.addEventListener('focus', () => { setDoneBadge(false); refreshSessions(); });
 
 const busyByName = new Map(); // Session-Name -> war beim letzten Poll beschaeftigt?
 let busyInitialized = false;  // erster Poll setzt nur den Grundzustand
