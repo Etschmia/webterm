@@ -62,9 +62,16 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 
 ## Deployment
 - **Service**: am einfachsten über `./install.sh` — es erzeugt die Unit mit den Pfaden
-  dieses Hosts als `deploy/<service>.local.service` (gitignort, Default-Name `term-server`).
-  Danach: `sudo cp deploy/term-server.local.service /etc/systemd/system/term-server.service`,
-  `sudo systemctl daemon-reload && sudo systemctl enable --now term-server`.
+  dieses Hosts als `deploy/<service>.local.service` (gitignort, Default-Name `term-server`)
+  und installiert sie auf Wunsch gleich selbst. Beim Lauf fragt es, **wo** die Unit landen
+  soll: als **System-Unit** (`/etc/systemd/system`, Installation und Restart brauchen sudo)
+  oder als **User-Unit** (`~/.config/systemd/user`, komplett ohne sudo — Details unten).
+  - Manuell als System-Unit: `sudo cp deploy/<service>.local.service
+    /etc/systemd/system/<service>.service`, dann `sudo systemctl daemon-reload &&
+    sudo systemctl enable --now <service>`.
+  - Manuell als User-Unit: `cp deploy/<service>.local.service
+    ~/.config/systemd/user/<service>.service`, dann `systemctl --user daemon-reload &&
+    systemctl --user enable --now <service>` (Lingering nicht vergessen, s. u.).
   - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
     `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
 - **claude/codex/grok in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
@@ -73,16 +80,20 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   legt beim Aufruf von `claude`/`codex`/`grok` aus der Standard-Sitzung automatisch eine
   neue tmux-Session an (`<tool>-<verzeichnis>`) und wechselt dorthin; eine vorhandene
   `claude`-Funktion (claude-auto-retry) wird gesichert und weiter durchgereicht.
-- **Ohne sudo (User ohne Root-Rechte)**: `install.sh` bietet alternativ eine
-  **systemd-User-Unit** an (`~/.config/systemd/user/<service>.service`,
-  `systemctl --user enable --now <service>`). Installation *und* spätere Restarts kommen
-  dann komplett ohne sudo aus; `deploy/term-restart` erkennt die User-Unit automatisch
-  (Override: `TERM_USER_UNIT=1/0`). Wichtig: **Lingering** muss aktiv sein
-  (`loginctl enable-linger`, zur Not einmalig als Admin
-  `sudo loginctl enable-linger <user>`), sonst stoppt der Service beim Logout.
-  Migration von einer bestehenden System-Unit: erst `sudo systemctl disable --now
-  <service>` (einmalig, Admin), dann `install.sh` mit Option User-Unit — parallel geht
-  nicht, beide würden denselben Port binden.
+- **Ohne sudo (User ohne Root-Rechte)**: die oben genannte **systemd-User-Unit**
+  (`~/.config/systemd/user/<service>.service`, `systemctl --user enable --now <service>`).
+  Installation *und* spätere Restarts kommen dann komplett ohne sudo aus;
+  `deploy/term-restart` erkennt die User-Unit automatisch (Override: `TERM_USER_UNIT=1/0`).
+  - **Bei der ersten Installation zwingend: Lingering aktivieren** —
+    `loginctl enable-linger <user>` (bzw. einmalig als Admin
+    `sudo loginctl enable-linger <user>`, falls polkit das Self-Service nicht erlaubt).
+    Ohne aktives Lingering beendet systemd die User-Units beim letzten Logout und startet
+    sie **nicht** beim Booten — der Service ist dann kein Dauerdienst. `install.sh` versucht
+    das automatisch; prüfen mit `loginctl show-user <user> | grep Linger` (soll `yes`
+    zeigen). Betrifft nur die User-Unit; die System-Unit läuft ohne Lingering.
+  - Migration von einer bestehenden System-Unit: erst `sudo systemctl disable --now
+    <service>` (einmalig, Admin), dann `install.sh` mit Option User-Unit — parallel geht
+    nicht, beide würden denselben Port binden.
 - **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
   Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
   direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab
