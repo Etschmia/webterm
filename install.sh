@@ -118,6 +118,13 @@ get_env() {
 find_cmd() {
   # Sucht $1 in PATH und gaengigen Node-Installationsorten. Pfad -> stdout.
   local name="$1" p latest
+  # Projekt-lokale node-Installation (vendor/node) hat Vorrang vor dem PATH:
+  # manche Maschinen halten node bewusst aus dem PATH heraus (bun-Nachbarprojekt,
+  # bun-'node'-Shims, die eine systemd-Unit auf bun umbiegen wuerden). Liegt der
+  # offizielle Tarball unter vendor/node/, ist das hier das *echte*, gewollte node.
+  if [ -x "$SCRIPT_DIR/vendor/node/bin/$name" ]; then
+    printf '%s' "$SCRIPT_DIR/vendor/node/bin/$name"; return 0
+  fi
   if p="$(command -v "$name" 2>/dev/null)"; then printf '%s' "$p"; return 0; fi
   for p in \
     "$HOME/.local/bin/$name" \
@@ -134,6 +141,31 @@ find_cmd() {
     fi
   fi
   return 1
+}
+
+run_npm() {
+  # Fuehrt npm ("$@") im Projektverzeichnis aus. Zwei Dinge sind dabei wichtig:
+  #  * npm ist selbst ein Node-Skript (Shebang '#!/usr/bin/env node') und die
+  #    package.json-Skripte rufen bare 'node' auf (build.mjs, server.js). Ohne
+  #    node im PATH scheitert schon der npm-Start ("env: node: not found"). Wir
+  #    stellen den Ordner von $NODE_BIN nur fuer diesen Aufruf dem PATH voran
+  #    (auf normalen Maschinen ist node ohnehin im PATH -> harmlos).
+  #  * Fuer die projekt-lokale vendor/node-Installation duerfen npm-Config und
+  #    -Cache NICHT nach ~ schreiben (ein ~/.npmrc wuerde vom bun-Nachbarprojekt
+  #    mitgelesen und hat hier schon Schaden angerichtet). Beides wird dann ins
+  #    Projekt umgeleitet (vendor/, .npmrc, .npm-cache/ sind gitignored). Auf
+  #    Maschinen mit globalem node bleibt die vorhandene npm-Config unberuehrt.
+  local node_dir=""
+  [ -n "$NODE_BIN" ] && node_dir="$(dirname "$NODE_BIN")"
+  if [ "${USING_VENDOR_NODE:-0}" -eq 1 ]; then
+    ( cd "$SCRIPT_DIR" \
+      && PATH="${node_dir:+$node_dir:}$PATH" \
+         NPM_CONFIG_USERCONFIG="$SCRIPT_DIR/.npmrc" \
+         NPM_CONFIG_CACHE="$SCRIPT_DIR/.npm-cache" \
+         "$NPM_BIN" "$@" )
+  else
+    ( cd "$SCRIPT_DIR" && PATH="${node_dir:+$node_dir:}$PATH" "$NPM_BIN" "$@" )
+  fi
 }
 
 port_in_use() {
@@ -257,6 +289,12 @@ set_env HOST "127.0.0.1"
 step "2/6  npm/node finden und bauen"
 NPM_BIN="$(find_cmd npm || true)"
 NODE_BIN="$(find_cmd node || true)"
+# Merken, ob node aus der projekt-lokalen vendor/node-Installation stammt —
+# dann braucht npm den PATH-Praefix und eine gekapselte Config (siehe run_npm).
+USING_VENDOR_NODE=0
+case "$NODE_BIN" in
+  "$SCRIPT_DIR/vendor/node/bin/"*) USING_VENDOR_NODE=1 ;;
+esac
 BUILD_OK=0
 if [ -z "$NPM_BIN" ]; then
   err "npm wurde nicht gefunden (PATH, ~/.local/bin, nvm, volta, /usr/local, /usr/bin, homebrew geprueft)."
@@ -264,6 +302,7 @@ if [ -z "$NPM_BIN" ]; then
 else
   ok "npm:  $NPM_BIN"
   [ -n "$NODE_BIN" ] && ok "node: $NODE_BIN" || warn "node-Binary nicht separat gefunden — systemd-Unit braucht den Pfad."
+  [ "$USING_VENDOR_NODE" -eq 1 ] && note "    (projekt-lokale vendor/node-Installation — npm laeuft mit gekapseltem PATH/Config)"
   # node-pty kompiliert nativ, falls kein Prebuild zur Node-Version passt.
   PROCEED_INSTALL=1
   if ! check_build_toolchain; then
@@ -275,9 +314,9 @@ else
     warn "npm install uebersprungen — Build-Tools installieren (siehe oben), dann Skript erneut ausfuehren."
   else
     info "Abhaengigkeiten installieren (npm install) …"
-    if ( cd "$SCRIPT_DIR" && "$NPM_BIN" install ); then
+    if run_npm install; then
       info "Frontend bauen (npm run build) …"
-      if ( cd "$SCRIPT_DIR" && "$NPM_BIN" run build ); then
+      if run_npm run build; then
         BUILD_OK=1; ok "Build erfolgreich (-> public/)."
       else
         err "Build fehlgeschlagen."
@@ -709,6 +748,18 @@ fi
 # --------------------------------------------------------------------------
 step "Fertig"
 ok "Konfiguration: $ENV_FILE"
-[ "$BUILD_OK" -eq 1 ] && ok "Build vorhanden (public/)." || warn "Kein erfolgreicher Build — 'npm run build' nachholen."
-note "Lokal testen:   ( cd '$SCRIPT_DIR' && '${NPM_BIN:-npm}' start )   -> http://127.0.0.1:$PORT"
+if [ "$BUILD_OK" -eq 1 ]; then
+  ok "Build vorhanden (public/)."
+elif [ "$USING_VENDOR_NODE" -eq 1 ]; then
+  warn "Kein erfolgreicher Build — 'npm run build' nachholen (mit vendor/node im PATH, s. u.)."
+else
+  warn "Kein erfolgreicher Build — 'npm run build' nachholen."
+fi
+if [ "$USING_VENDOR_NODE" -eq 1 ]; then
+  # vendor/node liegt bewusst nicht im PATH: server.js direkt mit dem absoluten
+  # node-Pfad starten (npm start wuerde bare 'node' aufrufen und ohne PATH scheitern).
+  note "Lokal testen:   ( cd '$SCRIPT_DIR' && '$NODE_BIN' server.js )   -> http://127.0.0.1:$PORT"
+else
+  note "Lokal testen:   ( cd '$SCRIPT_DIR' && '${NPM_BIN:-npm}' start )   -> http://127.0.0.1:$PORT"
+fi
 note "Generierte, NICHT versionierte Dateien liegen unter: $DEPLOY_DIR/*.local.*"
