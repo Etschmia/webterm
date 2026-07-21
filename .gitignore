@@ -8,6 +8,9 @@ _wstest.mjs
 .env
 deploy/*.local.*
 
+# Lokale Notizen/Ideen — nicht ins Repo (u. a. Betriebsdetails, Publish-Checks)
+docs/
+
 # Projekt-lokale node-Installation (vendor/node) samt gekapselter npm-Konfiguration.
 # Bewusst NICHT im PATH: nebenan liegt ein bun-Projekt, das ein globales node/npm
 # bzw. ein ~/.npmrc stoeren wuerde. Immer ueber absolute Pfade ansprechen.
