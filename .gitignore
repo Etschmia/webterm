@@ -7,6 +7,8 @@ _wstest.mjs
 # Von install.sh erzeugt (lokale Konfiguration / echte Zugangsdaten)
 .env
 deploy/*.local.*
+# Install-lokaler Servicename fuer deploy/update + deploy/term-restart (TERM_SERVICE=…)
+deploy/deploy.env
 
 # Lokale Notizen/Ideen — nicht ins Repo (u. a. Betriebsdetails, Publish-Checks)
 docs/

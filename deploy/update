@@ -24,22 +24,31 @@
 #       Dienstes). Das vergleicht den Ist-Zustand gegen den echten Prozess und
 #       ist damit unabhaengig davon, was der Pull gerade geholt hat.
 #
+# Servicename: NICHT mehr hart 'term-server', sondern robust ermittelt (explizit
+#   $TERM_SERVICE -> deploy/deploy.env -> Auto-Erkennung des laufenden server.js
+#   dieses Repos, s. deploy/lib-service.sh). Wird ein Backend-Update erkannt, aber
+#   kein passender aktiver Dienst gefunden, bricht das Skript LAUT ab (Exit != 0)
+#   statt still nur das Frontend zu bauen.
+#
 # Aufruf:
 #   deploy/update              git pull + build + ggf. Restart
 #   deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
 #   deploy/update --help
 #
-# Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
-# mehreren Instanzen ZWINGEND setzen, sonst trifft der Restart die fremde
-# Instanz:  TERM_SERVICE=tbterm deploy/update
+# Instanz erzwingen:  TERM_SERVICE=<unit> deploy/update   (wird an term-restart
+# durchgereicht). Auf Maschinen mit mehreren Instanzen dringend setzen ODER per
+# deploy/deploy.env hinterlegen (install.sh legt sie an).
 set -euo pipefail
 
 SELF="$(readlink -f "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
-SERVICE="${TERM_SERVICE:-term-server}"
 
 log(){ printf '[update] %s\n' "$*" >&2; }
 die(){ log "FEHLER: $*"; exit 1; }
+
+# Gemeinsame Servicenamen-Ermittlung (mit deploy/term-restart geteilt).
+# shellcheck source=deploy/lib-service.sh
+. "$SCRIPT_DIR/deploy/lib-service.sh"
 
 usage(){
   cat >&2 <<USAGE
@@ -49,12 +58,13 @@ deploy/update — konfigurierte Installation aktuell halten (kein Re-Setup).
   deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
   deploy/update --help       diese Hilfe
 
-Service via TERM_SERVICE waehlen (Default: term-server). Auf Multi-Instanz-
-Maschinen ZWINGEND setzen:  TERM_SERVICE=tbterm deploy/update
+Servicename wird ermittelt: \$TERM_SERVICE -> deploy/deploy.env -> Auto-Erkennung
+des laufenden server.js dieses Repos. Erzwingen: TERM_SERVICE=<unit> deploy/update.
 
 Gebaut wird immer; neu gestartet nur, wenn sich das Backend (server.js /
 package*.json) gegenueber dem laufenden Prozess geaendert hat. Reine Frontend-
-Aenderungen brauchen keinen Restart — im Browser den Tab neu laden.
+Aenderungen brauchen keinen Restart — im Browser den Tab neu laden. Liegt ein
+Backend-Update vor, aber kein passender aktiver Dienst, bricht das Skript ab.
 USAGE
 }
 
@@ -67,10 +77,11 @@ case "${1:-}" in
 esac
 
 # ---- Phase 1: git pull, dann mit der (evtl. neuen) Version weiter ----------
-# `git pull` kann dieses Skript UND deploy/term-restart ersetzen. Danach die
-# frische Version per exec neu einlesen, bevor build/restart laufen — so gilt
-# immer die neueste Logik (auch wenn genau dieses Update sie verbessert hat).
-# Der Marker verhindert eine zweite Pull-Runde nach dem Re-exec.
+# `git pull` kann dieses Skript UND deploy/term-restart/lib-service.sh ersetzen.
+# Danach die frische Version per exec neu einlesen, bevor build/restart laufen —
+# so gilt immer die neueste Logik (auch wenn genau dieses Update sie verbessert
+# hat). Der Marker verhindert eine zweite Pull-Runde nach dem Re-exec; ob der
+# Pull Backend-Dateien beruehrt hat, wird als Marker ueber den exec gereicht.
 if [ "${TERM_UPDATE_REEXEC:-0}" != "1" ] && [ "$DO_PULL" -eq 1 ]; then
   command -v git >/dev/null 2>&1 || die "git nicht gefunden."
   [ -d "$SCRIPT_DIR/.git" ] || die "$SCRIPT_DIR ist kein git-Arbeitsverzeichnis."
@@ -81,6 +92,10 @@ if [ "${TERM_UPDATE_REEXEC:-0}" != "1" ] && [ "$DO_PULL" -eq 1 ]; then
   after="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
   if [ "$before" != "$after" ]; then
     log "Aktualisiert: ${before:0:9} -> ${after:0:9}"
+    if git -C "$SCRIPT_DIR" diff --name-only "$before" "$after" 2>/dev/null \
+         | grep -qE '^(server\.js|package\.json|package-lock\.json)$'; then
+      export TERM_UPDATE_PULL_BACKEND=1   # Backend-Datei im Pull geaendert
+    fi
   else
     log "git meldet 'up to date' (Pull ohne neue Commits) — es wird trotzdem gebaut."
   fi
@@ -88,7 +103,7 @@ if [ "${TERM_UPDATE_REEXEC:-0}" != "1" ] && [ "$DO_PULL" -eq 1 ]; then
   exec "$SELF"   # ab hier gilt die frisch gepullte Fassung; Pull wird uebersprungen
 fi
 
-# ---- Phase 2: Restart-Entscheidung ZUERST (vor jeglichem Build) ------------
+# ---- Phase 2: Dienst ermitteln + Restart-Entscheidung (vor jeglichem Build) --
 # Reihenfolge ist kritisch: npm install/build unten fassen package-lock.json und
 # public/ an und setzen deren mtime auf 'jetzt'. Wuerde die Entscheidung 'ist das
 # Backend neuer als der laufende Prozess?' NACH dem Build fallen, loeste der
@@ -97,10 +112,17 @@ fi
 if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
   export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 fi
+
+# setzt SERVICE/SERVICE_SOURCE/REPO_BACKEND_PID/TERM_USER_UNIT; leerer SERVICE = nichts gefunden
+term_resolve_service || true
+[ -n "$SERVICE" ] && [ "$SERVICE_SOURCE" != "TERM_SERVICE" ] && log "Dienst: $SERVICE (Quelle: $SERVICE_SOURCE)"
+
+# System- vs. User-Unit: aus der Auto-Erkennung (cgroup -> TERM_USER_UNIT) oder,
+# bei explizit/deploy.env, per systemctl --user erkennen.
 case "${TERM_USER_UNIT:-}" in
   1|yes|true) USER_UNIT=1 ;;
   0|no|false) USER_UNIT=0 ;;
-  *) if systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
+  *) if [ -n "$SERVICE" ] && systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
 esac
 sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi; }
 
@@ -108,11 +130,15 @@ sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl 
 # Runtime-Quellcode, package*.json aendern die geladenen Module. Nur bei Aenderung
 # an einer davon muss der Prozess neu geladen werden.
 BACKEND_FILES="server.js package.json package-lock.json"
+PULL_BACKEND="${TERM_UPDATE_PULL_BACKEND:-0}"
 
+SERVICE_ACTIVE=0
+if [ -n "$SERVICE" ] && sysctl is-active --quiet "$SERVICE"; then SERVICE_ACTIVE=1; fi
+
+# NEED_RESTART strikt aus dem Ist-Zustand (mtime vs. ActiveEnterTimestamp) —
+# diese Heuristik bleibt unveraendert. Nur mit aktivem Dienst auswertbar.
 NEED_RESTART=0
-if ! sysctl is-active --quiet "$SERVICE"; then
-  log "Dienst '$SERVICE' laeuft nicht — kein Restart durch update (enable/term-restart ist dann zustaendig)."
-else
+if [ "$SERVICE_ACTIVE" -eq 1 ]; then
   started="$(sysctl show -p ActiveEnterTimestamp --value "$SERVICE" 2>/dev/null || true)"
   started_epoch=0
   [ -n "$started" ] && started_epoch="$(date -d "$started" +%s 2>/dev/null || echo 0)"
@@ -130,8 +156,27 @@ else
       fi
     done
   fi
+  [ "$NEED_RESTART" -eq 0 ] && log "Backend unveraendert gegenueber dem laufenden Prozess — kein Restart noetig."
 fi
-[ "$NEED_RESTART" -eq 0 ] && log "Backend unveraendert gegenueber dem laufenden Prozess — kein Restart noetig."
+
+# Ohne aktiven Dienst: liegt trotzdem ein Backend-Update an, das sonst STILL
+# liegenbliebe (genau der Vorfall)? Signale ohne ActiveEnterTimestamp:
+#   (i) ein erkannter, aber nicht neustartbarer server.js-Prozess (proc-no-unit),
+#       dessen Start aelter als eine Backend-Datei ist;
+#   (ii) der git pull dieses Laufs hat Backend-Dateien geaendert.
+BACKEND_PENDING=0
+if [ "$SERVICE_ACTIVE" -eq 0 ]; then
+  if [ -n "${REPO_BACKEND_PID:-}" ] && [ -e "/proc/${REPO_BACKEND_PID}" ]; then
+    ps_start="$(stat -c %Y "/proc/${REPO_BACKEND_PID}" 2>/dev/null || echo 0)"
+    for f in $BACKEND_FILES; do
+      fp="$SCRIPT_DIR/$f"
+      [ -f "$fp" ] || continue
+      mt="$(stat -c %Y "$fp" 2>/dev/null || echo 0)"
+      [ "$mt" -gt "$ps_start" ] && BACKEND_PENDING=1
+    done
+  fi
+  [ "$PULL_BACKEND" -eq 1 ] && BACKEND_PENDING=1
+fi
 
 # ---- Phase 3: bauen (immer) ------------------------------------------------
 # node/npm-Suche wie install.sh: projekt-lokales vendor/node hat Vorrang (manche
@@ -202,7 +247,7 @@ if [ ! -d "$SCRIPT_DIR/node_modules" ] || [ -z "$want_hash" ] || [ "$want_hash" 
   elif [ "$after_hash" != "$want_hash" ]; then
     # npm hat echte Aenderungen aufgeloest -> Prozess muss die neuen Module laden.
     log "Abhaengigkeiten haben sich geaendert -> Restart faellig."
-    NEED_RESTART=1
+    NEED_RESTART=1; BACKEND_PENDING=1
   fi
   printf '%s\n' "$after_hash" > "$DEPS_STAMP" 2>/dev/null || true
 else
@@ -213,11 +258,39 @@ log "Frontend bauen (npm run build) …"
 run_npm run build || die "Build fehlgeschlagen."
 log "Build ok -> public/"
 
-# ---- Phase 4: Restart nur bei geaendertem Backend (Entscheidung aus Phase 2) -
-if [ "$NEED_RESTART" -eq 1 ]; then
-  log "-> sessions-schonender Restart via deploy/term-restart (Claude-Sessions kommen per --resume zurueck) …"
-  TERM_SERVICE="$SERVICE" "$SCRIPT_DIR/deploy/term-restart"
-  # term-restart beendet diese Sitzung ggf. selbst; danach resumt sie automatisch.
+# ---- Phase 4: handeln ------------------------------------------------------
+if [ "$SERVICE_ACTIVE" -eq 1 ]; then
+  if [ "$NEED_RESTART" -eq 1 ]; then
+    log "-> sessions-schonender Restart via deploy/term-restart (Claude-Sessions kommen per --resume zurueck) …"
+    TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$SCRIPT_DIR/deploy/term-restart"
+    # term-restart beendet diese Sitzung ggf. selbst; danach resumt sie automatisch.
+  else
+    log "Fertig. Falls sich das Frontend geaendert hat: im Browser den Tab neu laden."
+  fi
+elif [ "$BACKEND_PENDING" -eq 1 ]; then
+  # Lauter Fehlschlag statt beruhigendem Weiterlaufen — genau der Vorfall, den
+  # wir verhindern wollen (neues Frontend, altes/kein Backend, keine Meldung).
+  log ""
+  log "################################  FEHLER  ################################"
+  log "Ein Backend-Update liegt vor, aber es wurde KEIN passender aktiver"
+  log "term-web-Dienst gefunden — das neue server.js wird NICHT aktiv, und das"
+  log "frisch gebaute Frontend liefe gegen ein veraltetes/fehlendes Backend."
+  case "${SERVICE_SOURCE:-none}" in
+    auto:proc-no-unit)
+      log "Grund: ein laufender server.js dieses Repos (PID ${REPO_BACKEND_PID:-?}) liess"
+      log "sich keiner systemd-Unit zuordnen." ;;
+    none)
+      log "Grund: kein laufender server.js dieses Repos und kein Servicename hinterlegt." ;;
+    *)
+      log "Grund: Dienst '$SERVICE' (Quelle: ${SERVICE_SOURCE:-?}) ist nicht aktiv." ;;
+  esac
+  log "Abhilfe: richtige Instanz benennen und erneut ausfuehren, z. B."
+  log "    TERM_SERVICE=<unit> deploy/update --no-pull"
+  log "oder deploy/deploy.env mit 'TERM_SERVICE=<unit>' anlegen (install.sh tut das)."
+  log "Laufende Units listen:  systemctl list-units --type=service | grep -i term"
+  log "#########################################################################"
+  exit 3
 else
-  log "Fertig. Falls sich das Frontend geaendert hat: im Browser den Tab neu laden."
+  log "Fertig. Kein aktiver Dienst gefunden, aber auch kein anhaengiges Backend-Update."
+  log "Falls sich das Frontend geaendert hat: im Browser den Tab neu laden."
 fi

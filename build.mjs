@@ -3,6 +3,7 @@ import * as esbuild from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, 'src');
@@ -10,6 +11,25 @@ const PUBLIC = path.join(__dirname, 'public');
 const watch = process.argv.includes('--watch');
 
 fs.mkdirSync(PUBLIC, { recursive: true });
+
+// Build-Stamp (Commit-Kurzhash, Fallback Zeitstempel) fuer die Version-Skew-
+// Erkennung: er wird SOWOHL ins Frontend-Bundle eingebettet (__BUILD_STAMP__)
+// ALS AUCH nach public/version.json geschrieben. server.js liest version.json
+// EINMAL beim Start; laeuft nach einem Deploy weiter ein alter Prozess, meldet
+// /api/version noch dessen alten Stamp, waehrend das neue Bundle den neuen traegt
+// -> das Frontend erkennt den Versatz und warnt. Siehe checkVersionSkew().
+function buildStamp() {
+  try {
+    return execSync('git rev-parse --short HEAD', {
+      cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString().trim() || null;
+  } catch { return null; }
+}
+const STAMP = buildStamp() || `build-${Date.now()}`;
+fs.writeFileSync(
+  path.join(PUBLIC, 'version.json'),
+  JSON.stringify({ version: STAMP, builtAt: new Date().toISOString() }) + '\n',
+);
 
 // Statische Dateien kopieren
 const copies = [
@@ -31,6 +51,8 @@ const options = {
   sourcemap: true,
   minify: !watch,
   legalComments: 'none',
+  // Build-Stamp fest ins Bundle einbrennen (das Frontend kennt so seine eigene Version).
+  define: { __BUILD_STAMP__: JSON.stringify(STAMP) },
 };
 
 if (watch) {

@@ -676,6 +676,20 @@ else
   printf '%s\n' "                   beim deploy/term-restart; richtig fuer Nutzer ohne sudo)"
   UNIT_MODE="$(ask_value 'Auswahl (1/2)' '1')"
 
+  # Servicenamen (+ System-/User-Modus) fuer deploy/update & deploy/term-restart
+  # hinterlegen — so treffen beide die richtige Instanz OHNE gesetztes TERM_SERVICE.
+  # Gitignored (deploy/deploy.env); die Auto-Erkennung ueber den laufenden
+  # server.js-Prozess bleibt nur der Fallback, falls diese Datei fehlt.
+  if [ "$UNIT_MODE" = "2" ]; then TERM_USER_UNIT_VAL=1; else TERM_USER_UNIT_VAL=0; fi
+  DEPLOY_ENV_OUT="$DEPLOY_DIR/deploy.env"
+  {
+    printf '# Von install.sh erzeugt — Instanz fuer deploy/update & deploy/term-restart.\n'
+    printf '# Gitignored. Ueberschreibt die Auto-Erkennung; per Umgebung ($TERM_SERVICE) uebersteuerbar.\n'
+    printf 'TERM_SERVICE=%s\n' "$SERVICE_NAME"
+    printf 'TERM_USER_UNIT=%s\n' "$TERM_USER_UNIT_VAL"
+  } > "$DEPLOY_ENV_OUT"
+  ok "Servicename hinterlegt: $DEPLOY_ENV_OUT (TERM_SERVICE=$SERVICE_NAME, TERM_USER_UNIT=$TERM_USER_UNIT_VAL)"
+
   if [ "$UNIT_MODE" = "2" ]; then
     # ---- User-Unit: laeuft ohnehin als dieser Nutzer, daher kein User=;
     # default.target ist das multi-user.target des User-Managers.

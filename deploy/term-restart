@@ -24,10 +24,19 @@
 # automatisch, wo die Unit liegt; Override per TERM_USER_UNIT=1 bzw. =0.
 set -euo pipefail
 
-SERVICE="${TERM_SERVICE:-term-server}"
 PROJECTS="$HOME/.claude/projects"
 
 log(){ printf '[term-restart] %s\n' "$*" >&2; }
+
+# Servicenamen robust ermitteln: explizit $TERM_SERVICE -> deploy/deploy.env ->
+# Auto-Erkennung des laufenden server.js dieses Repos (frueher hart 'term-server' —
+# das traf auf abweichend benannten Instanzen die falsche bzw. keine Unit).
+# term_resolve_service setzt SERVICE/SERVICE_SOURCE/REPO_BACKEND_PID und ggf.
+# TERM_USER_UNIT. Nicht-Null-Rueckgabe (kein Dienst gefunden) hier tolerieren —
+# der Normalpfad prueft SERVICE unten explizit; --help soll ohne Dienst laufen.
+# shellcheck source=deploy/lib-service.sh
+. "$(dirname "$(readlink -f "$0")")/lib-service.sh"
+term_resolve_service || true
 
 # PTY-Umgebungen (z. B. das Webterminal selbst) setzen XDG_RUNTIME_DIR oft nicht —
 # ohne das erreicht `systemctl --user` den User-Manager nicht, und die Auto-Erkennung
@@ -164,6 +173,14 @@ case "${1:-}" in
 esac
 
 # ---- Phase 1: Snapshot, dann Übergabe an entkoppelte Unit ----
+# Ab hier der Normalpfad: ohne ermittelten Dienstnamen kein Restart moeglich.
+if [ -z "${SERVICE:-}" ]; then
+  log "Kein term-web-Dienst gefunden — weder \$TERM_SERVICE noch deploy/deploy.env,"
+  log "noch ein laufender server.js dieses Repos (${TERM_REPO_DIR:-?})."
+  log "Instanz explizit angeben:  TERM_SERVICE=<unit> $0"
+  exit 1
+fi
+[ "${SERVICE_SOURCE:-}" = "TERM_SERVICE" ] || log "Dienst: $SERVICE (Quelle: ${SERVICE_SOURCE:-?})"
 command -v tmux   >/dev/null || { log "tmux nicht gefunden."; exit 1; }
 if [ "$USER_UNIT" -eq 0 ]; then
   command -v sudo >/dev/null || { log "sudo nicht gefunden (System-Unit braucht sudo — oder Service als User-Unit betreiben, siehe --help)."; exit 1; }

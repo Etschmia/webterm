@@ -880,6 +880,7 @@ const fxReopenBtn = document.getElementById('fx-reopen');
 let fxPath = ''; // aktuelles Verzeichnis, relativ zu FS_ROOT ('' = Wurzel)
 let fxShowHidden = false;
 let fxLastCwdAbs = null; // zuletzt gesehenes CWD der Session (absolut), fuer cd-Follow
+let fxCwd404Warned = false; // /api/fs/cwd 404 nur einmal ins Log schreiben (nicht bei jedem Poll)
 
 const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.6 4.2a1 1 0 0 1 1-1H6l1.3 1.5h6.1a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1z"/></svg>';
 const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
@@ -978,7 +979,16 @@ async function fxFollowCwd(force) {
   let data;
   try {
     const r = await fetch(`${BASE}api/fs/cwd?session=${encodeURIComponent(session)}`, { cache: 'no-store' });
-    if (!r.ok) return;
+    if (!r.ok) {
+      // Ein 404 heisst meist: Backend kennt /api/fs/cwd noch nicht (veraltet, Deploy
+      // unvollstaendig). Frueher komplett stumm — jetzt einmalig protokollieren, damit
+      // der Grund sichtbar ist, ohne bei jedem Poll zu spammen.
+      if (r.status === 404 && !fxCwd404Warned) {
+        fxCwd404Warned = true;
+        console.warn('[term] /api/fs/cwd -> 404: Backend kennt den Endpunkt nicht — Explorer folgt dem cd nicht. Deploy unvollstaendig? (Backend-Restart nötig)');
+      }
+      return;
+    }
     data = await r.json();
   } catch { return; }
   if (!data || data.abs == null) return;
@@ -1455,6 +1465,54 @@ window.addEventListener('beforeunload', (e) => {
   if (ed.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
+// ---------------------------------------------------------------- Version-Skew
+// Der Build brennt seinen Stamp ins Bundle (__BUILD_STAMP__) und schreibt ihn
+// zugleich nach public/version.json. /api/version meldet den Stamp des LAUFENDEN
+// Backends (einmal beim Start gelesen). Weichen beide ab — typisch: Frontend
+// frisch gebaut, Backend nicht neu gestartet (genau der Deploy-Vorfall) — ist der
+// Deploy unvollstaendig; wir warnen einmal sichtbar. Ein fehlendes /api/version
+// (Backend aelter als dieses Feature) zaehlt ebenfalls als Versatz.
+const FRONTEND_VERSION = __BUILD_STAMP__;
+const versionWarnEl = document.getElementById('version-warn');
+let versionWarned = false;
+
+function showVersionWarn(backend) {
+  if (versionWarned || !versionWarnEl) return;
+  versionWarned = true;
+  versionWarnEl.replaceChildren();
+  const msg = document.createElement('span');
+  msg.textContent = `Backend veraltet — Deploy unvollständig? (Frontend ${FRONTEND_VERSION} ≠ Backend ${backend})`;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'version-warn-close';
+  close.setAttribute('aria-label', 'Schließen');
+  close.textContent = '×';
+  close.addEventListener('click', () => { versionWarnEl.hidden = true; });
+  versionWarnEl.append(msg, close);
+  versionWarnEl.hidden = false;
+}
+
+async function checkVersionSkew() {
+  let backend;
+  try {
+    const r = await fetch(`${BASE}api/version`, { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json().catch(() => null);
+      backend = d && d.version;
+    } else if (r.status === 404) {
+      backend = 'ohne /api/version';   // Backend aelter als dieses Feature
+    } else {
+      return;                          // andere Fehler: nicht faelschlich warnen
+    }
+  } catch {
+    return;                            // Backend offline o. ae.: die Verbindungsanzeige uebernimmt
+  }
+  if (backend && backend !== FRONTEND_VERSION) {
+    console.warn(`[term] Version-Skew: Frontend ${FRONTEND_VERSION} != Backend ${backend} — Deploy unvollständig?`);
+    showVersionWarn(backend);
+  }
+}
+
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // term.martuni.de verdrahtet).
@@ -1467,6 +1525,7 @@ refreshSessions();
 setInterval(refreshSessions, 4000);
 fitTerminal();
 connect();
+checkVersionSkew();
 
 // Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
 fxCollapse(window.innerWidth < 900);

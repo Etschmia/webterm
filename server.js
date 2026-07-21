@@ -19,6 +19,16 @@ import pty from 'node-pty';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Build-Stamp des LAUFENDEN Prozesses: EINMAL beim Start aus public/version.json
+// gelesen (vom Build geschrieben) und in Erinnerung gehalten. Wird nach einem
+// Deploy nicht neu gestartet, meldet /api/version weiter diesen alten Stamp,
+// waehrend das frisch gebaute Frontend den neuen traegt -> das Frontend erkennt
+// den Versatz. Fehlt die Datei (Backend aelter als das Feature), bleibt 'unknown'.
+let BUILD_VERSION = 'unknown';
+try {
+  BUILD_VERSION = JSON.parse(fs.readFileSync(path.join(PUBLIC_DIR, 'version.json'), 'utf8')).version || 'unknown';
+} catch { /* version.json (noch) nicht vorhanden */ }
+
 // Minimaler .env-Loader (keine Abhaengigkeit). Liest KEY=VALUE-Zeilen aus
 // <projekt>/.env. Bereits gesetzte Umgebungsvariablen (z. B. aus der
 // systemd-Unit oder einem Shell-Export) haben Vorrang und werden NICHT
@@ -390,6 +400,11 @@ async function handleClip(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const url = (req.url || '/').split('?')[0];
+
+  // Build-Stamp des laufenden Backends (fuer die Version-Skew-Erkennung im Frontend).
+  if (url === '/api/version') {
+    return sendJson(res, 200, { version: BUILD_VERSION });
+  }
 
   if (url === '/api/sessions') {
     const sessions = await listSessions();
