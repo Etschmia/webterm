@@ -891,6 +891,14 @@ const fxStatusEl = document.getElementById('fx-status');
 const fxReopenBtn = document.getElementById('fx-reopen');
 let fxPath = ''; // aktuelles Verzeichnis, relativ zu FS_ROOT ('' = Wurzel)
 let fxShowHidden = false;
+let fxEntries = []; // zuletzt geladene Eintraege (unsortiert, fuer Re-Render bei Sortwechsel)
+// Sortierung: std = Server-Reihenfolge (Ordner zuerst, dann Name); mtime/size mit
+// Richtung (1 = aufsteigend, -1 = absteigend). Ueberlebt den Reload via localStorage.
+let fxSort = { key: 'std', dir: -1 };
+try {
+  const saved = JSON.parse(localStorage.getItem('term-fx-sort'));
+  if (saved && ['std', 'mtime', 'size'].includes(saved.key)) fxSort = { key: saved.key, dir: saved.dir === 1 ? 1 : -1 };
+} catch {}
 let fxLastCwdAbs = null; // zuletzt gesehenes CWD der Session (absolut), fuer cd-Follow
 let fxCwd404Warned = false; // /api/fs/cwd 404 nur einmal ins Log schreiben (nicht bei jedem Poll)
 
@@ -973,10 +981,46 @@ async function fxLoad(rel) {
     return;
   }
   fxPath = data.path || '';
+  fxEntries = data.entries || [];
   fxSetStatus(null);
   fxRenderCrumbs();
-  fxRenderList(data.entries || []);
+  fxRenderList(fxEntries);
 }
+
+// ---- Sortierung: Buttons unterhalb der Kopfzeile. Ordner bleiben immer vor
+// Dateien; bei "Größe" werden Ordner nach Name sortiert (stat-Size ist dort
+// bedeutungslos). Erneuter Klick auf mtime/size dreht die Richtung um.
+const fxSortEl = document.getElementById('fx-sort');
+
+function fxSortEntries(entries) {
+  if (fxSort.key === 'std') return entries;
+  return entries.slice().sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    if (fxSort.key === 'size' && a.type === 'dir') return a.name.localeCompare(b.name);
+    const cmp = (a[fxSort.key] || 0) - (b[fxSort.key] || 0);
+    return cmp ? fxSort.dir * cmp : a.name.localeCompare(b.name);
+  });
+}
+
+function fxRenderSortButtons() {
+  for (const b of fxSortEl.querySelectorAll('.fx-sort-btn')) {
+    const active = b.dataset.key === fxSort.key;
+    b.classList.toggle('active', active);
+    b.textContent = b.dataset.label + (active && b.dataset.key !== 'std' ? (fxSort.dir === 1 ? ' ↑' : ' ↓') : '');
+  }
+}
+
+fxSortEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.fx-sort-btn');
+  if (!btn) return;
+  const key = btn.dataset.key;
+  if (key === fxSort.key && key !== 'std') fxSort.dir = -fxSort.dir; // Richtung umdrehen
+  else fxSort = { key, dir: -1 }; // neu: absteigend (neueste/groesste zuerst)
+  localStorage.setItem('term-fx-sort', JSON.stringify(fxSort));
+  fxRenderSortButtons();
+  fxRenderList(fxEntries);
+});
+fxRenderSortButtons();
 
 // Explorer folgt dem 'cd' im Terminal. Beide Modi laufen in tmux; der Server
 // liest das CWD der aktiven Pane (pane_current_path) — kein Shell-Hook noetig.
@@ -1036,7 +1080,7 @@ function fxRenderList(entries) {
       fxLoad(parts.join('/'));
     }));
   }
-  const visible = fxShowHidden ? entries : entries.filter(e => !e.name.startsWith('.'));
+  const visible = fxSortEntries(fxShowHidden ? entries : entries.filter(e => !e.name.startsWith('.')));
   for (const e of visible) {
     const child = fxPath ? fxPath + '/' + e.name : e.name;
     const onClick = e.type === 'dir'

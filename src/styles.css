@@ -573,6 +573,24 @@ body {
 .fx-btn:hover { background: var(--hover); color: var(--foreground); }
 .fx-btn.active { color: var(--foreground); opacity: 1; }
 
+.fx-sort {
+  display: flex;
+  gap: 4px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.fx-sort-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.fx-sort-btn:hover { background: var(--hover); color: var(--foreground); }
+.fx-sort-btn.active { color: var(--foreground); background: var(--hover); border-color: var(--border); }
+
 .fx-crumbs {
   display: flex;
   flex-wrap: wrap;
