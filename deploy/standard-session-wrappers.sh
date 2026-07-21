@@ -10,15 +10,20 @@
 # tmux-Client dorthin. Ueberall sonst (eigene Sessions, SSH ohne tmux)
 # aendert sich nichts.
 
-# Bereits definierte gleichnamige Funktionen (z. B. claude-auto-retry) sichern
-# und im Durchreich-Fall weiterverwenden. Deshalb muss diese Datei NACH deren
-# Definition gesourct werden — install.sh haengt die Zeile ans Ende der ~/.bashrc.
-for _t in claude codex grok; do
-  if declare -f "$_t" >/dev/null 2>&1 && ! declare -f "_term_orig_$_t" >/dev/null 2>&1; then
-    eval "$(declare -f "$_t" | sed "1s/^$_t/_term_orig_$_t/")"
-  fi
-done
-unset _t
+# Bereits definierte gleichnamige Fremd-Funktionen (z. B. claude-auto-retry)
+# sichern und im Durchreich-Fall weiterverwenden. Wird beim Sourcen UND noch
+# einmal vor dem ersten Prompt aufgerufen (siehe _term_wrappers_rearm unten) —
+# die Reihenfolge in der ~/.bashrc ist damit egal.
+_term_install_wrappers() {
+  local t
+  for t in claude codex grok; do
+    if declare -f "$t" >/dev/null 2>&1 \
+       && [[ "$(declare -f "$t")" != *_term_tool_session* ]]; then
+      eval "$(declare -f "$t" | sed "1s/^$t/_term_orig_$t/")"
+    fi
+    eval "$t() { _term_tool_session $t \"\$@\"; }"
+  done
+}
 
 _term_run_orig() {
   local tool="$1"; shift
@@ -62,6 +67,19 @@ _term_tool_session() {
     || printf 'Neue Session "%s" gestartet (siehe Sidebar).\n' "$name"
 }
 
-claude() { _term_tool_session claude "$@"; }
-codex()  { _term_tool_session codex  "$@"; }
-grok()   { _term_tool_session grok   "$@"; }
+_term_install_wrappers
+
+# Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok() (z. B. der
+# claude-auto-retry-Block, der hinter dieser Source-Zeile stehen kann) wuerde
+# die Wrapper wieder ueberschreiben — genau so lief claude einmal doch in der
+# Standard-Sitzung. Deshalb vor dem ersten Prompt noch einmal einsammeln:
+# die Fremd-Funktion wird dabei als _term_orig_<tool> gesichert und vom
+# Wrapper durchgereicht. Danach entschaerft sich der Hook selbst zum No-op.
+_term_wrappers_rearm() {
+  _term_install_wrappers
+  _term_wrappers_rearm() { :; }
+}
+case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
+  'declare -a'*) PROMPT_COMMAND+=(_term_wrappers_rearm) ;;
+  *) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;}_term_wrappers_rearm" ;;
+esac

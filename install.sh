@@ -471,8 +471,9 @@ fi
 # claude/codex/grok aus der Standard-Sitzung (selbst eine tmux-Session) heraus
 # in eigene tmux-Sessions umlenken — sonst laufen sie IN der Standard-Sitzung
 # und tauchen nicht als eigene Session in der Sidebar auf.
-# WICHTIG: ans ENDE der ~/.bashrc, damit der Wrapper NACH claude-auto-retry
-# definiert wird und dessen Funktion sichern/durchreichen kann.
+# Die Position in der ~/.bashrc ist egal: der Wrapper sammelt spaeter
+# definierte Fremd-Funktionen (z. B. claude-auto-retry) vor dem ersten
+# Prompt per PROMPT_COMMAND-Hook noch einmal ein.
 WRAP_SRC="$DEPLOY_DIR/standard-session-wrappers.sh"
 BASHRC="$HOME/.bashrc"
 if grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
