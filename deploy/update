@@ -30,6 +30,11 @@
 #   kein passender aktiver Dienst gefunden, bricht das Skript LAUT ab (Exit != 0)
 #   statt still nur das Frontend zu bauen.
 #
+# Standard-Session-Wrapper: Phase 3b stellt sicher, dass die ~/.bashrc
+#   deploy/standard-session-wrappers.sh sourct (fehlt auf Instanzen mit altem
+#   install.sh-Stand), und laesst untaetige bash-Panes die ~/.bashrc neu
+#   einlesen, damit Wrapper-Aenderungen auch offene Shells erreichen.
+#
 # Aufruf:
 #   deploy/update              git pull + build + ggf. Restart
 #   deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
@@ -257,6 +262,41 @@ fi
 log "Frontend bauen (npm run build) …"
 run_npm run build || die "Build fehlgeschlagen."
 log "Build ok -> public/"
+
+# ---- Phase 3b: Standard-Session-Wrapper (bashrc) ---------------------------
+# deploy/standard-session-wrappers.sh (claude/codex/grok aus der Standard-
+# Sitzung in eigene tmux-Sessions umlenken) wird aus der ~/.bashrc gesourct.
+# Zwei Dinge erledigt ein reines git pull NICHT:
+#   * Instanzen, deren install.sh-Lauf aelter ist als das Feature, haben die
+#     Source-Zeile gar nicht -> hier nachtragen (gleicher Block wie install.sh).
+#   * Bereits laufende Shells (v. a. die persistente Standard-Sitzung) behalten
+#     die alten Funktionen -> untaetige bash-Panes lesen die ~/.bashrc per
+#     send-keys neu ein; belegte Panes (laufendes claude/vim/...) werden nur
+#     gemeldet, dort muss man nach Ende selbst '. ~/.bashrc' ausfuehren.
+# Muss VOR Phase 4 laufen: term-restart kann die eigene Sitzung beenden.
+WRAP_SRC="$SCRIPT_DIR/deploy/standard-session-wrappers.sh"
+BASHRC="$HOME/.bashrc"
+if [ -f "$WRAP_SRC" ] && ! grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
+  printf '\n# term-web: claude/codex/grok aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
+    "$WRAP_SRC" "$WRAP_SRC" >> "$BASHRC"
+  log "Standard-Session-Wrapper in ~/.bashrc eingebunden (Zeile fehlte noch)."
+fi
+if command -v tmux >/dev/null 2>&1 && tmux list-panes -a >/dev/null 2>&1; then
+  RELOADED=0; BUSY=""
+  while IFS="$(printf '\t')" read -r pane sess cmd inmode; do
+    if [ "$cmd" = "bash" ] && [ "$inmode" = "0" ]; then
+      # C-u raeumt eine evtl. halb getippte Zeile weg (per C-y wiederholbar);
+      # fuehrendes Leerzeichen haelt den Befehl bei ignorespace aus der History.
+      if tmux send-keys -t "$pane" C-u " . ~/.bashrc" Enter 2>/dev/null; then
+        RELOADED=$((RELOADED+1))
+      fi
+    else
+      BUSY="$BUSY $sess($cmd)"
+    fi
+  done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}	#{pane_current_command}	#{pane_in_mode}' 2>/dev/null)
+  [ "$RELOADED" -gt 0 ] && log "~/.bashrc in $RELOADED bash-Pane(s) neu eingelesen — Session-Wrapper dort aktuell."
+  [ -n "$BUSY" ] && log "Pane(s) beschaeftigt, nicht neu eingelesen:$BUSY — dort spaeter '. ~/.bashrc' ausfuehren."
+fi
 
 # ---- Phase 4: handeln ------------------------------------------------------
 if [ "$SERVICE_ACTIVE" -eq 1 ]; then

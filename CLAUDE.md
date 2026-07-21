@@ -59,6 +59,13 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   `public/version.json`; `server.js` liest ihn beim Start, liefert `/api/version`; das
   Frontend warnt bei Versatz („Backend veraltet — Deploy unvollständig?"). Ein 404 auf
   `/api/fs/cwd` wird in `fxFollowCwd` einmalig per `console.warn` protokolliert.
+- **Standard-Session-Wrapper rollt mit aus**: `update` trägt die Source-Zeile für
+  `deploy/standard-session-wrappers.sh` in der `~/.bashrc` nach, falls sie fehlt (Instanzen
+  mit altem `install.sh`-Stand), und lässt untätige bash-Panes die `~/.bashrc` per
+  `send-keys` neu einlesen; belegte Panes (laufendes claude etc.) werden nur gemeldet —
+  dort nach Ende `. ~/.bashrc`. Der Wrapper selbst ist reihenfolge-unabhängig: ein
+  `PROMPT_COMMAND`-Hook sammelt später definierte Fremd-Funktionen (claude-auto-retry)
+  vor dem ersten Prompt wieder ein.
 - `--no-pull` überspringt den Pull.
 
 ## ⚠️ Diese Instanz (butlive) hat KEIN globales node/npm — `vendor/node` benutzen
