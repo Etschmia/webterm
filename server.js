@@ -12,7 +12,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 
@@ -395,6 +395,117 @@ async function handleClip(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Self-Update (/api/update/*) — Sidebar-Icon: Stand pruefen + deploy/update
+// ---------------------------------------------------------------------------
+// status: gedrosseltes `git fetch` + Commit-Zaehler HEAD..@{u} (wie viele
+//         Commits das Remote voraus ist). TTL, damit nicht jeder Client-Poll
+//         das Remote anfragt; ?refresh=1 (Klick aufs Icon) erzwingt.
+// run:    startet deploy/update als Kindprozess (Ausgabe gepuffert). Loest das
+//         Update einen Backend-Restart aus, stirbt dieser Prozess samt Kind mit
+//         dem Service-cgroup — das ist ok: term-restart hat den eigentlichen
+//         Restart da laengst an eine entkoppelte transiente Unit uebergeben,
+//         und das Frontend erkennt den Neustart am Verbindungsverlust.
+// log:    Fortschritt/Ergebnis des laufenden bzw. letzten Laufs.
+
+const UPDATE_CHECK_TTL_MS = 5 * 60 * 1000;
+const UPDATE_OUT_MAX = 64 * 1024;           // Puffer-Obergrenze fuer die Ausgabe
+
+function git(args) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd: __dirname, timeout: 30000 }, (err, stdout, stderr) => {
+      if (err) resolve({ ok: false, out: '', err: (stderr || err.message || '').trim() });
+      else resolve({ ok: true, out: stdout.trim(), err: '' });
+    });
+  });
+}
+
+let updCache = { checkedAt: 0, behind: null, head: '', upstream: '', error: null };
+let updChecking = null;      // laufender Check (Single-Flight fuer parallele Polls)
+let updRun = null;           // { startedAt, finishedAt, code, output } — code null = laeuft
+
+async function updateCheck(force) {
+  if (updChecking) return updChecking;
+  if (!force && Date.now() - updCache.checkedAt < UPDATE_CHECK_TTL_MS) return updCache;
+  updChecking = (async () => {
+    const next = { checkedAt: Date.now(), behind: null, head: '', upstream: '', error: null };
+    // fetch kann scheitern (offline, Remote weg) — dann Fehler melden, aber die
+    // Zaehlung trotzdem gegen den letzten bekannten Remote-Stand versuchen.
+    const f = await git(['fetch', '--quiet']);
+    if (!f.ok) next.error = f.err || 'git fetch fehlgeschlagen';
+    const up = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    next.upstream = up.ok && up.out ? up.out : 'origin/main';
+    const head = await git(['rev-parse', '--short', 'HEAD']);
+    if (head.ok) next.head = head.out;
+    const cnt = await git(['rev-list', '--count', `HEAD..${next.upstream}`]);
+    if (cnt.ok) next.behind = parseInt(cnt.out, 10) || 0;
+    else if (!next.error) next.error = cnt.err || 'git rev-list fehlgeschlagen';
+    updCache = next;
+    return next;
+  })();
+  try { return await updChecking; } finally { updChecking = null; }
+}
+
+function startUpdateRun() {
+  if (updRun && updRun.code === null) return { error: 'Update laeuft bereits', code: 409 };
+  const run = { startedAt: Date.now(), finishedAt: null, code: null, output: '' };
+  updRun = run;
+  const append = (chunk) => {
+    run.output += chunk.toString('utf8');
+    if (run.output.length > UPDATE_OUT_MAX) run.output = run.output.slice(-UPDATE_OUT_MAX);
+  };
+  let child;
+  try {
+    // stdin zu (deploy/update ist nicht interaktiv); stdout+stderr einsammeln.
+    child = spawn(path.join(__dirname, 'deploy', 'update'), [], {
+      cwd: __dirname, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    run.code = -1; run.finishedAt = Date.now();
+    run.output = `deploy/update nicht startbar: ${e.message}`;
+    return { ok: true };
+  }
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (e) => {
+    append(`\n[server] Startfehler: ${e.message}\n`);
+    if (run.code === null) { run.code = -1; run.finishedAt = Date.now(); }
+  });
+  child.on('close', (code) => {
+    if (run.code === null) { run.code = code === null ? -1 : code; run.finishedAt = Date.now(); }
+    // Stand neu bewerten (billig: TTL laeuft, aber nach einem Update soll das
+    // Icon sofort wieder gruen werden koennen).
+    updateCheck(true).catch(() => {});
+  });
+  return { ok: true };
+}
+
+async function handleUpdate(req, res, route) {
+  if (route === '/api/update/status' && req.method === 'GET') {
+    const force = new URL(req.url, 'http://localhost').searchParams.get('refresh') === '1';
+    const s = await updateCheck(force);
+    return sendJson(res, 200, {
+      behind: s.behind, head: s.head, upstream: s.upstream,
+      checkedAt: s.checkedAt, error: s.error,
+      running: !!(updRun && updRun.code === null),
+    });
+  }
+  if (route === '/api/update/run' && req.method === 'POST') {
+    const r = startUpdateRun();
+    if (r.error) return sendJson(res, r.code, { error: r.error });
+    return sendJson(res, 200, { ok: true });
+  }
+  if (route === '/api/update/log' && req.method === 'GET') {
+    if (!updRun) return sendJson(res, 200, { running: false, code: null, output: '' });
+    return sendJson(res, 200, {
+      running: updRun.code === null, code: updRun.code,
+      startedAt: updRun.startedAt, finishedAt: updRun.finishedAt,
+      output: updRun.output,
+    });
+  }
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -477,6 +588,10 @@ const server = http.createServer(async (req, res) => {
 
   if (url.startsWith('/api/fs/')) {
     return handleFs(req, res, url);
+  }
+
+  if (url.startsWith('/api/update/')) {
+    return handleUpdate(req, res, url);
   }
 
   if (url === '/api/clip') {

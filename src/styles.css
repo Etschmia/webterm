@@ -153,6 +153,51 @@ body {
 }
 .help-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
 
+/* Self-Update-Icon: dezent wenn aktuell, pulsiert mit Zaehler wenn das Remote
+   voraus ist, dreht waehrend Pruefung/Update-Lauf. */
+.up-btn {
+  position: relative;
+  margin-left: auto; /* schiebt sich + Hilfe-Knopf nach rechts */
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  padding: 0;
+  color: var(--primary);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.up-btn:hover { border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
+.up-btn.err { color: var(--muted-foreground); }
+.up-btn.avail {
+  color: var(--warn, #e3a008);
+  border-color: color-mix(in oklab, var(--warn, #e3a008) 45%, transparent);
+  background: color-mix(in oklab, var(--warn, #e3a008) 12%, transparent);
+  animation: up-pulse 2s ease-in-out infinite;
+}
+.up-btn.busy svg { animation: up-spin 1s linear infinite; }
+.up-badge {
+  position: absolute;
+  top: -5px; right: -6px;
+  min-width: 13px; height: 13px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: #1a1508;
+  background: var(--warn, #e3a008);
+  border-radius: 7px;
+  pointer-events: none;
+}
+@keyframes up-spin { to { transform: rotate(360deg); } }
+@keyframes up-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--warn, #e3a008) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+
 /* Session-Liste */
 .sessions {
   flex: 1 1 auto;

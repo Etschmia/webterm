@@ -78,6 +78,13 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   `PROMPT_COMMAND`-Hook sammelt später definierte Fremd-Funktionen (claude-auto-retry)
   vor dem ersten Prompt wieder ein.
 - `--no-pull` überspringt den Pull.
+- **Self-Update-Icon** (Sidebar, neben „?"): Backend prüft gedrosselt (TTL 5 min, Klick
+  erzwingt) per `git fetch` + `rev-list --count HEAD..@{u}`, ob das Remote voraus ist
+  (`/api/update/status`); ist es das, pulsiert das Icon mit Commit-Zähler, Klick startet
+  nach Rückfrage `deploy/update` als Kindprozess (`/api/update/run`, Fortschritt über
+  `/api/update/log`). Ein Backend-Restart mitten im Lauf kappt Kind + Log — das Frontend
+  wertet „Backend weg und mit neuer Version zurück" als Erfolgsende, wartet auf
+  `/healthz` und lädt die Seite neu.
 
 ## ⚠️ Diese Instanz (butlive) hat KEIN globales node/npm — `vendor/node` benutzen
 

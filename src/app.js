@@ -1513,6 +1513,148 @@ async function checkVersionSkew() {
   }
 }
 
+// ---------------------------------------------------------------- Self-Update
+// Icon in der Brand-Zeile: gruen/dezent = aktuell, pulsierend mit Zaehler =
+// Remote ist voraus, drehend = Pruefung bzw. deploy/update laeuft. Hover-Title
+// erklaert den Klick; Klick prueft neu (aktuell) bzw. startet nach Rueckfrage
+// deploy/update (Update verfuegbar). Ein durch das Update ausgeloester
+// Backend-Restart kappt den /run-Kindprozess mitsamt Log — daher zaehlt auch
+// "Backend weg und mit neuer Version wieder da" als Erfolgsende.
+const upBtn = document.getElementById('up-btn');
+const upBadge = document.getElementById('up-badge');
+const upState = { behind: null, head: '', upstream: '', error: null, phase: 'idle' }; // idle|check|run
+
+function upRender() {
+  upBtn.classList.toggle('busy', upState.phase !== 'idle');
+  upBtn.classList.toggle('avail', upState.phase === 'idle' && upState.behind > 0);
+  upBtn.classList.toggle('err', upState.phase === 'idle' && upState.behind == null);
+  upBadge.hidden = !(upState.phase === 'idle' && upState.behind > 0);
+  if (!upBadge.hidden) upBadge.textContent = upState.behind > 9 ? '9+' : String(upState.behind);
+  if (upState.phase === 'run') {
+    upBtn.title = 'deploy/update läuft — bitte warten. Bei einem Backend-Neustart lädt die Seite danach automatisch neu.';
+  } else if (upState.phase === 'check') {
+    upBtn.title = 'Update-Status wird geprüft …';
+  } else if (upState.behind > 0) {
+    upBtn.title = `Update verfügbar: ${upState.behind} Commit${upState.behind === 1 ? '' : 's'} hinter ${upState.upstream}.\n`
+      + 'Klick startet deploy/update: git pull → Build → bei Backend-Änderung sessions-schonender Neustart '
+      + '(laufende Claude-Sessions kommen per --resume zurück).';
+  } else if (upState.behind === 0) {
+    upBtn.title = `Installation ist aktuell (Stand ${upState.head || '?'}, geprüft gegen ${upState.upstream}).\n`
+      + 'Klick prüft erneut.';
+  } else {
+    upBtn.title = `Update-Prüfung fehlgeschlagen${upState.error ? ': ' + upState.error : ''} — Klick versucht es erneut.`;
+  }
+}
+
+async function upRefresh(force) {
+  if (upState.phase === 'run') return;
+  if (force) { upState.phase = 'check'; upRender(); }
+  try {
+    const r = await fetch(`${BASE}api/update/status${force ? '?refresh=1' : ''}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    if (upState.phase === 'run') return;           // inzwischen gestarteter Lauf gewinnt
+    if (d.running) { upWatchRun(); return; }       // z. B. in anderem Tab gestartet
+    upState.behind = typeof d.behind === 'number' ? d.behind : null;
+    upState.head = d.head || '';
+    upState.upstream = d.upstream || 'origin/main';
+    upState.error = d.error || null;
+  } catch {
+    if (upState.phase === 'run') return;
+    upState.behind = null;
+    upState.error = 'Backend nicht erreichbar';
+  }
+  if (upState.phase !== 'run') upState.phase = 'idle';
+  upRender();
+}
+
+// Nach einem Lauf (bzw. Backend-Neustart) pruefen, ob ein neues Frontend
+// gebaut wurde — dann Seite neu laden, damit auch das Bundle aktuell ist.
+// Vor dem Reload warten, bis das Backend wieder antwortet: der entkoppelte
+// Restart (term-restart) kann dem Skript-Ende um Sekunden NACHlaufen — ein
+// sofortiger Reload traefe sonst genau in die Neustart-Luecke (502).
+async function upMaybeReload() {
+  try {
+    const r = await fetch(`${BASE}version.json`, { cache: 'no-store' });
+    const d = await r.json();
+    if (!d || !d.version || d.version === FRONTEND_VERSION) return false;
+  } catch { return false; }
+  setStatus('Update installiert — Seite wird neu geladen …');
+  const started = Date.now();
+  const reloadWhenUp = async () => {
+    try {
+      const h = await fetch(`${BASE}healthz`, { cache: 'no-store' });
+      if (h.ok) { location.reload(); return; }
+    } catch {}
+    if (Date.now() - started < 60000) setTimeout(reloadWhenUp, 1500);
+    else setStatus('Backend meldet sich nicht zurück — Seite bitte manuell neu laden.', true);
+  };
+  setTimeout(reloadWhenUp, 1500);
+  return true;
+}
+
+// Laufenden deploy/update-Lauf beobachten. Reisst die Verbindung ab (Backend-
+// Restart), weiter pollen, bis das Backend zurueck ist; verliert es dabei den
+// Log-Zustand (frischer Prozess), zaehlt das als Ende des Laufs.
+function upWatchRun() {
+  upState.phase = 'run';
+  upRender();
+  let sawServerGone = false;
+  const poll = async () => {
+    let d = null;
+    try {
+      const r = await fetch(`${BASE}api/update/log`, { cache: 'no-store' });
+      if (!r.ok) throw new Error();
+      d = await r.json();
+    } catch {
+      sawServerGone = true;                        // Restart im Gang — dranbleiben
+      setTimeout(poll, 1500);
+      return;
+    }
+    if (d.running) { setTimeout(poll, 1000); return; }
+    upState.phase = 'idle';
+    if (d.output) console.log('[term] deploy/update:\n' + d.output);
+    if (d.code === 0) {
+      if (!(await upMaybeReload())) setStatus('Update abgeschlossen ✓ — Stand ist aktuell.', false, 6000);
+    } else if (d.code != null) {
+      setStatus(`deploy/update fehlgeschlagen (Exit ${d.code}) — Details in der Browser-Konsole.`, true, 15000);
+    } else if (sawServerGone) {
+      // Backend war weg und ist ohne Log-Zustand zurueck: Restart-Ende.
+      if (!(await upMaybeReload())) setStatus('Update abgeschlossen — Backend neu gestartet ✓', false, 6000);
+    }
+    upRefresh(false);
+  };
+  poll();
+}
+
+async function upStart() {
+  const n = upState.behind;
+  const msg = `Jetzt aktualisieren? (${n} Commit${n === 1 ? '' : 's'} hinter ${upState.upstream})\n\n`
+    + 'deploy/update führt aus: git pull → Build → bei Backend-Änderung ein sessions-schonender '
+    + 'Neustart (laufende Claude-Sessions werden automatisch per --resume wiederhergestellt; '
+    + 'die Verbindung bricht dabei kurz ab).';
+  if (!window.confirm(msg)) return;
+  upState.phase = 'run';
+  upRender();
+  try {
+    const r = await fetch(`${BASE}api/update/run`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 409) throw new Error(d.error || 'Start fehlgeschlagen');
+  } catch (e) {
+    upState.phase = 'idle';
+    upRender();
+    setStatus(String(e.message || e), true, 6000);
+    return;
+  }
+  upWatchRun();
+}
+
+upBtn.addEventListener('click', () => {
+  if (upState.phase !== 'idle') return;            // laeuft schon — nichts doppelt anstossen
+  if (upState.behind > 0) upStart();
+  else upRefresh(true);                            // aktuell/Fehler: neu pruefen
+});
+
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // term.martuni.de verdrahtet).
@@ -1526,6 +1668,10 @@ setInterval(refreshSessions, 4000);
 fitTerminal();
 connect();
 checkVersionSkew();
+upRefresh(false);
+setInterval(() => upRefresh(false), 5 * 60 * 1000);
+// Beim Zurueckkehren zum Tab mitpruefen (Backend-TTL drosselt das Remote).
+document.addEventListener('visibilitychange', () => { if (!document.hidden) upRefresh(false); });
 
 // Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
 fxCollapse(window.innerWidth < 900);
