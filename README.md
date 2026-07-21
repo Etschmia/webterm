@@ -74,8 +74,12 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   - Manuell als User-Unit: `cp deploy/<service>.local.service
     ~/.config/systemd/user/<service>.service`, dann `systemctl --user daemon-reload &&
     systemctl --user enable --now <service>` (Lingering nicht vergessen, s. u.).
-  - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
-    `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
+  - **Servicename** ist nicht mehr hart `term-server`. `deploy/update` und
+    `deploy/term-restart` ermitteln ihn (via `deploy/lib-service.sh`) in dieser Reihenfolge:
+    explizites `TERM_SERVICE=<name>` → `deploy/deploy.env` (gitignored, von `install.sh`
+    angelegt) → Auto-Erkennung des laufenden `node <repo>/server.js` dieses Repos über
+    `/proc/<pid>/cgroup` (System- **und** User-Unit). Auf Multi-Instanz-Maschinen trotzdem
+    `TERM_SERVICE` bzw. `deploy.env` setzen — die Auto-Erkennung ist nur der Fallback.
 - **Update einer bereits konfigurierten Installation — `deploy/update`** (nicht erneut
   `install.sh`): `install.sh` ist Installer/Konfigurator (fragt `.env`, Service-Namen,
   Caddy … ab) und startet einen *laufenden* Dienst per `enable --now` **nicht** neu — ein
@@ -86,8 +90,16 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   geändert hat; reine Frontend-Änderungen brauchen nur einen **Tab-Reload**. Die
   Restart-Entscheidung fällt aus dem Ist-Zustand (Datei-mtime vs. `ActiveEnterTimestamp`),
   **nicht** aus dem Pull-Diff — so zieht auch der allererste Lauf (dem ein manuelles
-  `git pull` vorausging) korrekt nach. `--no-pull` überspringt den Pull; Service-Name via
-  `TERM_SERVICE=<name>`.
+  `git pull` vorausging) korrekt nach. `--no-pull` überspringt den Pull; der Servicename wird
+  ermittelt (s. o.). Findet `deploy/update` ein anhängiges Backend-Update, aber **keinen**
+  passenden aktiven Dienst, bricht es **laut mit Exit 3** ab (statt still nur das Frontend zu
+  bauen) und nennt das nötige `TERM_SERVICE=<name>`.
+- **Version-Skew sichtbar machen**: `build.mjs` brennt einen Build-Stamp (Commit-Kurzhash) ins
+  Frontend-Bundle **und** nach `public/version.json`; `server.js` liest ihn einmal beim Start
+  und liefert ihn unter `/api/version`. Das Frontend vergleicht beim Laden seinen eingebauten
+  Stamp mit `/api/version` und warnt bei Versatz sichtbar („Backend veraltet — Deploy
+  unvollständig?"). So fällt ein *neues Frontend gegen altes Backend* (Restart vergessen)
+  sofort auf, statt dass Feature-Aufrufe stumm ins Leere laufen.
 - **claude/codex/grok in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)

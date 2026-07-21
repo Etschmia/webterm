@@ -46,8 +46,20 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
 - `npm install` läuft nur bei echter Lockfile-Änderung (Hash-Stamp in
   `node_modules/.term-deps-stamp`; die mtime wird sonst wiederhergestellt, damit sie die
   Restart-Heuristik nicht verfälscht).
-- Multi-Instanz: `TERM_SERVICE=<name> deploy/update` (wird an `term-restart` durchgereicht).
-  `--no-pull` überspringt den Pull.
+- **Servicename wird ermittelt, nicht mehr hart `term-server`** (`deploy/lib-service.sh`,
+  von `update` **und** `term-restart` gesourct): explizit `TERM_SERVICE` → `deploy/deploy.env`
+  (gitignored, von `install.sh` angelegt) → Auto-Erkennung des laufenden
+  `node <repo>/server.js` dieses Repos über `/proc/<pid>/cgroup` (System-/User-Unit). Grund:
+  eine Instanz hieß `ag-webterm`; mit hartem `term-server`-Default prüfte `update` den
+  falschen Dienst, meldete „läuft nicht — kein Restart" und ließ das Backend-Update **stumm**
+  liegen. Auf Multi-Instanz-Maschinen trotzdem `TERM_SERVICE`/`deploy.env` setzen.
+- **Anhängiges Backend-Update ohne aktiven Dienst ⇒ lauter Fehlschlag (Exit 3)** mit
+  `TERM_SERVICE=<name>`-Hinweis — nie mehr still nur das Frontend bauen.
+- **Version-Skew**: `build.mjs` → Stamp ins Bundle (`__BUILD_STAMP__`) **und**
+  `public/version.json`; `server.js` liest ihn beim Start, liefert `/api/version`; das
+  Frontend warnt bei Versatz („Backend veraltet — Deploy unvollständig?"). Ein 404 auf
+  `/api/fs/cwd` wird in `fxFollowCwd` einmalig per `console.warn` protokolliert.
+- `--no-pull` überspringt den Pull.
 
 ## ⚠️ Diese Instanz (butlive) hat KEIN globales node/npm — `vendor/node` benutzen
 
