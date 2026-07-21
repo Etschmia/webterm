@@ -192,6 +192,9 @@ body {
   border-radius: 7px;
   pointer-events: none;
 }
+/* display:grid wuerde sonst die Browser-Regel [hidden]{display:none} schlagen —
+   das leere Badge staende als gelber Punkt dauerhaft ueberm Icon. */
+.up-badge[hidden] { display: none; }
 @keyframes up-spin { to { transform: rotate(360deg); } }
 @keyframes up-pulse {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--warn, #e3a008) 45%, transparent); }
