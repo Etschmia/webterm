@@ -837,7 +837,11 @@ function extractLinks() {
     // URL endete (joinNext).
     if (i > start && !line.isWrapped && !joinNext) text += '\n';
     text += s;
-    joinNext = s.length >= term.cols - 2 && URL_TAIL_RE.test(s);
+    // Auf der bereits zusammengefuegten logischen Zeile testen, nicht auf s:
+    // Fortsetzungszeilen enthalten selbst kein "https://".
+    const tail = text.slice(-4000);
+    const logicalLine = tail.slice(tail.lastIndexOf('\n') + 1);
+    joinNext = s.length >= term.cols - 2 && URL_TAIL_RE.test(logicalLine);
   }
   const seen = new Set();
   const found = [];
