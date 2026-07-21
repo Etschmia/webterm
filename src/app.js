@@ -816,6 +816,8 @@ document.addEventListener('keydown', (e) => {
 const linksPanel = document.getElementById('links-panel');
 const linksEl = document.getElementById('links');
 const URL_RE = /https?:\/\/[^\s"'`<>\\)\]}]+/g;
+// Zeile endet mitten in einer URL (gleiche Zeichenklasse wie URL_RE, bis Zeilenende).
+const URL_TAIL_RE = /https?:\/\/[^\s"'`<>\\)\]}]*$/;
 const SCAN_LINES = 1200; // jüngster Puffer-Ausschnitt
 
 function extractLinks() {
@@ -823,13 +825,19 @@ function extractLinks() {
   const end = buf.length;
   const start = Math.max(0, end - SCAN_LINES);
   let text = '';
+  let joinNext = false;
   for (let i = start; i < end; i++) {
     const line = buf.getLine(i);
     if (!line) continue;
+    const s = line.translateToString(true);
     // Umgebrochene Fortsetzungszeilen (isWrapped) direkt anhaengen, sonst
-    // zerreisst ein langer URL an der Terminalbreite.
-    if (i > start && !line.isWrapped) text += '\n';
-    text += line.translateToString(true);
+    // zerreisst ein langer URL an der Terminalbreite. TUI-Programme (Ink/
+    // Claude Code) brechen selbst hart um — isWrapped bleibt dann false;
+    // deshalb auch anhaengen, wenn die Vorzeile randvoll mitten in einer
+    // URL endete (joinNext).
+    if (i > start && !line.isWrapped && !joinNext) text += '\n';
+    text += s;
+    joinNext = s.length >= term.cols - 2 && URL_TAIL_RE.test(s);
   }
   const seen = new Set();
   const found = [];
