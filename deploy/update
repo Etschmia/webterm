@@ -122,12 +122,20 @@ fi
 term_resolve_service || true
 [ -n "$SERVICE" ] && [ "$SERVICE_SOURCE" != "TERM_SERVICE" ] && log "Dienst: $SERVICE (Quelle: $SERVICE_SOURCE)"
 
+# User-Bus proben und noetigenfalls die Umgebung reparieren (s. lib-service.sh).
+# Ohne erreichbaren Bus lieferte `systemctl --user` hier bisher "Failed to
+# connect ..." und der laufende User-Dienst galt faelschlich als inaktiv.
+USER_BUS_OK=1; term_user_bus_repair || USER_BUS_OK=0
+
 # System- vs. User-Unit: aus der Auto-Erkennung (cgroup -> TERM_USER_UNIT) oder,
-# bei explizit/deploy.env, per systemctl --user erkennen.
+# bei explizit/deploy.env, per systemctl --user erkennen. Ist der User-Bus nicht
+# erreichbar, ersatzweise ueber das Unit-File im User-Verzeichnis.
 case "${TERM_USER_UNIT:-}" in
   1|yes|true) USER_UNIT=1 ;;
   0|no|false) USER_UNIT=0 ;;
-  *) if [ -n "$SERVICE" ] && systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
+  *) if [ -n "$SERVICE" ] && [ "$USER_BUS_OK" -eq 1 ] && systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1
+     elif [ -n "$SERVICE" ] && [ "$USER_BUS_OK" -eq 0 ] && [ -f "$HOME/.config/systemd/user/$SERVICE.service" ]; then USER_UNIT=1
+     else USER_UNIT=0; fi ;;
 esac
 sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi; }
 
@@ -137,16 +145,36 @@ sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl 
 BACKEND_FILES="server.js package.json package-lock.json"
 PULL_BACKEND="${TERM_UPDATE_PULL_BACKEND:-0}"
 
-SERVICE_ACTIVE=0
-if [ -n "$SERVICE" ] && sysctl is-active --quiet "$SERVICE"; then SERVICE_ACTIVE=1; fi
+# Aktiv-Erkennung. Fallback bei unerreichbarem User-Bus: laeuft der server.js
+# dieses Repos nachweislich (Prozess-Evidenz), ist der Dienst offensichtlich
+# aktiv — sonst wuerde hier faelschlich "nicht aktiv" gemeldet und ein Backend-
+# Update als Exit 3 abgebrochen, obwohl nur der Bus-Zugriff fehlt (21.07.2026).
+SERVICE_ACTIVE=0; BUS_FALLBACK=0
+if [ -n "$SERVICE" ]; then
+  if [ "$USER_UNIT" -eq 1 ] && [ "$USER_BUS_OK" -eq 0 ]; then
+    [ -z "${REPO_BACKEND_PID:-}" ] && REPO_BACKEND_PID="$(term_detect_repo_backend_pid || true)"
+    if [ -n "$REPO_BACKEND_PID" ] && [ -e "/proc/$REPO_BACKEND_PID" ]; then
+      SERVICE_ACTIVE=1; BUS_FALLBACK=1
+      log "User-Bus nicht erreichbar — Dienst '$SERVICE' gilt als aktiv (laufender server.js, PID $REPO_BACKEND_PID)."
+    fi
+  elif sysctl is-active --quiet "$SERVICE"; then
+    SERVICE_ACTIVE=1
+  fi
+fi
 
 # NEED_RESTART strikt aus dem Ist-Zustand (mtime vs. ActiveEnterTimestamp) —
 # diese Heuristik bleibt unveraendert. Nur mit aktivem Dienst auswertbar.
+# Im Bus-Fallback ersetzt die Startzeit des Prozesses (/proc-mtime) den nicht
+# abfragbaren ActiveEnterTimestamp.
 NEED_RESTART=0
 if [ "$SERVICE_ACTIVE" -eq 1 ]; then
-  started="$(sysctl show -p ActiveEnterTimestamp --value "$SERVICE" 2>/dev/null || true)"
-  started_epoch=0
-  [ -n "$started" ] && started_epoch="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+  if [ "$BUS_FALLBACK" -eq 1 ]; then
+    started_epoch="$(stat -c %Y "/proc/$REPO_BACKEND_PID" 2>/dev/null || echo 0)"
+  else
+    started="$(sysctl show -p ActiveEnterTimestamp --value "$SERVICE" 2>/dev/null || true)"
+    started_epoch=0
+    [ -n "$started" ] && started_epoch="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+  fi
   if [ "$started_epoch" -le 0 ]; then
     log "Startzeit des Dienstes nicht ermittelbar — sicherheitshalber Restart nach dem Build."
     NEED_RESTART=1
@@ -300,7 +328,23 @@ fi
 
 # ---- Phase 4: handeln ------------------------------------------------------
 if [ "$SERVICE_ACTIVE" -eq 1 ]; then
-  if [ "$NEED_RESTART" -eq 1 ]; then
+  if [ "$NEED_RESTART" -eq 1 ] && [ "$BUS_FALLBACK" -eq 1 ]; then
+    # Restart faellig, aber ohne User-Bus nicht ausfuehrbar (auch term-restart/
+    # systemd-run --user brauchen ihn). Lauter, ZUTREFFENDER Fehler statt des
+    # irrefuehrenden "Dienst ist nicht aktiv" von frueher.
+    log ""
+    log "################################  FEHLER  ################################"
+    log "Backend-Update faellig, Dienst '$SERVICE' laeuft (PID ${REPO_BACKEND_PID:-?}) —"
+    log "aber systemctl --user erreicht den User-Bus nicht (auch nach Reparatur von"
+    log "XDG_RUNTIME_DIR). Aus dieser Sitzung ist KEIN Restart moeglich; das neue"
+    log "server.js ist gebaut, aber noch nicht aktiv."
+    log "Abhilfe: aus einer echten Login-Sitzung (z. B. SSH) als $(id -un) ausfuehren:"
+    log "    TERM_SERVICE=$SERVICE deploy/update --no-pull"
+    log "Bleibt der Bus auch dort unerreichbar: 'loginctl enable-linger $(id -un)'"
+    log "(haelt den systemd-User-Manager dauerhaft am Leben)."
+    log "#########################################################################"
+    exit 4
+  elif [ "$NEED_RESTART" -eq 1 ]; then
     log "-> sessions-schonender Restart via deploy/term-restart (Claude-Sessions kommen per --resume zurueck) …"
     TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$SCRIPT_DIR/deploy/term-restart"
     # term-restart beendet diese Sitzung ggf. selbst; danach resumt sie automatisch.

@@ -55,6 +55,17 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   liegen. Auf Multi-Instanz-Maschinen trotzdem `TERM_SERVICE`/`deploy.env` setzen.
 - **Anhängiges Backend-Update ohne aktiven Dienst ⇒ lauter Fehlschlag (Exit 3)** mit
   `TERM_SERVICE=<name>`-Hinweis — nie mehr still nur das Frontend bauen.
+- **User-Bus-Fallback** (`term_user_bus_repair` in `deploy/lib-service.sh`, von `update`
+  und `term-restart` genutzt): Scheitert `systemctl --user` an einem unerreichbaren
+  User-Bus („Failed to connect to user scope bus … Operation not permitted", Vorfall
+  21.07.2026 auf `jeb-webterm`), wird erst die Umgebung repariert (XDG_RUNTIME_DIR hart
+  auf `/run/user/<uid>`, verwaistes DBUS_SESSION_BUS_ADDRESS weg) und erneut geprobt.
+  Bleibt der Bus weg, gilt eine User-Unit mit nachweislich laufendem `server.js`
+  (Prozess-Evidenz, Startzeit aus `/proc/<pid>`) trotzdem als **aktiv** — statt des
+  irreführenden „Dienst ist nicht aktiv" (Exit 3). Ist dann ein Restart fällig, ist der
+  ohne Bus aber unmöglich (auch `systemd-run --user` braucht ihn) ⇒ **Exit 4** mit
+  Hinweis auf echte Login-Sitzung bzw. `loginctl enable-linger`; `term-restart` bricht
+  in dem Fall früh ab, bevor Snapshot/`systemd-run` ins Leere laufen.
 - **Version-Skew**: `build.mjs` → Stamp ins Bundle (`__BUILD_STAMP__`) **und**
   `public/version.json`; `server.js` liest ihn beim Start, liefert `/api/version`; das
   Frontend warnt bei Versatz („Backend veraltet — Deploy unvollständig?"). Ein 404 auf

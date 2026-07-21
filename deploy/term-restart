@@ -45,14 +45,23 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
   export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 fi
 
+# User-Bus proben, gaengige Umgebungsfehler (falsches XDG_RUNTIME_DIR, verwaistes
+# DBUS_SESSION_BUS_ADDRESS) reparieren (s. lib-service.sh). Ohne erreichbaren Bus
+# darf eine User-Unit unten NICHT angefasst werden — systemd-run --user scheiterte
+# erst nach dem Snapshot mitten im Ablauf.
+USER_BUS_OK=1; term_user_bus_repair || USER_BUS_OK=0
+
 # System- oder User-Unit? Auto-Erkennung: liegt die Unit im User-Manager, wird sie dort
-# verwaltet (kein sudo noetig — wichtig fuer Nutzer, die keins haben sollen).
+# verwaltet (kein sudo noetig — wichtig fuer Nutzer, die keins haben sollen). Ist der
+# User-Bus nicht erreichbar, ersatzweise ueber das Unit-File im User-Verzeichnis.
 # Die Restore-Phase laeuft in der transienten Unit; dorthin wird das Ergebnis per
 # --setenv=TERM_USER_UNIT weitergereicht, damit beide Phasen sicher dasselbe tun.
 case "${TERM_USER_UNIT:-}" in
   1|yes|true)  USER_UNIT=1 ;;
   0|no|false)  USER_UNIT=0 ;;
-  *) if systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
+  *) if [ "$USER_BUS_OK" -eq 1 ] && systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1
+     elif [ "$USER_BUS_OK" -eq 0 ] && [ -n "${SERVICE:-}" ] && [ -f "$HOME/.config/systemd/user/$SERVICE.service" ]; then USER_UNIT=1
+     else USER_UNIT=0; fi ;;
 esac
 
 sysctl(){
@@ -181,6 +190,14 @@ if [ -z "${SERVICE:-}" ]; then
   exit 1
 fi
 [ "${SERVICE_SOURCE:-}" = "TERM_SERVICE" ] || log "Dienst: $SERVICE (Quelle: ${SERVICE_SOURCE:-?})"
+if [ "$USER_UNIT" -eq 1 ] && [ "$USER_BUS_OK" -eq 0 ]; then
+  log "FEHLER: '$SERVICE' ist eine User-Unit, aber systemctl --user erreicht den"
+  log "User-Bus nicht (auch nach Reparatur von XDG_RUNTIME_DIR) — Restart aus"
+  log "dieser Sitzung nicht moeglich."
+  log "Abhilfe: aus einer echten Login-Sitzung (z. B. SSH) als $(id -un) ausfuehren;"
+  log "bleibt der Bus auch dort unerreichbar: 'loginctl enable-linger $(id -un)'."
+  exit 4
+fi
 command -v tmux   >/dev/null || { log "tmux nicht gefunden."; exit 1; }
 if [ "$USER_UNIT" -eq 0 ]; then
   command -v sudo >/dev/null || { log "sudo nicht gefunden (System-Unit braucht sudo — oder Service als User-Unit betreiben, siehe --help)."; exit 1; }

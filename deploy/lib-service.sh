@@ -64,6 +64,24 @@ term_user_unit_from_pid(){
   grep -q 'user@[0-9]' "/proc/$1/cgroup" 2>/dev/null && printf '1' || printf '0'
 }
 
+# User-Bus erreichbar? Repariert vorher die gaengigen Umgebungsfehler und probt
+# dann erneut. Hintergrund (Vorfall 21.07.2026, Instanz jeb-webterm): in einer
+# Webterminal-Shell zeigte die geerbte Umgebung auf einen nicht zugreifbaren Bus
+# ("Failed to connect to user scope bus ... Operation not permitted") — update
+# hielt den nachweislich laufenden User-Dienst daraufhin fuer inaktiv. Die
+# Skripte setzten XDG_RUNTIME_DIR bisher nur, wenn es LEER war; ein geerbter
+# falscher Wert blieb stehen. Hier wird bei fehlgeschlagener Probe hart auf
+# /run/user/<uid> korrigiert und ein evtl. verwaistes DBUS_SESSION_BUS_ADDRESS
+# entfernt. Rueckgabe 0 = User-Bus erreichbar, 1 = auch danach nicht.
+term_user_bus_repair(){
+  systemctl --user show-environment >/dev/null 2>&1 && return 0
+  local rd="/run/user/$(id -u)"
+  [ -d "$rd" ] || return 1
+  export XDG_RUNTIME_DIR="$rd"
+  unset DBUS_SESSION_BUS_ADDRESS
+  systemctl --user show-environment >/dev/null 2>&1
+}
+
 term_resolve_service(){
   SERVICE="" ; SERVICE_SOURCE="" ; REPO_BACKEND_PID=""
   # (a) explizit
