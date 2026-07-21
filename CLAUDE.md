@@ -28,6 +28,27 @@ Wenn du den Restart doch von außerhalb des Webterminals fährst (z. B. echte SS
 nicht im `term-server`-cgroup), ist ein direktes `systemctl restart` unkritisch — aber
 `deploy/term-restart` schadet auch dort nicht und stellt die Sessions ebenso wieder her.
 
+### Stand-Update einspielen: `deploy/update`, nicht `install.sh`
+
+Für „neuen Stand ziehen und aktiv machen" gibt es `deploy/update` (git pull → build → und
+**nur bei Backend-Änderung** ein `deploy/term-restart`). **`install.sh` taugt dafür nicht**:
+es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable --now`
+**nicht** neu — nach `git pull && install.sh` liefe also weiter der alte `server.js`
+(nur das neu gebaute Frontend käme per Tab-Reload). Wichtige Eigenschaften von
+`deploy/update`:
+
+- **Baut immer**, entscheidet den Restart aber aus dem **Ist-Zustand** (Datei-mtime von
+  `server.js`/`package*.json` vs. `ActiveEnterTimestamp` des Dienstes), **nicht** aus dem
+  Pull-Diff. Das ist bewusst so: beim allerersten Lauf ging ein manuelles `git pull` voraus,
+  das interne `git pull` meldet dann „up to date" — ein leerer Diff heißt hier **nicht**
+  „nichts zu tun".
+- Reine Frontend-Änderung ⇒ **kein** Restart (nur Tab-Reload) — schont fremde Sessions.
+- `npm install` läuft nur bei echter Lockfile-Änderung (Hash-Stamp in
+  `node_modules/.term-deps-stamp`; die mtime wird sonst wiederhergestellt, damit sie die
+  Restart-Heuristik nicht verfälscht).
+- Multi-Instanz: `TERM_SERVICE=<name> deploy/update` (wird an `term-restart` durchgereicht).
+  `--no-pull` überspringt den Pull.
+
 ## ⚠️ Diese Instanz (butlive) hat KEIN globales node/npm — `vendor/node` benutzen
 
 Auf dieser Maschine ist bewusst **kein node/npm installiert**. Nebenan liegt `../but2-react`,

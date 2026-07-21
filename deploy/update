@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# deploy/update — bringt eine BEREITS konfigurierte term-web-Installation nach
+# einem Stand-Update auf aktuell: git pull -> build -> (nur wenn das Backend sich
+# geaendert hat) sessions-schonender Restart via deploy/term-restart.
+#
+# Warum getrennt von install.sh:
+#   install.sh ist Installer/Konfigurator: es fragt .env, Service-Namen, Caddy
+#   usw. ab und schreibt Unit-Files. Vor allem startet es einen bereits laufenden
+#   Dienst NICHT neu — `systemctl enable --now` ist auf einer aktiven Unit ein
+#   No-op. Backend-Aenderungen in server.js wuerden nach `git pull && install.sh`
+#   also gar nicht aktiv (nur das neu gebaute Frontend, das ein Tab-Reload holt).
+#   deploy/update fasst die Konfiguration NICHT an und aktiviert Backend-
+#   Aenderungen ueber deploy/term-restart, das laufende Claude-Sessions vorher
+#   snapshottet und per `claude --resume` wiederherstellt.
+#
+# Erstlauf-sicher — Entscheidungen bewusst NICHT aus dem Pull-Diff abgeleitet:
+#   Beim ersten Einsatz ging dem Aufruf ein manuelles `git pull` voraus (so kommt
+#   dieses Skript ueberhaupt erst auf die Maschine). Das eigene `git pull` findet
+#   dann 'Already up to date' — ein leerer Diff heisst hier also NICHT 'nichts zu
+#   tun'. Deshalb:
+#     * Build laeuft IMMER (esbuild ist billig; public/ spiegelt danach src/).
+#     * Restart NUR, wenn eine Backend-Datei (server.js/package*.json) neuer ist
+#       als der LAUFENDE Prozess (Datei-mtime vs. ActiveEnterTimestamp des
+#       Dienstes). Das vergleicht den Ist-Zustand gegen den echten Prozess und
+#       ist damit unabhaengig davon, was der Pull gerade geholt hat.
+#
+# Aufruf:
+#   deploy/update              git pull + build + ggf. Restart
+#   deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
+#   deploy/update --help
+#
+# Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
+# mehreren Instanzen ZWINGEND setzen, sonst trifft der Restart die fremde
+# Instanz:  TERM_SERVICE=tbterm deploy/update
+set -euo pipefail
+
+SELF="$(readlink -f "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+SERVICE="${TERM_SERVICE:-term-server}"
+
+log(){ printf '[update] %s\n' "$*" >&2; }
+die(){ log "FEHLER: $*"; exit 1; }
+
+usage(){
+  cat >&2 <<USAGE
+deploy/update — konfigurierte Installation aktuell halten (kein Re-Setup).
+
+  deploy/update              git pull + build + ggf. sessions-schonender Restart
+  deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
+  deploy/update --help       diese Hilfe
+
+Service via TERM_SERVICE waehlen (Default: term-server). Auf Multi-Instanz-
+Maschinen ZWINGEND setzen:  TERM_SERVICE=tbterm deploy/update
+
+Gebaut wird immer; neu gestartet nur, wenn sich das Backend (server.js /
+package*.json) gegenueber dem laufenden Prozess geaendert hat. Reine Frontend-
+Aenderungen brauchen keinen Restart — im Browser den Tab neu laden.
+USAGE
+}
+
+DO_PULL=1
+case "${1:-}" in
+  --no-pull)  DO_PULL=0 ;;
+  --help|-h)  usage; exit 0 ;;
+  '')         ;;
+  *)          log "Unbekanntes Argument: $1"; usage; exit 2 ;;
+esac
+
+# ---- Phase 1: git pull, dann mit der (evtl. neuen) Version weiter ----------
+# `git pull` kann dieses Skript UND deploy/term-restart ersetzen. Danach die
+# frische Version per exec neu einlesen, bevor build/restart laufen — so gilt
+# immer die neueste Logik (auch wenn genau dieses Update sie verbessert hat).
+# Der Marker verhindert eine zweite Pull-Runde nach dem Re-exec.
+if [ "${TERM_UPDATE_REEXEC:-0}" != "1" ] && [ "$DO_PULL" -eq 1 ]; then
+  command -v git >/dev/null 2>&1 || die "git nicht gefunden."
+  [ -d "$SCRIPT_DIR/.git" ] || die "$SCRIPT_DIR ist kein git-Arbeitsverzeichnis."
+  log "git pull in $SCRIPT_DIR …"
+  before="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
+  git -C "$SCRIPT_DIR" pull --ff-only \
+    || die "git pull (ff-only) fehlgeschlagen — bitte manuell aufloesen (lokale Aenderungen?)."
+  after="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
+  if [ "$before" != "$after" ]; then
+    log "Aktualisiert: ${before:0:9} -> ${after:0:9}"
+  else
+    log "git meldet 'up to date' (Pull ohne neue Commits) — es wird trotzdem gebaut."
+  fi
+  export TERM_UPDATE_REEXEC=1
+  exec "$SELF"   # ab hier gilt die frisch gepullte Fassung; Pull wird uebersprungen
+fi
+
+# ---- Phase 2: Restart-Entscheidung ZUERST (vor jeglichem Build) ------------
+# Reihenfolge ist kritisch: npm install/build unten fassen package-lock.json und
+# public/ an und setzen deren mtime auf 'jetzt'. Wuerde die Entscheidung 'ist das
+# Backend neuer als der laufende Prozess?' NACH dem Build fallen, loeste der
+# eigene Build jedes Mal einen unnoetigen Restart aus (falsch-positiv). Also
+# JETZT entscheiden, gegen den unveraenderten Ist-Zustand.
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+case "${TERM_USER_UNIT:-}" in
+  1|yes|true) USER_UNIT=1 ;;
+  0|no|false) USER_UNIT=0 ;;
+  *) if systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1; else USER_UNIT=0; fi ;;
+esac
+sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi; }
+
+# Diese Dateien bestimmen den laufenden Node-Prozess: server.js ist der einzige
+# Runtime-Quellcode, package*.json aendern die geladenen Module. Nur bei Aenderung
+# an einer davon muss der Prozess neu geladen werden.
+BACKEND_FILES="server.js package.json package-lock.json"
+
+NEED_RESTART=0
+if ! sysctl is-active --quiet "$SERVICE"; then
+  log "Dienst '$SERVICE' laeuft nicht — kein Restart durch update (enable/term-restart ist dann zustaendig)."
+else
+  started="$(sysctl show -p ActiveEnterTimestamp --value "$SERVICE" 2>/dev/null || true)"
+  started_epoch=0
+  [ -n "$started" ] && started_epoch="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+  if [ "$started_epoch" -le 0 ]; then
+    log "Startzeit des Dienstes nicht ermittelbar — sicherheitshalber Restart nach dem Build."
+    NEED_RESTART=1
+  else
+    for f in $BACKEND_FILES; do
+      fp="$SCRIPT_DIR/$f"
+      [ -f "$fp" ] || continue
+      mt="$(stat -c %Y "$fp" 2>/dev/null || echo 0)"
+      if [ "$mt" -gt "$started_epoch" ]; then
+        log "Backend geaendert: $f ist neuer als der laufende Prozess."
+        NEED_RESTART=1
+      fi
+    done
+  fi
+fi
+[ "$NEED_RESTART" -eq 0 ] && log "Backend unveraendert gegenueber dem laufenden Prozess — kein Restart noetig."
+
+# ---- Phase 3: bauen (immer) ------------------------------------------------
+# node/npm-Suche wie install.sh: projekt-lokales vendor/node hat Vorrang (manche
+# Maschinen halten node bewusst aus dem PATH). Fuer vendor/node muss npm-Config/
+# -Cache ins Projekt umgeleitet werden (ein ~/.npmrc stoert ein bun-Nachbarprojekt).
+find_cmd(){
+  local name="$1" p latest
+  if [ -x "$SCRIPT_DIR/vendor/node/bin/$name" ]; then printf '%s' "$SCRIPT_DIR/vendor/node/bin/$name"; return 0; fi
+  if p="$(command -v "$name" 2>/dev/null)"; then printf '%s' "$p"; return 0; fi
+  for p in "$HOME/.local/bin/$name" "$HOME/.volta/bin/$name" \
+           "/usr/local/bin/$name" "/usr/bin/$name" "/opt/homebrew/bin/$name"; do
+    [ -x "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    latest="$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n1)"
+    if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/$name" ]; then
+      printf '%s' "$HOME/.nvm/versions/node/$latest/bin/$name"; return 0
+    fi
+  fi
+  return 1
+}
+
+NPM_BIN="$(find_cmd npm || true)";  [ -n "$NPM_BIN" ]  || die "npm nicht gefunden (PATH/vendor/node/nvm geprueft)."
+NODE_BIN="$(find_cmd node || true)"
+USING_VENDOR_NODE=0
+case "$NODE_BIN" in "$SCRIPT_DIR/vendor/node/bin/"*) USING_VENDOR_NODE=1 ;; esac
+NODE_DIR=""; [ -n "$NODE_BIN" ] && NODE_DIR="$(dirname "$NODE_BIN")"
+
+run_npm(){
+  if [ "$USING_VENDOR_NODE" -eq 1 ]; then
+    ( cd "$SCRIPT_DIR" \
+      && PATH="${NODE_DIR:+$NODE_DIR:}$PATH" \
+         NPM_CONFIG_USERCONFIG="$SCRIPT_DIR/.npmrc" \
+         NPM_CONFIG_CACHE="$SCRIPT_DIR/.npm-cache" \
+         "$NPM_BIN" "$@" )
+  else
+    ( cd "$SCRIPT_DIR" && PATH="${NODE_DIR:+$NODE_DIR:}$PATH" "$NPM_BIN" "$@" )
+  fi
+}
+
+# Abhaengigkeiten nur bei ECHTER Aenderung installieren — anhand eines Inhalts-
+# Hashes von package-lock.json, gemerkt nach dem letzten erfolgreichen install.
+# Warum kein mtime- oder cmp-Vergleich:
+#   * git setzt beim Checkout die mtime von package-lock.json neu, ohne Inhalts-
+#     aenderung -> ein '-nt'-Test liefe bei jedem Aufruf.
+#   * npm install schreibt package-lock.json (mtime) auch dann neu, wenn nichts
+#     zu tun war -> das wuerde ausserdem die Restart-Heuristik (Phase 2) ueber
+#     mehrere Laeufe hinweg faelschlich triggern.
+#   * node_modules/.package-lock.json hat ein anderes Format als package-lock.json,
+#     ein cmp meldet also staendig 'unterschiedlich'.
+# Der Hash-Stamp ist gegen all das robust: nur eine echte Lockfile-Aenderung
+# (also eine echte Abhaengigkeits-Aenderung) loest install aus.
+lock_hash(){ sha256sum "$SCRIPT_DIR/package-lock.json" 2>/dev/null | awk '{print $1}'; }
+LOCK="$SCRIPT_DIR/package-lock.json"
+DEPS_STAMP="$SCRIPT_DIR/node_modules/.term-deps-stamp"
+want_hash="$(lock_hash)"
+have_hash=""; [ -f "$DEPS_STAMP" ] && have_hash="$(cat "$DEPS_STAMP" 2>/dev/null || true)"
+if [ ! -d "$SCRIPT_DIR/node_modules" ] || [ -z "$want_hash" ] || [ "$want_hash" != "$have_hash" ]; then
+  log "Abhaengigkeiten aktualisieren (npm install) …"
+  lock_mtime_before="$(stat -c %Y "$LOCK" 2>/dev/null || echo 0)"
+  run_npm install || die "npm install fehlgeschlagen."
+  after_hash="$(lock_hash)"
+  if [ "$after_hash" = "$want_hash" ] && [ "$lock_mtime_before" -gt 0 ]; then
+    # npm hat package-lock.json nur die mtime verpasst (Inhalt gleich). Original-
+    # mtime wiederherstellen, sonst haelt Phase 2 im NAECHSTEN Lauf das Lockfile
+    # faelschlich fuer 'neuer als der Prozess' und startet unnoetig neu.
+    touch -d "@$lock_mtime_before" "$LOCK" 2>/dev/null || true
+  elif [ "$after_hash" != "$want_hash" ]; then
+    # npm hat echte Aenderungen aufgeloest -> Prozess muss die neuen Module laden.
+    log "Abhaengigkeiten haben sich geaendert -> Restart faellig."
+    NEED_RESTART=1
+  fi
+  printf '%s\n' "$after_hash" > "$DEPS_STAMP" 2>/dev/null || true
+else
+  log "Abhaengigkeiten unveraendert — npm install uebersprungen."
+fi
+
+log "Frontend bauen (npm run build) …"
+run_npm run build || die "Build fehlgeschlagen."
+log "Build ok -> public/"
+
+# ---- Phase 4: Restart nur bei geaendertem Backend (Entscheidung aus Phase 2) -
+if [ "$NEED_RESTART" -eq 1 ]; then
+  log "-> sessions-schonender Restart via deploy/term-restart (Claude-Sessions kommen per --resume zurueck) …"
+  TERM_SERVICE="$SERVICE" "$SCRIPT_DIR/deploy/term-restart"
+  # term-restart beendet diese Sitzung ggf. selbst; danach resumt sie automatisch.
+else
+  log "Fertig. Falls sich das Frontend geaendert hat: im Browser den Tab neu laden."
+fi

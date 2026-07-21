@@ -76,6 +76,18 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
     systemctl --user enable --now <service>` (Lingering nicht vergessen, s. u.).
   - Wird der Service abweichend benannt, braucht `deploy/term-restart` den Namen per
     `TERM_SERVICE=<name>` — es startet sonst weiterhin `term-server` neu.
+- **Update einer bereits konfigurierten Installation — `deploy/update`** (nicht erneut
+  `install.sh`): `install.sh` ist Installer/Konfigurator (fragt `.env`, Service-Namen,
+  Caddy … ab) und startet einen *laufenden* Dienst per `enable --now` **nicht** neu — ein
+  reines `git pull && install.sh` würde also nur das Frontend neu bauen, Backend-Änderungen
+  in `server.js` blieben inaktiv. `deploy/update` macht stattdessen `git pull --ff-only` →
+  Build → und startet **nur dann** über `deploy/term-restart` neu (also sessions-schonend),
+  wenn sich das Backend (`server.js`/`package*.json`) gegenüber dem *laufenden Prozess*
+  geändert hat; reine Frontend-Änderungen brauchen nur einen **Tab-Reload**. Die
+  Restart-Entscheidung fällt aus dem Ist-Zustand (Datei-mtime vs. `ActiveEnterTimestamp`),
+  **nicht** aus dem Pull-Diff — so zieht auch der allererste Lauf (dem ein manuelles
+  `git pull` vorausging) korrekt nach. `--no-pull` überspringt den Pull; Service-Name via
+  `TERM_SERVICE=<name>`.
 - **claude/codex/grok in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
