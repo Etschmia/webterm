@@ -202,6 +202,32 @@ const IMG_MIME = {
 
 async function handleFs(req, res, route) {
   const u = new URL(req.url, 'http://localhost');
+
+  // Arbeitsverzeichnis der (aktiven) tmux-Session -> { abs, path }. 'path' ist
+  // relativ zu FS_ROOT (wie /list); liegt das CWD ausserhalb FS_ROOT, ist es
+  // null. Beide Terminal-Modi laufen in tmux, daher genuegt pane_current_path
+  // der aktiven Pane — kein Shell-Hook noetig. Ohne 'session' die Standard-Session.
+  if (route === '/api/fs/cwd' && req.method === 'GET') {
+    const target = u.searchParams.get('session') || STANDARD_SESSION;
+    // Exakter Namensabgleich ueber list-sessions (das '='-Praefix greift bei
+    // display-message/target-pane nicht zuverlaessig). pane_current_path ist der
+    // Pfad der aktiven Pane der jeweiligen Session.
+    const r = await tmux(['list-sessions', '-F', '#{session_name}\t#{pane_current_path}']);
+    let cwd = '';
+    if (r.ok) {
+      for (const line of r.out.split('\n')) {
+        const tab = line.indexOf('\t');
+        if (tab > -1 && line.slice(0, tab) === target) { cwd = line.slice(tab + 1).trim(); break; }
+      }
+    }
+    if (!cwd) return sendJson(res, 200, { abs: null, path: null });
+    const resolved = path.resolve(cwd);
+    let relPath = null;
+    if (resolved === FS_ROOT) relPath = '';
+    else if (resolved.startsWith(FS_ROOT + path.sep)) relPath = path.relative(FS_ROOT, resolved);
+    return sendJson(res, 200, { abs: resolved, path: relPath });
+  }
+
   const rel = u.searchParams.get('path') || '';
   const abs = safePath(rel);
   if (!abs) return sendJson(res, 400, { error: 'Ungueltiger Pfad' });

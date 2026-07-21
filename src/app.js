@@ -425,6 +425,9 @@ function switchTo(mode, name) {
   exitCopyMode();
   state.active = { mode, name: name || null };
   renderSidebar();
+  // Andere Session -> Explorer auf deren CWD ziehen (Vergleich zuruecksetzen).
+  fxLastCwdAbs = null;
+  fxFollowCwd(true);
   if (ws && ws.readyState === WebSocket.OPEN) startActive();
   else connect();
   // Nach Layoutwechsel/Reset neu einpassen.
@@ -862,7 +865,7 @@ function renderLinks(urls) {
 let scanTimer = null;
 function scheduleScan() {
   clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => renderLinks(extractLinks()), 350);
+  scanTimer = setTimeout(() => { renderLinks(extractLinks()); fxFollowCwd(false); }, 350);
 }
 
 // ---------------------------------------------------------------- Datei-Explorer
@@ -876,6 +879,7 @@ const fxStatusEl = document.getElementById('fx-status');
 const fxReopenBtn = document.getElementById('fx-reopen');
 let fxPath = ''; // aktuelles Verzeichnis, relativ zu FS_ROOT ('' = Wurzel)
 let fxShowHidden = false;
+let fxLastCwdAbs = null; // zuletzt gesehenes CWD der Session (absolut), fuer cd-Follow
 
 const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.6 4.2a1 1 0 0 1 1-1H6l1.3 1.5h6.1a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1z"/></svg>';
 const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
@@ -938,7 +942,9 @@ function fxFmtSize(n) {
 function fxCollapse(collapsed) {
   appEl.classList.toggle('fx-collapsed', collapsed);
   fxReopenBtn.hidden = !collapsed;
-  if (!collapsed) fxLoad(fxPath);
+  // Beim Aufklappen sofort das aktuelle Terminal-CWD einholen (im eingeklappten
+  // Zustand folgt der Explorer nicht mit); fxLoad rendert derweil den Ist-Stand.
+  if (!collapsed) { fxLoad(fxPath); fxFollowCwd(true); }
   scheduleFit(); // Terminal an die geaenderte Breite anpassen
 }
 
@@ -957,6 +963,28 @@ async function fxLoad(rel) {
   fxSetStatus(null);
   fxRenderCrumbs();
   fxRenderList(data.entries || []);
+}
+
+// Explorer folgt dem 'cd' im Terminal. Beide Modi laufen in tmux; der Server
+// liest das CWD der aktiven Pane (pane_current_path) — kein Shell-Hook noetig.
+// Uebernommen wird nur, wenn sich das CWD seit dem letzten Poll wirklich
+// geaendert hat: so bleibt manuelles Blaettern im Explorer erhalten und wird
+// erst durch ein echtes 'cd' wieder eingeholt. force=true ignoriert den
+// Vergleich (Sessionwechsel/Aufklappen). Liegt das CWD ausserhalb FS_ROOT
+// (path=null), bleibt der Explorer stehen.
+async function fxFollowCwd(force) {
+  if (appEl.classList.contains('fx-collapsed')) return;
+  const session = state.active.mode === 'session' ? (state.active.name || '') : '';
+  let data;
+  try {
+    const r = await fetch(`${BASE}api/fs/cwd?session=${encodeURIComponent(session)}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch { return; }
+  if (!data || data.abs == null) return;
+  if (!force && data.abs === fxLastCwdAbs) return;
+  fxLastCwdAbs = data.abs;
+  if (typeof data.path === 'string' && data.path !== fxPath) fxLoad(data.path);
 }
 
 function fxRenderCrumbs() {
@@ -1088,6 +1116,7 @@ explorerEl.addEventListener('drop', (e) => {
 window.addEventListener('dragover', (e) => { if (!explorerEl.contains(e.target)) e.preventDefault(); });
 window.addEventListener('drop', (e) => { if (!explorerEl.contains(e.target)) e.preventDefault(); });
 
+document.getElementById('fx-home').addEventListener('click', () => fxLoad(''));
 document.getElementById('fx-refresh').addEventListener('click', () => fxLoad(fxPath));
 document.getElementById('fx-collapse').addEventListener('click', () => fxCollapse(true));
 const fxToggleHiddenBtn = document.getElementById('fx-toggle-hidden');
