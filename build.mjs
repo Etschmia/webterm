@@ -32,9 +32,21 @@ function buildStamp() {
       || git('rev-parse --short HEAD');
 }
 const STAMP = buildStamp() || `build-${Date.now()}`;
+
+// Frontend-Stamp = HEAD-Kurzhash: aendert sich bei JEDEM neuen Commit (auch
+// frontend-only), im Gegensatz zum backend-orientierten STAMP oben. Er treibt den
+// Auto-Reload im Frontend (neues Bundle liegt bereit -> hart neu laden), waehrend
+// STAMP weiterhin nur die "Backend-Restart nötig?"-Warnung steuert. So loest ein
+// reiner Frontend-Deploy einen Reload aus, aber KEINE falsch-positive Warnung, und
+// ein No-op-Rebuild (gleicher HEAD) laedt nicht neu.
+function headStamp() {
+  try { return execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
+  catch { return null; }
+}
+const HEAD = headStamp() || STAMP;
 fs.writeFileSync(
   path.join(PUBLIC, 'version.json'),
-  JSON.stringify({ version: STAMP, builtAt: new Date().toISOString() }) + '\n',
+  JSON.stringify({ version: STAMP, head: HEAD, builtAt: new Date().toISOString() }) + '\n',
 );
 
 // Statische Dateien kopieren
@@ -59,8 +71,12 @@ const options = {
   sourcemap: true,
   minify: !watch,
   legalComments: 'none',
-  // Build-Stamp fest ins Bundle einbrennen (das Frontend kennt so seine eigene Version).
-  define: { __BUILD_STAMP__: JSON.stringify(STAMP) },
+  // Beide Stamps fest ins Bundle einbrennen: __BUILD_STAMP__ (Backend-Version, fuer
+  // die Skew-Warnung) und __FRONTEND_STAMP__ (HEAD, fuer den Auto-Reload).
+  define: {
+    __BUILD_STAMP__: JSON.stringify(STAMP),
+    __FRONTEND_STAMP__: JSON.stringify(HEAD),
+  },
 };
 
 if (watch) {

@@ -1734,6 +1734,9 @@ mdWin.addEventListener('keydown', (e) => { if (e.key === 'Escape') mdClose(); })
 // Deploy unvollstaendig; wir warnen einmal sichtbar. Ein fehlendes /api/version
 // (Backend aelter als dieses Feature) zaehlt ebenfalls als Versatz.
 const FRONTEND_VERSION = __BUILD_STAMP__;
+// HEAD-Commit dieses Bundles: treibt den Auto-Reload (aendert sich bei jedem neuen
+// Commit, auch frontend-only) — unabhaengig vom backend-orientierten FRONTEND_VERSION.
+const FRONTEND_STAMP = __FRONTEND_STAMP__;
 const versionWarnEl = document.getElementById('version-warn');
 let versionWarned = false;
 
@@ -1840,7 +1843,13 @@ async function upMaybeReload() {
   try {
     const r = await fetch(`${BASE}version.json`, { cache: 'no-store' });
     const d = await r.json();
-    if (!d || !d.version || d.version === FRONTEND_VERSION) return false;
+    // Neu laden, sobald ein anderes Bundle bereitliegt. Primaeres Signal ist der
+    // HEAD-Stamp (bewegt sich bei jedem Commit, auch frontend-only); gegen eine
+    // aeltere version.json ohne head-Feld Rueckfall auf den Backend-Stamp.
+    const fresh = d && d.head ? d.head !== FRONTEND_STAMP
+                : d && d.version ? d.version !== FRONTEND_VERSION
+                : false;
+    if (!fresh) return false;
   } catch { return false; }
   reloadPending = true;
   setStatus('Update installiert — Seite wird neu geladen …');
