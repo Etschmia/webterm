@@ -212,12 +212,12 @@ body.col-resizing, body.col-resizing * {
   font-size: 15px;
   font-weight: 650;
   color: var(--muted-foreground);
-  background: var(--hover);
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.help-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
+.help-btn:hover { background: var(--hover); color: var(--primary); }
 
 /* Bugtracker-Icon (Kaefer): links neben dem Update-Icon. Traegt margin-left:auto,
    also den Beginn des rechten Icon-Clusters. Badge zeigt offene Eintraege. */
@@ -230,13 +230,13 @@ body.col-resizing, body.col-resizing * {
   width: 26px; height: 26px;
   padding: 0;
   color: var(--muted-foreground);
-  background: var(--hover);
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.bug-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
-.bug-btn.has-open { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 35%, transparent); }
+.bug-btn:hover { background: var(--hover); color: var(--primary); }
+.bug-btn.has-open { color: var(--primary); }
 .bug-badge {
   position: absolute;
   top: -5px; right: -6px;
@@ -266,12 +266,12 @@ body.col-resizing, body.col-resizing * {
   width: 26px; height: 26px;
   padding: 0;
   color: var(--primary);
-  background: var(--hover);
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.up-btn:hover { border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
+.up-btn:hover { background: var(--hover); }
 .up-btn.err { color: var(--muted-foreground); }
 .up-btn.avail {
   color: var(--warn, #e3a008);
