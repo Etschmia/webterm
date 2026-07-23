@@ -46,6 +46,16 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
 - `npm install` läuft nur bei echter Lockfile-Änderung (Hash-Stamp in
   `node_modules/.term-deps-stamp`; die mtime wird sonst wiederhergestellt, damit sie die
   Restart-Heuristik nicht verfälscht).
+- **mdlite-Dependency mit Transport-Fallback** (`install_deps_resilient` in `deploy/update`):
+  Die Markdown-Vorschau bindet `github:Etschmia/mdlite` als git-Dependency ein — npm
+  normalisiert die im Lockfile aber **immer** auf `git+ssh`, sodass Server ohne GitHub-SSH-Key
+  am Clone scheitern würden. Der Install probiert daher der Reihe nach: **git (ssh)** →
+  **gh** (authentifiziertes `gh`-CLI, scoped `GIT_CONFIG_GLOBAL` mit `insteadOf`-HTTPS-Umleitung,
+  färbt `~/.gitconfig` nicht ein) → **Tarball** (`.../archive/refs/tags/<tag>.tar.gz`, reines
+  HTTPS ohne git). Der Tarball-Fallback biegt die `mdlite`-Spec nur temporär um (`npm pkg set`)
+  und stellt `package.json`/`package-lock.json` danach wieder auf die committete git-Form her —
+  `node_modules` bleibt gefüllt, der Tree sauber. Beim Tag-Bump von mdlite auch
+  `MDLITE_REPO_SSH`/`MDLITE_TARBALL` in `deploy/update` mitziehen.
 - **Servicename wird ermittelt, nicht mehr hart `term-server`** (`deploy/lib-service.sh`,
   von `update` **und** `term-restart` gesourct): explizit `TERM_SERVICE` → `deploy/deploy.env`
   (gitignored, von `install.sh` angelegt) → Auto-Erkennung des laufenden

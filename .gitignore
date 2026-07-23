@@ -19,3 +19,8 @@ docs/
 vendor/
 .npm-cache/
 .npmrc
+
+# Transiente Dateien des mdlite-Transport-Fallbacks in deploy/update
+# (scoped git-Config + Manifest-Backups; werden im Normallauf wieder entfernt).
+.deploy-gitconfig
+*.deploybak
