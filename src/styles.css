@@ -875,6 +875,26 @@ body.col-resizing, body.col-resizing * {
   border-radius: 4px;
   background: var(--term-bg);
 }
+/* Fluechtige Markdown/HTML-Vorschau: begrenzter Ausschnitt, unten sanft
+   ausgeblendet (signalisiert "nur ein Blick") — voll gibt es die Vorschau im
+   Fenster ueber das Kontextmenue. */
+.fx-preview.fx-docprev {
+  padding: 12px 15px;
+  width: 360px;
+  max-height: 420px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 85%, transparent);
+  mask-image: linear-gradient(to bottom, #000 85%, transparent);
+}
+.fx-docprev .mdlite-prose { font-size: 12.5px; line-height: 1.55; }
+.fx-docprev .mdlite-prose h1 { font-size: 1.45em; }
+.fx-docprev .mdlite-prose h2 { font-size: 1.25em; border-bottom: none; padding-bottom: 0; }
+.fx-docprev .mdlite-prose h3 { font-size: 1.1em; }
+.fx-docprev .mdlite-prose pre { font-size: 11px; line-height: 1.5; }
+.fx-docprev .mdlite-prose p,
+.fx-docprev .mdlite-prose ul,
+.fx-docprev .mdlite-prose ol,
+.fx-docprev .mdlite-prose blockquote { margin: .55em 0; }
 
 /* ---------------------------------------------------------------- Kontextmenü (Datei-Explorer) */
 .fx-menu {

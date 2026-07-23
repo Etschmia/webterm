@@ -1011,17 +1011,20 @@ fxPreviewEl.append(fxPreviewImg);
 document.body.append(fxPreviewEl);
 let fxPrevX = 0, fxPrevY = 0, fxPrevUrl = null;
 
-function fxMovePreview(x, y) {
-  fxPrevX = x; fxPrevY = y;
-  if (fxPreviewEl.hidden) return;
+// Ein schwebendes Panel neben dem Cursor platzieren (Bild- wie Doc-Vorschau).
+function fxPlaceFloat(el, x, y) {
   const m = 16;
-  const pw = fxPreviewEl.offsetWidth || 320;
-  const ph = fxPreviewEl.offsetHeight || 320;
+  const pw = el.offsetWidth || 320;
+  const ph = el.offsetHeight || 320;
   let left = x - pw - m;                  // bevorzugt links vom Cursor (Explorer ist rechts)
   if (left < m) left = x + m;             // sonst rechts daneben
   let top = Math.max(m, Math.min(y - ph / 2, window.innerHeight - ph - m));
-  fxPreviewEl.style.left = left + 'px';
-  fxPreviewEl.style.top = top + 'px';
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+}
+function fxMovePreview(x, y) {
+  fxPrevX = x; fxPrevY = y;
+  if (!fxPreviewEl.hidden) fxPlaceFloat(fxPreviewEl, x, y);
 }
 function fxShowPreview(url) {
   fxPrevUrl = url;
@@ -1037,6 +1040,52 @@ function fxHidePreview() {
   fxPrevUrl = null;
   fxPreviewEl.hidden = true;
   fxPreviewImg.removeAttribute('src');
+}
+
+// Hover-Vorschau fuer Markdown/HTML: schwebendes Glimpse-Panel, das denselben
+// mdlite-Renderer (renderMarkdown = marked + DOMPurify) wie die Kontextmenue-
+// Vorschau nutzt. HTML laeuft ebenfalls durch renderMarkdown: Roh-HTML wird
+// durchgereicht und von DOMPurify entschaerft (Skripte/Handler raus), also
+// gefahrlos einzublenden. Anders als beim Bild wird der Inhalt asynchron geladen
+// -> kurze Verweil-Verzoegerung, Abbruch bei weitergezogenem Cursor, Cache.
+const DOC_PREVIEW_RE = /\.(md|markdown|html?)$/i;
+const FX_DOC_DELAY = 260;                 // erst nach kurzem Verweilen laden (kein Flackern beim Drueberwischen)
+const FX_DOC_MAX = 512 * 1024;            // groessere Dateien nicht fuer den fluechtigen Blick laden
+const fxDocEl = document.createElement('div');
+fxDocEl.className = 'fx-preview fx-docprev';
+fxDocEl.hidden = true;
+const fxDocProse = document.createElement('div');
+fxDocProse.className = 'mdlite-prose';
+fxDocEl.append(fxDocProse);
+document.body.append(fxDocEl);
+let fxDocX = 0, fxDocY = 0, fxDocToken = 0;
+const fxDocCache = new Map();             // rel -> gerendertes HTML (pro Sitzung)
+
+function fxMoveDocPreview(x, y) {
+  fxDocX = x; fxDocY = y;
+  if (!fxDocEl.hidden) fxPlaceFloat(fxDocEl, x, y);
+}
+async function fxShowDocPreview(rel, name, size) {
+  if (size > FX_DOC_MAX) return;          // zu gross fuer den fluechtigen Blick
+  const token = ++fxDocToken;
+  let html = fxDocCache.get(rel);
+  if (html == null) {
+    try {
+      const r = await fetch(`${BASE}api/fs/download?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error();
+      const text = await r.text();
+      html = renderMarkdown(text);        // sanitisiert bereits per DOMPurify
+      fxDocCache.set(rel, html);          // immer cachen (auch wenn gleich nicht mehr angezeigt)
+    } catch { return; }
+  }
+  if (token !== fxDocToken) return;       // Cursor inzwischen weiter -> nicht anzeigen
+  fxDocProse.innerHTML = html;
+  fxDocEl.hidden = false;
+  fxMoveDocPreview(fxDocX, fxDocY);
+}
+function fxHideDocPreview() {
+  fxDocToken++;                            // etwaigen laufenden Fetch entwerten
+  fxDocEl.hidden = true;
 }
 
 function fxSetStatus(text, isErr) {
@@ -1167,6 +1216,7 @@ function fxRenderCrumbs() {
 
 function fxRenderList(entries) {
   fxHidePreview(); // gehovertes Element wird ersetzt -> mouseleave faellt evtl. aus
+  fxHideDocPreview();
   fxListEl.replaceChildren();
   if (fxPath) {
     fxListEl.append(fxItem({ name: '..', type: 'dir' }, ICON_UP, () => {
@@ -1180,19 +1230,22 @@ function fxRenderList(entries) {
     const onClick = e.type === 'dir'
       ? () => fxLoad(child)
       : () => fxDownload(child, e.name);
-    const previewUrl = (e.type === 'file' && IMG_RE.test(e.name))
-      ? `${BASE}api/fs/raw?path=${encodeURIComponent(child)}`
+    const isImg = e.type === 'file' && IMG_RE.test(e.name);
+    const previewUrl = isImg ? `${BASE}api/fs/raw?path=${encodeURIComponent(child)}` : null;
+    // Markdown/HTML (aber keine Bilder wie .svg): schwebende Doc-Vorschau via mdlite.
+    const docPreview = (!isImg && e.type === 'file' && DOC_PREVIEW_RE.test(e.name))
+      ? { rel: child, name: e.name, size: e.size }
       : null;
-    const item = fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl);
-    // Kontextmenue fuer Dateien: Bearbeiten (Textdateien) + Herunterladen.
+    const item = fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl, docPreview);
+    // Kontextmenue fuer Dateien: Bearbeiten (Textdateien) + Vorschau (md/html) + Herunterladen.
     if (e.type === 'file') {
       item.addEventListener('contextmenu', (ev) => {
         ev.preventDefault();
         fxShowMenu(ev.clientX, ev.clientY, [
           { label: 'Bearbeiten', icon: ICON_EDIT, disabled: !fxEditable(e.name),
             onClick: () => edOpen(child, e.name, e.size) },
-          ...(isMarkdown(e.name) ? [
-            { label: 'Vorschau (mdlite)', icon: ICON_EYE,
+          ...(DOC_PREVIEW_RE.test(e.name) ? [
+            { label: 'Vorschau', icon: ICON_EYE,
               onClick: () => mdPreviewOpen(child, e.name, e.size) },
           ] : []),
           { label: 'Herunterladen', icon: ICON_DOWNLOAD,
@@ -1204,7 +1257,7 @@ function fxRenderList(entries) {
   }
 }
 
-function fxItem(e, iconSvg, onClick, previewUrl) {
+function fxItem(e, iconSvg, onClick, previewUrl, docPreview) {
   const el = document.createElement('div');
   el.className = 'fx-item ' + (e.type === 'dir' ? 'dir' : 'file');
   const icon = document.createElement('span');
@@ -1228,6 +1281,18 @@ function fxItem(e, iconSvg, onClick, previewUrl) {
     el.addEventListener('mouseenter', (ev) => { fxShowPreview(previewUrl); fxMovePreview(ev.clientX, ev.clientY); });
     el.addEventListener('mousemove', (ev) => fxMovePreview(ev.clientX, ev.clientY));
     el.addEventListener('mouseleave', fxHidePreview);
+  } else if (docPreview) {
+    // Markdown/HTML: gerenderte Doc-Vorschau erst nach kurzem Verweilen (kein
+    // Laden beim bloßen Drueberwischen).
+    el.classList.add('doc');
+    let hoverTimer = null;
+    el.addEventListener('mouseenter', (ev) => {
+      fxMoveDocPreview(ev.clientX, ev.clientY);
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(() => fxShowDocPreview(docPreview.rel, docPreview.name, docPreview.size), FX_DOC_DELAY);
+    });
+    el.addEventListener('mousemove', (ev) => fxMoveDocPreview(ev.clientX, ev.clientY));
+    el.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); fxHideDocPreview(); });
   }
   return el;
 }
@@ -1310,6 +1375,7 @@ function fxHideMenu() {
 
 function fxShowMenu(x, y, items) {
   fxHidePreview(); // schwebende Bild-Vorschau nicht unter dem Menue stehen lassen
+  fxHideDocPreview();
   fxMenuEl.replaceChildren();
   for (const it of items) {
     const b = document.createElement('button');
@@ -1349,11 +1415,6 @@ const EDIT_EXT = new Set([
   'gitignore', 'gitattributes', 'editorconfig', 'npmrc', 'bashrc', 'zshrc', 'profile',
 ]);
 const EDIT_NAMES = new Set(['dockerfile', 'makefile', 'caddyfile', 'license', 'readme']);
-
-// Markdown-Datei? Steuert den zusaetzlichen Vorschau-Eintrag im Kontextmenue.
-function isMarkdown(name) {
-  return /\.(md|markdown)$/i.test(String(name || ''));
-}
 
 function fxEditable(name) {
   const n = String(name || '').toLowerCase();
