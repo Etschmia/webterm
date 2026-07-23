@@ -19,6 +19,10 @@ import { yaml } from '@codemirror/lang-yaml';
 import { xml } from '@codemirror/lang-xml';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { tags } from '@lezer/highlight';
+// Markdown-Vorschau: geteilte Bibliothek aus dem Nachbarprojekt mdlite
+// (github:Etschmia/mdlite). renderMarkdown = marked(gfm) + DOMPurify, OHNE KaTeX
+// — der Import zieht daher kein katex ins Bundle. NICHT 'mdlite/math' importieren.
+import { renderMarkdown } from 'mdlite';
 
 // ---------------------------------------------------------------- Terminal
 const themeDark = {
@@ -1097,6 +1101,10 @@ function fxRenderList(entries) {
         fxShowMenu(ev.clientX, ev.clientY, [
           { label: 'Bearbeiten', icon: ICON_EDIT, disabled: !fxEditable(e.name),
             onClick: () => edOpen(child, e.name, e.size) },
+          ...(isMarkdown(e.name) ? [
+            { label: 'Vorschau (mdlite)', icon: ICON_EYE,
+              onClick: () => mdPreviewOpen(child, e.name, e.size) },
+          ] : []),
           { label: 'Herunterladen', icon: ICON_DOWNLOAD,
             onClick: () => fxDownload(child, e.name) },
         ]);
@@ -1198,6 +1206,7 @@ fxReopenBtn.addEventListener('click', () => fxCollapse(false));
 // ---------------------------------------------------------------- Kontextmenü (Datei-Explorer)
 const ICON_EDIT = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11.1 2.4 2.5 2.5L5.4 13l-3 .6.6-3z"/></svg>';
 const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5V10M4.8 7.2 8 10.4l3.2-3.2M3 13h10"/></svg>';
+const ICON_EYE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="1.9"/></svg>';
 
 const fxMenuEl = document.createElement('div');
 fxMenuEl.className = 'fx-menu';
@@ -1250,6 +1259,11 @@ const EDIT_EXT = new Set([
   'gitignore', 'gitattributes', 'editorconfig', 'npmrc', 'bashrc', 'zshrc', 'profile',
 ]);
 const EDIT_NAMES = new Set(['dockerfile', 'makefile', 'caddyfile', 'license', 'readme']);
+
+// Markdown-Datei? Steuert den zusaetzlichen Vorschau-Eintrag im Kontextmenue.
+function isMarkdown(name) {
+  return /\.(md|markdown)$/i.test(String(name || ''));
+}
 
 function fxEditable(name) {
   const n = String(name || '').toLowerCase();
@@ -1520,6 +1534,107 @@ edWin.addEventListener('keydown', (e) => {
 window.addEventListener('beforeunload', (e) => {
   if (ed.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
+
+// ------------------------------------------------------ Markdown-Vorschau (mdlite)
+// Nur-Lese-Fenster im Arbeitsbereich: rendert Markdown ueber die geteilte
+// mdlite-Bibliothek (renderMarkdown = marked+DOMPurify, kein KaTeX). Laden wie der
+// Editor ueber /api/fs/download; kein Speichern. Fenster-Mechanik spiegelt .ed-win.
+const MD_MAX_BYTES = 2 * 1024 * 1024;
+
+const mdWin = document.createElement('div');
+mdWin.className = 'md-win';
+mdWin.hidden = true;
+mdWin.innerHTML = `
+  <div class="md-head">
+    <span class="md-title"></span>
+    <button class="md-close fx-btn" type="button" title="Schließen" aria-label="Schließen">×</button>
+  </div>
+  <div class="md-body"><div class="mdlite-prose"></div></div>
+  <div class="md-foot">
+    <span class="md-path"></span>
+    <span class="md-hint">Nur Vorschau · Esc schließt</span>
+  </div>`;
+workEl.append(mdWin);
+
+const mdHeadEl = mdWin.querySelector('.md-head');
+const mdBodyEl = mdWin.querySelector('.md-body');
+const mdProseEl = mdWin.querySelector('.mdlite-prose');
+const mdTitleEl = mdWin.querySelector('.md-title');
+const mdPathEl = mdWin.querySelector('.md-path');
+let mdPlaced = false;
+
+async function mdPreviewOpen(rel, name, size) {
+  if (size > MD_MAX_BYTES) { fxSetStatus('Zu groß für die Vorschau (max. 2 MB)', true); return; }
+  fxSetStatus(`Öffne ${name} …`);
+  let text;
+  try {
+    const r = await fetch(`${BASE}api/fs/download?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    text = await r.text();
+  } catch {
+    fxSetStatus('Konnte Datei nicht laden', true);
+    return;
+  }
+  fxSetStatus(null);
+  mdTitleEl.textContent = name;
+  mdTitleEl.title = '~/' + rel;
+  mdPathEl.textContent = '~/' + rel;
+  mdPathEl.title = '~/' + rel;
+  // renderMarkdown sanitisiert bereits per DOMPurify -> innerHTML ist sicher.
+  mdProseEl.innerHTML = renderMarkdown(text);
+  mdBodyEl.scrollTop = 0;
+  mdShow();
+}
+
+function mdClose() {
+  mdWin.hidden = true;
+  mdProseEl.innerHTML = '';
+  term.focus();
+}
+
+function mdShow() {
+  mdWin.hidden = false;
+  if (!mdPlaced) {
+    mdPlaced = true;
+    const w = Math.max(320, Math.min(760, workEl.clientWidth - 48));
+    const h = Math.max(240, Math.min(620, Math.round(workEl.clientHeight * 0.75)));
+    mdWin.style.width = w + 'px';
+    mdWin.style.height = h + 'px';
+    mdWin.style.left = Math.max(12, Math.round((workEl.clientWidth - w) / 2)) + 'px';
+    mdWin.style.top = '28px';
+  }
+  mdClampToWork();
+}
+
+function mdClampToWork() {
+  if (mdWin.hidden) return;
+  const maxW = Math.max(280, workEl.clientWidth - 24);
+  const maxH = Math.max(180, workEl.clientHeight - 24);
+  if (mdWin.offsetWidth > maxW) mdWin.style.width = maxW + 'px';
+  if (mdWin.offsetHeight > maxH) mdWin.style.height = maxH + 'px';
+  const maxX = Math.max(0, workEl.clientWidth - mdWin.offsetWidth);
+  const maxY = Math.max(0, workEl.clientHeight - mdWin.offsetHeight);
+  mdWin.style.left = Math.max(0, Math.min(mdWin.offsetLeft, maxX)) + 'px';
+  mdWin.style.top = Math.max(0, Math.min(mdWin.offsetTop, maxY)) + 'px';
+}
+
+let mdDrag = null;
+mdHeadEl.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button')) return;
+  mdDrag = { dx: e.clientX - mdWin.offsetLeft, dy: e.clientY - mdWin.offsetTop };
+  mdHeadEl.setPointerCapture(e.pointerId);
+});
+mdHeadEl.addEventListener('pointermove', (e) => {
+  if (!mdDrag) return;
+  const maxX = Math.max(0, workEl.clientWidth - mdWin.offsetWidth);
+  const maxY = Math.max(0, workEl.clientHeight - mdWin.offsetHeight);
+  mdWin.style.left = Math.max(0, Math.min(e.clientX - mdDrag.dx, maxX)) + 'px';
+  mdWin.style.top = Math.max(0, Math.min(e.clientY - mdDrag.dy, maxY)) + 'px';
+});
+mdHeadEl.addEventListener('pointerup', () => { mdDrag = null; });
+mdHeadEl.addEventListener('pointercancel', () => { mdDrag = null; });
+mdWin.querySelector('.md-close').addEventListener('click', mdClose);
+mdWin.addEventListener('keydown', (e) => { if (e.key === 'Escape') mdClose(); });
 
 // ---------------------------------------------------------------- Version-Skew
 // Der Build brennt seinen Stamp ins Bundle (__BUILD_STAMP__) und schreibt ihn

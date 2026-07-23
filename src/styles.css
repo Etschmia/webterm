@@ -846,6 +846,73 @@ body {
 .ed-status.err { color: oklch(0.8 0.14 25); }
 .ed-hint { flex: 0 0 auto; opacity: 0.7; }
 
+/* --- Markdown-Vorschau (mdlite): schwebendes Nur-Lese-Fenster wie .ed-win --- */
+.md-win {
+  position: absolute;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  min-height: 200px;
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  resize: both;
+  overflow: hidden;
+}
+.md-win[hidden] { display: none; }
+.md-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-tint);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+.md-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md-close { flex: 0 0 auto; font-size: 16px; }
+.md-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px;
+  background: var(--background);
+}
+.md-body .mdlite-prose { max-width: 46rem; }
+.md-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.md-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.md-hint { flex: 0 0 auto; opacity: 0.7; }
+.md-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.md-body::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+
 /* CodeMirror-Panels (Suche via Strg+F) und Tooltips ans Theme angleichen */
 .ed-win .cm-panels {
   background: var(--sidebar);

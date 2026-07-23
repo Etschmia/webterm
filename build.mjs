@@ -42,6 +42,8 @@ const copies = [
   [path.join(SRC, 'index.html'), path.join(PUBLIC, 'index.html')],
   [path.join(SRC, 'styles.css'), path.join(PUBLIC, 'styles.css')],
   [path.join(__dirname, 'node_modules/@xterm/xterm/css/xterm.css'), path.join(PUBLIC, 'xterm.css')],
+  // Prose-Styles der Markdown-Vorschau aus der mdlite-Bibliothek (single source of truth).
+  [path.join(__dirname, 'node_modules/mdlite/src/mdlite.css'), path.join(PUBLIC, 'mdlite.css')],
 ];
 function copyAssets() {
   for (const [from, to] of copies) fs.copyFileSync(from, to);
