@@ -429,6 +429,7 @@ function switchTo(mode, name) {
   if (isActive(mode, name)) { term.focus(); return; }
   exitCopyMode();
   state.active = { mode, name: name || null };
+  saveActive();
   renderSidebar();
   // Andere Session -> Explorer auf deren CWD ziehen (Vergleich zuruecksetzen).
   fxLastCwdAbs = null;
@@ -438,6 +439,21 @@ function switchTo(mode, name) {
   // Nach Layoutwechsel/Reset neu einpassen.
   scheduleFit();
   requestAnimationFrame(() => term.focus());
+}
+
+// Aktive Auswahl ueber den Reload retten — insbesondere den durch ein Update
+// ausgeloesten harten Auto-Reload: beim naechsten Laden landet der Nutzer wieder
+// in genau derselben Session statt auf "Standard".
+function saveActive() {
+  try { localStorage.setItem('term-active', JSON.stringify(state.active)); } catch {}
+}
+function restoreActive() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('term-active') || 'null'); } catch {}
+  // Standard ist ohnehin der Default; nur eine benannte Session muss zurueckgeholt
+  // werden — und nur, wenn sie noch existiert (sonst bleibt es korrekt bei Standard).
+  if (!saved || saved.mode !== 'session' || !saved.name) return;
+  if (state.sessions.some((s) => s.name === saved.name && !s.standard)) switchTo('session', saved.name);
 }
 
 // Auto-Wechsel zu neu gestarteten Tool-Sessions: die Wrapper der Standard-
@@ -717,6 +733,7 @@ async function renameSession(oldName, newName) {
     if (!r.ok) throw new Error(data.error || 'Umbenennen fehlgeschlagen');
     if (state.active.mode === 'session' && state.active.name === oldName) {
       state.active.name = data.name;
+      saveActive(); // sonst zeigt der persistierte Eintrag nach dem Reload den alten Namen
     }
   } catch (e) {
     setStatus(String(e.message || e), true, 4000);
@@ -1817,12 +1834,15 @@ async function upRefresh(force) {
 // Vor dem Reload warten, bis das Backend wieder antwortet: der entkoppelte
 // Restart (term-restart) kann dem Skript-Ende um Sekunden NACHlaufen — ein
 // sofortiger Reload traefe sonst genau in die Neustart-Luecke (502).
+let reloadPending = false;
 async function upMaybeReload() {
+  if (reloadPending) return true; // Reload schon angestossen (z. B. vom periodischen Check)
   try {
     const r = await fetch(`${BASE}version.json`, { cache: 'no-store' });
     const d = await r.json();
     if (!d || !d.version || d.version === FRONTEND_VERSION) return false;
   } catch { return false; }
+  reloadPending = true;
   setStatus('Update installiert — Seite wird neu geladen …');
   const started = Date.now();
   const reloadWhenUp = async () => {
@@ -2227,17 +2247,25 @@ if (brandNameEl) brandNameEl.title = brandNameEl.textContent;
 loadColWidths();
 
 renderSidebar();
-refreshSessions();
+// Erster Session-Load: danach die vor dem Reload aktive Session wiederherstellen.
+refreshSessions().then(restoreActive);
 setInterval(refreshSessions, 4000);
 refreshSysStat();
 setInterval(refreshSysStat, 4000);
 fitTerminal();
 connect();
 checkVersionSkew();
+// Periodisch pruefen, ob ein frisch gebautes Bundle bereitliegt (version.json !=
+// geladenes FRONTEND_VERSION) — deckt jeden Deploy ab, egal ob per Icon, per CLI
+// oder aus einem anderen Tab, und egal ob frontend-only (kein Restart, /api/version
+// bleibt alt) oder mit Backend-Restart. upMaybeReload wartet per /healthz die
+// Neustart-Luecke ab und laedt dann hart neu; die aktive Session kommt per
+// restoreActive aus localStorage zurueck.
+setInterval(upMaybeReload, 15000);
 upRefresh(false);
 setInterval(() => upRefresh(false), 5 * 60 * 1000);
 // Beim Zurueckkehren zum Tab mitpruefen (Backend-TTL drosselt das Remote).
-document.addEventListener('visibilitychange', () => { if (!document.hidden) upRefresh(false); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { upRefresh(false); upMaybeReload(); } });
 
 // Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
 fxCollapse(window.innerWidth < 900);
