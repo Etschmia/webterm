@@ -162,13 +162,33 @@ body.col-resizing, body.col-resizing * {
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 9px;
+  flex-direction: column;
+  gap: 3px;
   padding: 16px 16px 14px;
   font-size: 14px;
   letter-spacing: -0.01em;
   border-bottom: 1px solid var(--border);
 }
+/* Obere Zeile: Wortmarke + Aktions-Icons (Bug/Update/Hilfe). */
+.brand-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+/* Untertitel: der Hostname bekommt die volle Sidebar-Breite (nicht mehr mit den
+   Icons um den Platz konkurrierend) und ist unter der Wortmarke eingerueckt
+   (Markenbreite 28px + gap 9px). Nur im Extremfall abschneiden; voll im title. */
+.brand-host {
+  padding-left: 37px;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  font-size: 12.5px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand-host:empty { display: none; }
 .brand-mark {
   flex: 0 0 auto;
   display: grid;
@@ -181,14 +201,8 @@ body.col-resizing, body.col-resizing * {
 }
 .brand-name {
   font-weight: 650;
-  /* Langer Hostname (.brand-dim) darf die Icons rechts nicht rausschieben:
-     hier abschneiden statt umbrechen; der volle Name steht im title-Attribut. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.brand-dim { color: var(--muted-foreground); font-weight: 500; }
 .help-btn {
   flex: 0 0 auto;
   display: inline-grid;

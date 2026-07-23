@@ -2245,12 +2245,15 @@ explorerGrip?.addEventListener('dblclick', () => resetCol('explorer'));
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // term.martuni.de verdrahtet).
-const brandDim = document.querySelector('.brand-dim');
-if (brandDim && location.hostname) brandDim.textContent = '.' + location.hostname;
+// Hostname als eigene, gedimmte Untertitel-Zeile (volle Breite, siehe .brand-host)
+// — statt frueher an die Wortmarke angehaengt ("term.<host>"), was bei langen
+// Domains abschnitt und das "term.term…"-Doppel erzeugte.
+const brandHost = document.getElementById('brand-host');
+if (brandHost && location.hostname) {
+  brandHost.textContent = location.hostname;
+  brandHost.title = location.hostname; // voll im Tooltip, falls doch mal abgeschnitten
+}
 if (location.hostname) document.title = 'term · ' + location.hostname;
-// Voller Name als Tooltip — sichtbar wird er ggf. abgeschnitten (Icons rechts).
-const brandNameEl = document.querySelector('.brand-name');
-if (brandNameEl) brandNameEl.title = brandNameEl.textContent;
 
 // Gespeicherte Spaltenbreiten anwenden (vor dem ersten fitTerminal).
 loadColWidths();
