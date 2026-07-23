@@ -744,8 +744,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/api/sessions') {
     const sessions = await listSessions();
+    // Maschinen-Hostname mitliefern: tmux setzt den pane_title per Default auf
+    // den (kurzen) Hostnamen. Das Frontend erkennt so einen uninformativen
+    // Default-Titel und faellt in dem Fall auf den Session-Namen zurueck.
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ sessions }));
+    res.end(JSON.stringify({ sessions, host: os.hostname() }));
     return;
   }
 

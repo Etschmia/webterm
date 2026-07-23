@@ -154,6 +154,7 @@ term.attachCustomKeyEventHandler((e) => {
 const state = {
   active: { mode: 'standard', name: null }, // aktive Auswahl
   sessions: [],
+  host: '', // Maschinen-Hostname (vom Backend) — Default-pane_title-Erkennung
 };
 let ws = null;
 let reconnectTimer = null;
@@ -458,13 +459,20 @@ function cleanTitle(t) {
 
 // Sprechendes Sidebar-Label: bevorzugt den gesetzten pane_title, faellt aber auf
 // den Session-Namen zurueck, wenn der Titel nur ein Shell-Default ist
-// (leer, = laufendes Kommando wie "bash", oder ein "user@host"-Prompt-Titel).
+// (leer, = laufendes Kommando wie "bash", ein "user@host"-Prompt-Titel oder der
+// blanke Maschinen-Hostname, den tmux als pane_title-Default setzt).
 function sessionLabel(s) {
   // Vom Nutzer vergebener Name (Inline-Edit) hat Vorrang vor dem pane_title.
   if (s.userNamed) return s.name;
   const clean = cleanTitle(s.title);
   const cmd = (s.command || '').toLowerCase();
-  const looksDefault = !clean || clean.toLowerCase() === cmd || /^\S+@\S+/.test(clean);
+  // Hostname-Default: gegen den vollen und den kurzen (bis zum ersten Punkt)
+  // Namen pruefen — je nach System liefert der pane_title die eine oder andere Form.
+  const host = (state.host || '').toLowerCase();
+  const hostShort = host.split('.')[0];
+  const lc = clean.toLowerCase();
+  const isHost = !!host && (lc === host || lc === hostShort);
+  const looksDefault = !clean || lc === cmd || /^\S+@\S+/.test(clean) || isHost;
   return looksDefault ? s.name : clean;
 }
 
@@ -721,6 +729,7 @@ async function refreshSessions() {
     const r = await fetch(`${BASE}api/sessions`, { cache: 'no-store' });
     const data = await r.json();
     state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    if (typeof data.host === 'string') state.host = data.host;
   } catch {
     state.sessions = [];
   }
