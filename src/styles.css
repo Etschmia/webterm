@@ -207,9 +207,9 @@ body.col-resizing, body.col-resizing * {
   flex: 0 0 auto;
   display: inline-grid;
   place-items: center;
-  width: 22px; height: 22px;
+  width: 26px; height: 26px;
   font: inherit;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 650;
   color: var(--muted-foreground);
   background: var(--hover);
@@ -227,7 +227,7 @@ body.col-resizing, body.col-resizing * {
   position: relative;
   display: inline-grid;
   place-items: center;
-  width: 22px; height: 22px;
+  width: 26px; height: 26px;
   padding: 0;
   color: var(--muted-foreground);
   background: var(--hover);
@@ -263,7 +263,7 @@ body.col-resizing, body.col-resizing * {
      ganzen rechten Cluster (Bug + Update + Hilfe) nach rechts. */
   display: inline-grid;
   place-items: center;
-  width: 22px; height: 22px;
+  width: 26px; height: 26px;
   padding: 0;
   color: var(--primary);
   background: var(--hover);
@@ -722,7 +722,7 @@ body.col-resizing, body.col-resizing * {
   display: inline-grid;
   place-items: center;
   width: 26px; height: 26px;
-  font-size: 15px; line-height: 1;
+  font-size: 16px; line-height: 1;
   color: var(--muted-foreground);
   background: transparent;
   border: 1px solid transparent;

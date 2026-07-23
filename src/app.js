@@ -847,7 +847,7 @@ let doneBadge = false;
 function setDoneBadge(on) {
   if (doneBadge === on) return;
   doneBadge = on;
-  document.title = on ? '● term' : 'term';
+  document.title = on ? '● webterm' : 'webterm';
   faviconEl.href = on ? FAVICON_DONE : FAVICON_IDLE;
 }
 // Beim Zurueckkehren zum Tab nicht nur das Fertig-Badge loeschen, sondern auch
@@ -2253,7 +2253,7 @@ if (brandHost && location.hostname) {
   brandHost.textContent = location.hostname;
   brandHost.title = location.hostname; // voll im Tooltip, falls doch mal abgeschnitten
 }
-if (location.hostname) document.title = 'term · ' + location.hostname;
+if (location.hostname) document.title = 'webterm · ' + location.hostname;
 
 // Gespeicherte Spaltenbreiten anwenden (vor dem ersten fitTerminal).
 loadColWidths();
