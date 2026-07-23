@@ -202,6 +202,62 @@ body {
 }
 
 /* Session-Liste */
+/* --- Systemauslastung: Widget ueber den Sessions (alle 4 s aktualisiert) --- */
+.sysstat {
+  flex: 0 0 auto;
+  padding: 9px 12px 11px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sys-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+.sys-cell {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.sys-k {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.sys-v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sys-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sys-meter .sys-k { flex: 0 0 34px; }
+.sys-meter .sys-v { flex: 0 0 auto; min-width: 30px; text-align: right; }
+.sys-bar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--panel-tint);
+  overflow: hidden;
+}
+.sys-bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+  transition: width 0.4s ease, background 0.4s ease;
+}
+
 .sessions {
   flex: 1 1 auto;
   min-height: 0;

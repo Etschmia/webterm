@@ -32,6 +32,27 @@
         <button class="help-btn" id="help-btn" title="Hilfe &amp; Tipps" aria-label="Hilfe und Tipps">?</button>
       </div>
 
+      <section class="sysstat" id="sysstat" aria-label="Systemauslastung" title="Systemauslastung – aktualisiert alle 4 s">
+        <div class="sys-grid">
+          <div class="sys-cell"><span class="sys-k">Load 5m</span><span class="sys-v" id="sys-load">–</span></div>
+          <div class="sys-cell"><span class="sys-k">Uptime</span><span class="sys-v" id="sys-up">–</span></div>
+        </div>
+        <div class="sys-meter">
+          <span class="sys-k">RAM</span>
+          <span class="sys-bar"><i id="sys-mem-bar"></i></span>
+          <span class="sys-v" id="sys-mem">–</span>
+        </div>
+        <div class="sys-meter">
+          <span class="sys-k">Swap</span>
+          <span class="sys-bar"><i id="sys-swap-bar"></i></span>
+          <span class="sys-v" id="sys-swap">–</span>
+        </div>
+        <div class="sys-grid">
+          <div class="sys-cell"><span class="sys-k">User·Sess</span><span class="sys-v" id="sys-users">–</span></div>
+          <div class="sys-cell"><span class="sys-k">Prozesse</span><span class="sys-v" id="sys-procs">–</span></div>
+        </div>
+      </section>
+
       <nav class="sessions" id="sessions" aria-label="Sessions">
         <!-- Eintraege werden dynamisch gerendert -->
       </nav>

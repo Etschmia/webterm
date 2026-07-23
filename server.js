@@ -10,6 +10,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
@@ -144,6 +145,58 @@ async function sessionExists(name) {
   if (typeof name !== 'string' || !name) return false;
   const sessions = await listSessions();
   return sessions.some((s) => s.name === name);
+}
+
+// ---------------------------------------------------------------------------
+// System-Auslastung (/api/sysstat) — Sidebar-Widget, alle 4 s abgefragt
+// ---------------------------------------------------------------------------
+
+// Eingeloggte System-User (utmp) wie in top — zaehlt die Login-Zeilen von `who`.
+// Im Webterminal oft 0, weil die tmux-Panes keine utmp-Sitzung erzeugen.
+function countLoginUsers() {
+  return new Promise((resolve) => {
+    execFile('who', [], { timeout: 4000 }, (err, stdout) => {
+      if (err) return resolve(null);
+      resolve(stdout.split('\n').filter((l) => l.trim()).length);
+    });
+  });
+}
+
+// Momentaufnahme der Systemlast fuer die Sidebar. Die Anzahl offener
+// tmux-Sessions steuert das Frontend aus seinem ohnehin gepollten state bei
+// (kein zweiter tmux-Aufruf hier).
+async function readSysStat() {
+  const load5 = os.loadavg()[1];      // 1=5-Minuten-Mittel
+  const uptime = os.uptime();         // Sekunden
+
+  // Speicher/Swap aus /proc/meminfo. "Belegt" = Total - Available (Cache/Puffer
+  // zaehlen NICHT als belegt), wie "used" im modernen top/free.
+  let memPct = null, swapPct = null;
+  try {
+    const mi = await fs.promises.readFile('/proc/meminfo', 'utf8');
+    const kv = {};
+    for (const line of mi.split('\n')) {
+      const m = /^(\w+):\s+(\d+)/.exec(line);
+      if (m) kv[m[1]] = Number(m[2]); // Werte in kB
+    }
+    if (kv.MemTotal > 0) {
+      const avail = kv.MemAvailable != null
+        ? kv.MemAvailable
+        : (kv.MemFree || 0) + (kv.Buffers || 0) + (kv.Cached || 0);
+      memPct = Math.round((1 - avail / kv.MemTotal) * 100);
+    }
+    swapPct = kv.SwapTotal > 0 ? Math.round((1 - kv.SwapFree / kv.SwapTotal) * 100) : 0;
+  } catch { /* /proc nicht lesbar -> null */ }
+
+  // Prozesse: numerische Eintraege unter /proc (wie tops "Tasks total").
+  let procs = null;
+  try {
+    const entries = await fs.promises.readdir('/proc');
+    procs = entries.reduce((n, e) => n + (/^\d+$/.test(e) ? 1 : 0), 0);
+  } catch { /* null */ }
+
+  const users = await countLoginUsers();
+  return { load5, uptime, memPct, swapPct, users, procs };
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +568,15 @@ const server = http.createServer(async (req, res) => {
   // Build-Stamp des laufenden Backends (fuer die Version-Skew-Erkennung im Frontend).
   if (url === '/api/version') {
     return sendJson(res, 200, { version: BUILD_VERSION });
+  }
+
+  // Systemauslastung fuer das Sidebar-Widget (Load 5m, Uptime, RAM/Swap, User, Prozesse).
+  if (url === '/api/sysstat') {
+    try {
+      return sendJson(res, 200, await readSysStat());
+    } catch {
+      return sendJson(res, 500, { error: 'sysstat fehlgeschlagen' });
+    }
   }
 
   if (url === '/api/sessions') {

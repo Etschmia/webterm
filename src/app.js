@@ -734,6 +734,70 @@ async function refreshSessions() {
   renderSidebar();
 }
 
+// ---------------------------------------------------------------- Systemauslastung
+// Sidebar-Widget ueber den Sessions: Load (5-Min-Mittel), Uptime, RAM/Swap in %,
+// eingeloggte System-User + offene tmux-Sessions und die Prozesszahl. Die Werte
+// liefert /api/sysstat; die Session-Zahl stammt aus dem ohnehin gepollten
+// state.sessions (kein zweiter tmux-Aufruf im Backend).
+const sysEl = {
+  load: document.getElementById('sys-load'),
+  up: document.getElementById('sys-up'),
+  mem: document.getElementById('sys-mem'),
+  memBar: document.getElementById('sys-mem-bar'),
+  swap: document.getElementById('sys-swap'),
+  swapBar: document.getElementById('sys-swap-bar'),
+  users: document.getElementById('sys-users'),
+  procs: document.getElementById('sys-procs'),
+};
+
+function sysFmtUptime(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Ampelfarbe fuer die Auslastungsbalken: gruen < 70 %, gelb < 90 %, sonst rot.
+function sysBarColor(pct) {
+  if (pct >= 90) return 'oklch(0.62 0.20 25)';
+  if (pct >= 70) return 'oklch(0.75 0.15 80)';
+  return 'oklch(0.62 0.14 160)';
+}
+
+function sysSetMeter(barEl, valEl, pct) {
+  if (pct == null || Number.isNaN(pct)) {
+    barEl.style.width = '0%';
+    valEl.textContent = '–';
+    return;
+  }
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  barEl.style.width = p + '%';
+  barEl.style.background = sysBarColor(p);
+  valEl.textContent = p + '%';
+}
+
+async function refreshSysStat() {
+  let s;
+  try {
+    const r = await fetch(`${BASE}api/sysstat`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    s = await r.json();
+  } catch {
+    return; // stiller Fehlschlag – zuletzt bekannte Werte stehen lassen
+  }
+  sysEl.load.textContent = typeof s.load5 === 'number' ? s.load5.toFixed(2) : '–';
+  sysEl.up.textContent = typeof s.uptime === 'number' ? sysFmtUptime(s.uptime) : '–';
+  sysSetMeter(sysEl.memBar, sysEl.mem, s.memPct);
+  sysSetMeter(sysEl.swapBar, sysEl.swap, s.swapPct);
+  const users = s.users == null ? '?' : s.users;
+  const sess = Array.isArray(state.sessions) ? state.sessions.length : '?';
+  sysEl.users.textContent = `${users} · ${sess}`;
+  sysEl.procs.textContent = s.procs == null ? '–' : String(s.procs);
+}
+
 // ---------------------------------------------------------------- "Claude ist fertig"
 // Claude Code setzt waehrend der Arbeit einen Braille-Spinner (⠋⠙⠸ …) an den
 // Anfang des pane_title. Verschwindet der Spinner zwischen zwei Polls, ist die
@@ -768,9 +832,9 @@ function setDoneBadge(on) {
 // sie sonst erst beim naechsten (gedrosselten) Poll. Jetzt ist die Sidebar in
 // dem Moment aktuell, in dem der Nutzer wieder hinschaut.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) { setDoneBadge(false); refreshSessions(); }
+  if (!document.hidden) { setDoneBadge(false); refreshSessions(); refreshSysStat(); }
 });
-window.addEventListener('focus', () => { setDoneBadge(false); refreshSessions(); });
+window.addEventListener('focus', () => { setDoneBadge(false); refreshSessions(); refreshSysStat(); });
 
 const busyByName = new Map(); // Session-Name -> war beim letzten Poll beschaeftigt?
 let busyInitialized = false;  // erster Poll setzt nur den Grundzustand
@@ -1836,6 +1900,8 @@ if (location.hostname) document.title = 'term · ' + location.hostname;
 renderSidebar();
 refreshSessions();
 setInterval(refreshSessions, 4000);
+refreshSysStat();
+setInterval(refreshSysStat, 4000);
 fitTerminal();
 connect();
 checkVersionSkew();
