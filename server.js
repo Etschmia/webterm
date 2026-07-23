@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 
@@ -559,6 +559,169 @@ async function handleUpdate(req, res, route) {
 }
 
 // ---------------------------------------------------------------------------
+// Bugtracker (/api/bugs) — Backend: GitHub Issues des Projekt-Repos
+// ---------------------------------------------------------------------------
+// "Nur GitHub", KEIN lokaler Fallback: alle Installationen melden in dieselben
+// Issues EINES zentralen (privaten) Repos, sodass das Team eine gemeinsame Liste
+// sieht. Auth ueber das `gh`-CLI — jede Installation ist als ihr eigener GitHub-
+// Account angemeldet (`gh auth login`), daher ist der Issue-Autor die meldende
+// Person. Ist gh nicht da/nicht angemeldet/ohne Repo-Zugriff, liefert /api/bugs
+// einen klaren Fehler (503) statt still lokal zu speichern.
+
+const BUG_TITLE_MAX = 200;
+const BUG_BODY_MAX = 8000;
+const BUG_BODY_LIMIT = 64 * 1024; // Request-Body-Obergrenze
+const GH_TIMEOUT_MS = 20000;
+
+// gh-Binary robust aufloesen: die systemd-Unit hat ~/.local/bin (wo node UND gh
+// liegen) evtl. nicht im PATH. Reihenfolge: GH_BIN -> ~/.local/bin -> ueblich -> PATH.
+function resolveGhBin() {
+  const cands = [process.env.GH_BIN, path.join(HOME, '.local/bin/gh'),
+    '/usr/local/bin/gh', '/usr/bin/gh'].filter(Boolean);
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch {} }
+  return 'gh';
+}
+const GH_BIN = resolveGhBin();
+
+// Ziel-Repo: explizit via BUGS_GITHUB_REPO, sonst aus dem origin-Remote abgeleitet
+// (jede Installation zielt so von selbst auf dasselbe zentrale Repo).
+function detectBugsRepo() {
+  if (process.env.BUGS_GITHUB_REPO) return process.env.BUGS_GITHUB_REPO.trim();
+  try {
+    const url = execFileSync('git', ['-C', __dirname, 'remote', 'get-url', 'origin'],
+      { timeout: 5000 }).toString().trim();
+    const clean = url.replace(/\.git$/, '').replace(/\/$/, '');
+    const m = clean.match(/github\.com[:/]+([^/]+\/[^/]+)$/i);
+    if (m) return m[1];
+  } catch {}
+  return null;
+}
+const BUGS_REPO = detectBugsRepo();
+
+function readJsonBody(req, limit = BUG_BODY_LIMIT) {
+  return new Promise((resolve) => {
+    let data = '', total = 0, aborted = false;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > limit) { aborted = true; try { req.destroy(); } catch {} }
+      else data += c;
+    });
+    req.on('end', () => {
+      if (aborted) return resolve(null);
+      try { resolve(JSON.parse(data || '{}')); } catch { resolve(null); }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
+// gh-Aufruf gegen das Bug-Repo. `-R <repo>` wird ans Ende gehaengt (cobra erlaubt
+// Flags nach den Positionsargumenten) und execFile nutzt KEINE Shell -> Titel/Body
+// gehen sicher als Argumente durch (keine Injection).
+function ghBugs(args) {
+  return new Promise((resolve) => {
+    execFile(GH_BIN, [...args, '-R', BUGS_REPO], {
+      timeout: GH_TIMEOUT_MS, env: { ...process.env, HOME }, maxBuffer: 8 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (err) resolve({ ok: false, out: stdout || '', err: (stderr || err.message || '').trim(), code: err.code });
+      else resolve({ ok: true, out: stdout || '', err: '', code: 0 });
+    });
+  });
+}
+
+// gh-Fehler in eine verstaendliche, handlungsleitende Meldung uebersetzen.
+function ghBugsError(r) {
+  const e = (r && r.err || '').toLowerCase();
+  let error;
+  if (r && r.code === 'ENOENT') error = 'gh-CLI nicht gefunden — bitte GitHub CLI installieren.';
+  else if (/not logged|authentication|gh auth login|no token|requires authentication/.test(e))
+    error = `Nicht bei GitHub angemeldet — einmalig \`gh auth login\` (mit Zugriff auf ${BUGS_REPO}).`;
+  else if (/could not resolve to a repository|not found|does not exist|http 404|resource not accessible/.test(e))
+    error = `Kein Zugriff auf ${BUGS_REPO} — als Collaborator hinzufuegen lassen.`;
+  else if (/timed out|etimedout|dial tcp|no such host|network/.test(e))
+    error = 'GitHub nicht erreichbar (Netzwerk/Timeout).';
+  else error = 'GitHub-Bugtracker nicht verfuegbar.';
+  return { error, detail: (r && r.err) || '', repo: BUGS_REPO };
+}
+
+// Issues -> das vom Frontend erwartete Bug-Format (open zuerst wird dort sortiert).
+async function ghListBugs() {
+  const r = await ghBugs(['issue', 'list', '--state', 'all', '--limit', '200',
+    '--json', 'number,title,body,state,author,createdAt,updatedAt,url']);
+  if (!r.ok) return { error: r };
+  let arr;
+  try { arr = JSON.parse(r.out || '[]'); } catch { return { error: { err: 'Ungueltige gh-Ausgabe' } }; }
+  const bugs = arr.map((i) => ({
+    id: String(i.number),
+    number: i.number,
+    title: i.title || '',
+    body: i.body || '',
+    done: String(i.state || '').toUpperCase() === 'CLOSED',
+    author: (i.author && i.author.login) || '',
+    url: i.url || '',
+    created: i.createdAt ? Date.parse(i.createdAt) : 0,
+    updated: i.updatedAt ? Date.parse(i.updatedAt) : 0,
+  }));
+  return { bugs };
+}
+
+async function handleBugs(req, res) {
+  const q = new URL(req.url, 'http://localhost').searchParams;
+  if (!BUGS_REPO) {
+    return sendJson(res, 503, {
+      error: 'Kein GitHub-Repo ermittelt — origin-Remote fehlt? Sonst BUGS_GITHUB_REPO setzen.',
+      repo: null,
+    });
+  }
+
+  if (req.method === 'GET') {
+    const r = await ghListBugs();
+    if (r.error) return sendJson(res, 503, ghBugsError(r.error));
+    return sendJson(res, 200, { bugs: r.bugs, repo: BUGS_REPO });
+  }
+
+  if (req.method === 'POST') {
+    const b = await readJsonBody(req);
+    const title = (b && typeof b.title === 'string' ? b.title : '').trim();
+    if (!title) return sendJson(res, 400, { error: 'Titel fehlt' });
+    const bodyText = (b && typeof b.body === 'string' ? b.body : '').slice(0, BUG_BODY_MAX).trim();
+    // Herkunft anstempeln: es gibt keinen Login in der App, so ist erkennbar,
+    // welche Installation den Bug gemeldet hat. Trenner '\n\n---\n' -> das
+    // Frontend blendet den Stempel in der Liste aus, GitHub zeigt ihn voll.
+    const stamp = `\n\n---\n_via webterm · ${os.hostname()} · ${process.env.USER || 'user'}_`;
+    const cr = await ghBugs(['issue', 'create',
+      '--title', title.slice(0, BUG_TITLE_MAX), '--body', bodyText + stamp]);
+    if (!cr.ok) return sendJson(res, 503, ghBugsError(cr));
+    const list = await ghListBugs();
+    return sendJson(res, 200, { ok: true, bugs: list.bugs || [], repo: BUGS_REPO, created: cr.out.trim() });
+  }
+
+  // done=true -> Issue schliessen, done=false -> wieder oeffnen.
+  if (req.method === 'PATCH') {
+    const id = q.get('id') || '';
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'Ungueltige Issue-Nummer' });
+    const b = await readJsonBody(req);
+    if (!b || typeof b.done !== 'boolean') return sendJson(res, 400, { error: 'Feld done (boolean) erwartet' });
+    const r = await ghBugs(['issue', b.done ? 'close' : 'reopen', id]);
+    if (!r.ok) return sendJson(res, 503, ghBugsError(r));
+    const list = await ghListBugs();
+    return sendJson(res, 200, { ok: true, bugs: list.bugs || [], repo: BUGS_REPO });
+  }
+
+  // Hartes Loeschen kann die GitHub-API fuer normale Collaborator NICHT (braucht
+  // Admin) -> "Loeschen" bedeutet hier: Issue schliessen (= erledigt).
+  if (req.method === 'DELETE') {
+    const id = q.get('id') || '';
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'Ungueltige Issue-Nummer' });
+    const r = await ghBugs(['issue', 'close', id]);
+    if (!r.ok) return sendJson(res, 503, ghBugsError(r));
+    const list = await ghListBugs();
+    return sendJson(res, 200, { ok: true, bugs: list.bugs || [], repo: BUGS_REPO });
+  }
+
+  return sendJson(res, 405, { error: 'Methode nicht erlaubt' });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -627,7 +790,13 @@ const server = http.createServer(async (req, res) => {
     }
     const r = await tmux(['new-session', '-d', '-s', name, '-c', HOME]);
     if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
-    await tmux(['set-option', '-t', '=' + name, '@user-named', '1']);
+    // WICHTIG: hier KEIN '='-Praefix vor dem Ziel. Anders als bei
+    // kill-session/list-sessions lehnt `set-option -t '=name'` das exakt-Match-
+    // Praefix ab ("no such session: =name") — @user-named wuerde dann NIE gesetzt,
+    // die Sidebar fiele auf den pane_title (= Hostname) zurueck und der eingegebene
+    // Name "verschwaende". Der Name ist gerade frisch als eindeutig validiert, das
+    // Ziel greift also exakt (wie beim Umbenennen einige Zeilen weiter oben).
+    await tmux(['set-option', '-t', name, '@user-named', '1']);
     return sendJson(res, 200, { ok: true, name });
   }
 
@@ -646,6 +815,10 @@ const server = http.createServer(async (req, res) => {
     const r = await tmux(['kill-session', '-t', '=' + name]);
     if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
     return sendJson(res, 200, { ok: true });
+  }
+
+  if (url === '/api/bugs') {
+    return handleBugs(req, res);
   }
 
   if (url.startsWith('/api/fs/')) {

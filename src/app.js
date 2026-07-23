@@ -1890,12 +1890,332 @@ upBtn.addEventListener('click', () => {
   else upRefresh(true);                            // aktuell/Fehler: neu pruefen
 });
 
+// ---------------------------------------------------------------- Bugtracker
+// Kaefer-Icon in der Sidebar oeffnet ein Overlay mit einer schlanken Bug-Liste.
+// Backend: GitHub Issues des Projekt-Repos (/api/bugs). "Nur GitHub" — ohne
+// funktionierendes gh liefert der Server 503; dann zeigen wir statt einer Liste
+// einen klaren Einrichtungs-Hinweis (kein stiller lokaler Speicher). Jede Mutation
+// gibt die komplette Liste zurueck, damit Liste + Badge in einem Roundtrip stimmen.
+const bugBtn = document.getElementById('bug-btn');
+const bugBadge = document.getElementById('bug-badge');
+const bugOverlay = document.getElementById('bug-overlay');
+const bugListEl = document.getElementById('bug-list');
+const bugEmptyEl = document.getElementById('bug-empty');
+const bugForm = document.getElementById('bug-form');
+const bugTitleEl = document.getElementById('bug-title');
+const bugBodyEl = document.getElementById('bug-body');
+const bugRepoEl = document.getElementById('bug-repo');
+let bugs = [];
+let bugRepo = null;
+let bugError = null; // { error, detail } wenn GitHub nicht verfuegbar
+
+function bugFmtDate(ms) {
+  if (!ms) return '';
+  try {
+    return new Date(ms).toLocaleString('de-DE', {
+      day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return ''; }
+}
+
+// Der serverseitig angehaengte Herkunfts-Stempel ("\n\n---\n_via webterm …_")
+// gehoert nicht in die kompakte Listenansicht — nur der eigentliche Text.
+function bugDisplayBody(body) {
+  return (body || '').split('\n\n---\n')[0].trim();
+}
+
+function setBugRepo(repo) {
+  if (repo) bugRepo = repo;
+  if (bugRepo) {
+    bugRepoEl.textContent = bugRepo;
+    bugRepoEl.href = `https://github.com/${bugRepo}/issues`;
+    bugRepoEl.hidden = false;
+  } else {
+    bugRepoEl.hidden = true;
+  }
+}
+
+function updateBugBadge() {
+  if (bugError) {
+    bugBadge.hidden = true;
+    bugBtn.classList.remove('has-open');
+    bugBtn.classList.add('err');
+    bugBtn.title = 'Bugtracker: ' + bugError.error;
+    return;
+  }
+  bugBtn.classList.remove('err');
+  const open = bugs.filter((b) => !b.done).length;
+  bugBadge.textContent = String(open);
+  bugBadge.hidden = open === 0;
+  bugBtn.classList.toggle('has-open', open > 0);
+  bugBtn.title = open > 0 ? `Bugtracker – ${open} offen` : 'Bugtracker';
+}
+
+function setBugs(list, repo) {
+  bugError = null;
+  setBugRepo(repo);
+  bugs = Array.isArray(list) ? list : [];
+  updateBugBadge();
+  if (!bugOverlay.hidden) renderBugs();
+}
+
+function setBugError(err) {
+  bugError = err || { error: 'Bugtracker nicht erreichbar' };
+  if (err && err.repo) setBugRepo(err.repo);
+  bugs = [];
+  updateBugBadge();
+  if (!bugOverlay.hidden) renderBugs();
+}
+
+function renderBugError() {
+  bugEmptyEl.hidden = true;
+  const box = document.createElement('div');
+  box.className = 'bug-error';
+  const h = document.createElement('div');
+  h.className = 'bug-error-h';
+  h.textContent = 'GitHub-Bugtracker nicht verfügbar';
+  const p = document.createElement('div');
+  p.className = 'bug-error-p';
+  p.textContent = bugError.error;
+  box.append(h, p);
+  // Einrichtungs-Tipp: bei privatem Repo braucht jede Installation einen eigenen
+  // GitHub-Login mit Repo-Zugriff.
+  const tip = document.createElement('div');
+  tip.className = 'bug-error-tip';
+  tip.append(document.createTextNode('Einrichten (einmalig): '));
+  const code = document.createElement('code');
+  code.textContent = 'gh auth login';
+  tip.append(code);
+  if (bugRepo) tip.append(document.createTextNode(` — mit Zugriff auf ${bugRepo}.`));
+  box.append(tip);
+  if (bugError.detail) {
+    const det = document.createElement('details');
+    det.className = 'bug-error-det';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Details';
+    const pre = document.createElement('pre');
+    pre.textContent = bugError.detail;
+    det.append(sum, pre);
+    box.append(det);
+  }
+  bugListEl.append(box);
+}
+
+function renderBugs() {
+  bugListEl.replaceChildren();
+  if (bugError) { renderBugError(); return; }
+  if (!bugs.length) { bugEmptyEl.hidden = false; return; }
+  bugEmptyEl.hidden = true;
+  // Offene zuerst (neueste oben), erledigte darunter.
+  const sorted = [...bugs].sort((a, b) =>
+    (a.done === b.done ? (b.created || 0) - (a.created || 0) : (a.done ? 1 : -1)));
+  const frag = document.createDocumentFragment();
+  for (const b of sorted) {
+    const item = document.createElement('div');
+    item.className = 'bug-item' + (b.done ? ' done' : '');
+
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'bug-check';
+    check.checked = !!b.done;
+    check.title = b.done ? 'Wieder öffnen (Issue reopen)' : 'Als erledigt markieren (Issue schließen)';
+    check.addEventListener('change', () => toggleBug(b.id, check.checked));
+
+    const main = document.createElement('div');
+    main.className = 'bug-main';
+    const title = document.createElement('div');
+    title.className = 'bug-item-title';
+    title.textContent = b.title;
+    main.append(title);
+    const displayBody = bugDisplayBody(b.body);
+    if (displayBody) {
+      const body = document.createElement('div');
+      body.className = 'bug-item-body';
+      body.textContent = displayBody;
+      main.append(body);
+    }
+    const meta = document.createElement('div');
+    meta.className = 'bug-item-meta';
+    if (b.url) {
+      const num = document.createElement('a');
+      num.className = 'bug-num';
+      num.href = b.url;
+      num.target = '_blank';
+      num.rel = 'noopener noreferrer';
+      num.textContent = '#' + b.number;
+      num.title = 'Auf GitHub öffnen';
+      meta.append(num);
+    }
+    const rest = document.createElement('span');
+    rest.textContent = (b.author ? ` · ${b.author}` : '') + (b.created ? ` · ${bugFmtDate(b.created)}` : '');
+    meta.append(rest);
+    main.append(meta);
+
+    item.append(check, main);
+    frag.append(item);
+  }
+  bugListEl.append(frag);
+}
+
+async function loadBugs() {
+  try {
+    const r = await fetch(`${BASE}api/bugs`);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { setBugError(data); return; }
+    setBugs(data.bugs, data.repo);
+  } catch {
+    setBugError({ error: 'Bugtracker nicht erreichbar (Backend?).' });
+  }
+}
+
+async function addBug() {
+  const title = bugTitleEl.value.trim();
+  if (!title) { bugTitleEl.focus(); return; }
+  const body = bugBodyEl.value.trim();
+  const btn = document.getElementById('bug-add');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${BASE}api/bugs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Anlegen fehlgeschlagen');
+    bugTitleEl.value = '';
+    bugBodyEl.value = '';
+    setBugs(data.bugs, data.repo);
+    bugTitleEl.focus();
+  } catch (e) {
+    setStatus(String(e.message || e), true, 5000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function toggleBug(id, done) {
+  try {
+    const r = await fetch(`${BASE}api/bugs?id=${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ done }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Aktualisieren fehlgeschlagen');
+    setBugs(data.bugs, data.repo);
+  } catch (e) {
+    setStatus(String(e.message || e), true, 5000);
+    loadBugs(); // Server-Wahrheit zuruecksynchronisieren (Checkbox war optimistisch)
+  }
+}
+
+function openBugs() {
+  bugOverlay.hidden = false;
+  renderBugs();
+  loadBugs();          // frischen Stand von GitHub nachladen
+  bugTitleEl.focus();
+}
+function closeBugs() { bugOverlay.hidden = true; }
+
+bugBtn.addEventListener('click', openBugs);
+document.getElementById('bug-close').addEventListener('click', closeBugs);
+bugOverlay.addEventListener('click', (e) => { if (e.target === bugOverlay) closeBugs(); });
+bugForm.addEventListener('submit', (e) => { e.preventDefault(); addBug(); });
+// Eingaben nicht ans Terminal/globale Shortcuts durchreichen. Enter im Titel
+// legt an; in der Textarea nur mit Strg/Cmd+Enter (sonst normaler Zeilenumbruch).
+bugTitleEl.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); addBug(); }
+});
+bugBodyEl.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addBug(); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !bugOverlay.hidden) { e.stopPropagation(); closeBugs(); }
+}, true); // Capture: vor dem Copy-Mode-Esc-Handler
+
+// ------------------------------------------- Spaltenbreiten (Sidebar/Explorer)
+// Beide Randspalten sind per Maus ziehbar. Die Breiten leben als CSS-Custom-
+// Properties auf .app; der Ziehgriff (.col-resizer) ist nur eine transparente
+// Greifzone ueber der 1px-Border — die Trennlinie bleibt 1px (siehe styles.css).
+// Die ResizeObserver auf .work fittet das Terminal beim Ziehen automatisch nach.
+const sidebarEl = document.querySelector('.sidebar');
+const COL = {
+  sidebar:  { min: 200, max: 560, key: 'term-sidebar-w',  varName: '--sidebar-w' },
+  explorer: { min: 220, max: 680, key: 'term-explorer-w', varName: '--explorer-w' },
+};
+const WORK_MIN = 320; // Terminalspalte nie schmaler als das
+
+// Sichtbare Breite der jeweils anderen Randspalte (0, falls Explorer eingeklappt).
+function otherColWidth(which) {
+  return which === 'sidebar' ? explorerEl.offsetWidth : sidebarEl.offsetWidth;
+}
+function clampCol(which, w) {
+  const c = COL[which];
+  const hardMax = Math.min(c.max, window.innerWidth - otherColWidth(which) - WORK_MIN);
+  return Math.round(Math.max(c.min, Math.min(w, Math.max(c.min, hardMax))));
+}
+function setCol(which, w) { appEl.style.setProperty(COL[which].varName, w + 'px'); }
+
+function loadColWidths() {
+  for (const which of ['sidebar', 'explorer']) {
+    const raw = parseInt(localStorage.getItem(COL[which].key), 10);
+    if (Number.isFinite(raw)) setCol(which, clampCol(which, raw));
+  }
+}
+
+function beginColResize(which, ev) {
+  ev.preventDefault();
+  const c = COL[which];
+  const grip = ev.currentTarget;
+  grip.classList.add('active');
+  document.body.classList.add('col-resizing');
+  try { grip.setPointerCapture(ev.pointerId); } catch {}
+  let latest = null;
+  const move = (e) => {
+    const raw = which === 'sidebar' ? e.clientX : (window.innerWidth - e.clientX);
+    latest = clampCol(which, raw);
+    setCol(which, latest);
+  };
+  const end = () => {
+    grip.classList.remove('active');
+    document.body.classList.remove('col-resizing');
+    grip.removeEventListener('pointermove', move);
+    grip.removeEventListener('pointerup', end);
+    grip.removeEventListener('pointercancel', end);
+    if (latest != null) localStorage.setItem(c.key, String(latest));
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+}
+
+// Doppelklick auf den Griff: zurueck auf die CSS-Standardbreite.
+function resetCol(which) {
+  appEl.style.removeProperty(COL[which].varName);
+  localStorage.removeItem(COL[which].key);
+}
+
+const sidebarGrip = document.getElementById('resize-sidebar');
+const explorerGrip = document.getElementById('resize-explorer');
+sidebarGrip?.addEventListener('pointerdown', (e) => beginColResize('sidebar', e));
+explorerGrip?.addEventListener('pointerdown', (e) => beginColResize('explorer', e));
+sidebarGrip?.addEventListener('dblclick', () => resetCol('sidebar'));
+explorerGrip?.addEventListener('dblclick', () => resetCol('explorer'));
+
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // term.martuni.de verdrahtet).
 const brandDim = document.querySelector('.brand-dim');
 if (brandDim && location.hostname) brandDim.textContent = '.' + location.hostname;
 if (location.hostname) document.title = 'term · ' + location.hostname;
+// Voller Name als Tooltip — sichtbar wird er ggf. abgeschnitten (Icons rechts).
+const brandNameEl = document.querySelector('.brand-name');
+if (brandNameEl) brandNameEl.title = brandNameEl.textContent;
+
+// Gespeicherte Spaltenbreiten anwenden (vor dem ersten fitTerminal).
+loadColWidths();
 
 renderSidebar();
 refreshSessions();
@@ -1912,3 +2232,6 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) upRe
 
 // Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
 fxCollapse(window.innerWidth < 900);
+
+// Bugtracker: Badge/Liste initial laden (zeigt offene Eintraege am Kaefer-Icon).
+loadBugs();

@@ -100,15 +100,58 @@ body {
 }
 
 .app {
+  /* Sidebar- und Explorer-Breite sind per Maus ziehbar (siehe .col-resizer);
+     die Werte leben als Custom Properties, die das Frontend beim Ziehen setzt
+     und aus localStorage wiederherstellt. Default wie zuvor (Sidebar minimal
+     breiter, da jetzt ein Icon mehr in der Kopfzeile sitzt). */
+  --sidebar-w: 272px;
+  --explorer-w: 320px;
   display: grid;
-  grid-template-columns: 264px 1fr 320px;
+  grid-template-columns: var(--sidebar-w) 1fr var(--explorer-w);
   height: 100dvh;
 }
-.app.fx-collapsed { grid-template-columns: 264px 1fr 0; }
+.app.fx-collapsed { grid-template-columns: var(--sidebar-w) 1fr 0; }
 .app.fx-collapsed .explorer { display: none; }
+
+/* Spalten-Ziehgriffe (Breite von Sidebar/Explorer). WICHTIG: der Griff ist eine
+   rein transparente, etwas breitere Greifzone ueber der bestehenden 1px-Border —
+   die Trennlinie selbst bleibt 1px. Die Hover/Aktiv-Markierung ist ebenfalls nur
+   1px breit (::after, exakt Border-Staerke), lediglich eingefaerbt plus weichem
+   Schein per box-shadow. So wird die Linie durch das Ziehen NICHT dicker. */
+.col-resizer {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 9px;
+  z-index: 20;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+.col-resizer-sidebar { right: -4px; }   /* mittig ueber der rechten Sidebar-Border */
+.col-resizer-explorer { left: -4px; }   /* mittig ueber der linken Explorer-Border */
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 1px;                            /* == Border-Staerke -> kein Verdicken */
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.col-resizer:hover::after,
+.col-resizer.active::after {
+  background: var(--primary);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+/* Waehrend des Ziehens: globaler col-resize-Cursor, keine Textauswahl. */
+body.col-resizing, body.col-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
 
 /* ---------------------------------------------------------------- Sidebar */
 .sidebar {
+  position: relative; /* Anker fuer den Breiten-Ziehgriff am rechten Rand */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -127,6 +170,7 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .brand-mark {
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
   width: 28px; height: 28px;
@@ -135,10 +179,18 @@ body {
   background: color-mix(in oklab, var(--primary) 14%, transparent);
   border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);
 }
-.brand-name { font-weight: 650; }
+.brand-name {
+  font-weight: 650;
+  /* Langer Hostname (.brand-dim) darf die Icons rechts nicht rausschieben:
+     hier abschneiden statt umbrechen; der volle Name steht im title-Attribut. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .brand-dim { color: var(--muted-foreground); font-weight: 500; }
 .help-btn {
-  margin-left: auto;
+  flex: 0 0 auto;
   display: inline-grid;
   place-items: center;
   width: 22px; height: 22px;
@@ -153,11 +205,48 @@ body {
 }
 .help-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
 
+/* Bugtracker-Icon (Kaefer): links neben dem Update-Icon. Traegt margin-left:auto,
+   also den Beginn des rechten Icon-Clusters. Badge zeigt offene Eintraege. */
+.bug-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  padding: 0;
+  color: var(--muted-foreground);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.bug-btn:hover { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 40%, transparent); }
+.bug-btn.has-open { color: var(--primary); border-color: color-mix(in oklab, var(--primary) 35%, transparent); }
+.bug-badge {
+  position: absolute;
+  top: -5px; right: -6px;
+  min-width: 13px; height: 13px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-radius: 7px;
+  pointer-events: none;
+}
+.bug-badge[hidden] { display: none; } /* wie .up-badge: display:grid wuerde [hidden] schlagen */
+
 /* Self-Update-Icon: dezent wenn aktuell, pulsiert mit Zaehler wenn das Remote
    voraus ist, dreht waehrend Pruefung/Update-Lauf. */
 .up-btn {
+  flex: 0 0 auto;
   position: relative;
-  margin-left: auto; /* schiebt sich + Hilfe-Knopf nach rechts */
+  /* Kaefer-Icon (.bug-btn) traegt jetzt das margin-left:auto und schiebt den
+     ganzen rechten Cluster (Bug + Update + Hilfe) nach rechts. */
   display: inline-grid;
   place-items: center;
   width: 22px; height: 22px;
@@ -1008,10 +1097,10 @@ body {
   background: var(--scroll-thumb); border-radius: 999px;
 }
 
-/* Schmale Viewports: Sidebar etwas schmaler */
+/* Schmale Viewports: Standardbreiten kleiner. Nur die Defaults (Custom
+   Properties) — eine per Ziehen gesetzte Inline-Breite gewinnt weiterhin. */
 @media (max-width: 720px) {
-  .app { grid-template-columns: 200px 1fr 280px; }
-  .app.fx-collapsed { grid-template-columns: 200px 1fr 0; }
+  .app { --sidebar-w: 200px; --explorer-w: 280px; }
 }
 
 /* ---------------------------------------------------------------- Hilfe-Panel */
@@ -1099,6 +1188,200 @@ body {
 }
 .help-body::-webkit-scrollbar { width: 8px; }
 .help-body::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+
+/* ---------------------------------------------------------------- Bugtracker */
+.bug-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: oklch(0 0 0 / 0.45);
+  backdrop-filter: blur(2px);
+}
+.bug-overlay[hidden] { display: none; }
+.bug-card {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(82dvh, 760px);
+  background: var(--sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.bug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--border);
+}
+.bug-close {
+  display: inline-grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  font: inherit;
+  font-size: 17px; line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.bug-close:hover { background: var(--hover); color: var(--foreground); }
+
+.bug-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.bug-input, .bug-textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--foreground);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  outline: none;
+}
+.bug-textarea { resize: vertical; min-height: 38px; line-height: 1.5; font-family: inherit; }
+.bug-input:focus, .bug-textarea:focus { border-color: color-mix(in oklab, var(--primary) 45%, transparent); }
+.bug-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.bug-hint { font-size: 11px; color: var(--muted-foreground); }
+.bug-add {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.bug-add:hover { filter: brightness(1.06); }
+.bug-add:disabled { opacity: 0.5; cursor: default; }
+
+.bug-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 12px 14px;
+}
+.bug-list::-webkit-scrollbar { width: 8px; }
+.bug-list::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+.bug-empty { padding: 26px 18px; text-align: center; font-size: 12.5px; color: var(--muted-foreground); }
+.bug-empty[hidden] { display: none; }
+
+.bug-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.bug-item:last-child { border-bottom: none; }
+.bug-check {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  width: 16px; height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+.bug-main { flex: 1 1 auto; min-width: 0; }
+.bug-item-title {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+.bug-item-body {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bug-item-meta { margin-top: 4px; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.bug-item.done .bug-item-title { text-decoration: line-through; color: var(--muted-foreground); }
+.bug-item.done { opacity: 0.62; }
+.bug-del {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 24px; height: 24px;
+  font-size: 15px; line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.bug-del:hover { background: var(--hover); color: oklch(0.7 0.19 22); }
+
+/* GitHub-Modus: Repo-Link im Kopf, Issue-Nummer, Fehler-/Einrichtungshinweis */
+.bug-head-title { display: inline-flex; align-items: baseline; gap: 8px; }
+.bug-repo {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  letter-spacing: 0;
+}
+.bug-repo::before { content: "↗ "; opacity: 0.7; }
+.bug-repo:hover { color: var(--primary); text-decoration: underline; }
+.bug-repo[hidden] { display: none; }
+.bug-num {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+.bug-num:hover { text-decoration: underline; }
+
+/* Kaefer-Icon im Fehlerzustand (kein GitHub-Zugang): dezent, nicht alarmierend. */
+.bug-btn.err { color: var(--muted-foreground); border-color: var(--border); }
+
+.bug-error { padding: 16px 8px 8px; }
+.bug-error-h { font-size: 13px; font-weight: 650; color: oklch(0.72 0.15 55); }
+.bug-error-p { margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: var(--foreground); }
+.bug-error-tip { margin-top: 10px; font-size: 12px; color: var(--muted-foreground); }
+.bug-error-tip code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--foreground);
+  background: var(--hover);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.bug-error-det { margin-top: 10px; font-size: 11.5px; color: var(--muted-foreground); }
+.bug-error-det summary { cursor: pointer; }
+.bug-error-det pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--hover);
+  border-radius: var(--radius-sm);
+}
 
 /* Version-Skew-Warnung: fixierter Streifen oben mittig ("Backend veraltet —
    Deploy unvollstaendig?"). Amber-Ton, in Hell wie Dunkel gut lesbar. */

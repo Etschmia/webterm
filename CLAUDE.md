@@ -96,6 +96,30 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   wertet „Backend weg und mit neuer Version zurück" als Erfolgsende, wartet auf
   `/healthz` und lädt die Seite neu.
 
+## Bugtracker: GitHub Issues (kein lokaler Speicher)
+
+Das Käfer-Icon in der Sidebar (`/api/bugs` in `server.js`) hängt an den **GitHub-Issues
+des Projekt-Repos** — bewusst **kein** lokaler Speicher. So melden **alle** Installationen
+(martuni, csc, butlive, Marius' eigene …) in **dieselbe** Liste; jeder sieht die Bugs der
+anderen. Mapping: Anlegen → Issue erstellen; Erledigt-Häkchen → Issue schließen/öffnen;
+„Löschen" → **schließen** (die API kann Issues nur mit Admin-Recht hart löschen, ein
+normaler Collaborator nicht — deshalb kein Hard-Delete im UI).
+
+- **Repo**: automatisch aus `git remote get-url origin` abgeleitet (hier `Etschmia/webterm`);
+  überschreibbar per `BUGS_GITHUB_REPO=owner/repo`.
+- **Auth pro Installation über `gh`**: jede Installation muss **einmalig** `gh auth login`
+  mit Zugriff aufs (private) Repo machen; der Issue-Autor ist dann die meldende Person.
+  Alternativ nimmt gh `GH_TOKEN`/`GITHUB_TOKEN` aus der Umgebung. Das gh-Binary wird robust
+  aufgelöst (`GH_BIN` → `~/.local/bin/gh` → `/usr/local/bin` → `/usr/bin` → PATH), weil die
+  systemd-Unit `~/.local/bin` (wo hier node **und** gh liegen) evtl. nicht im PATH hat.
+- **Ohne Zugang „Nur GitHub"**: `/api/bugs` liefert **503** mit handlungsleitender Meldung
+  (nicht angemeldet → „`gh auth login` …"; kein Zugriff → „als Collaborator hinzufügen"),
+  und das Panel zeigt statt der Liste einen Einrichtungs-Hinweis — **nie** ein stiller
+  lokaler Fallback.
+- Jeder Issue-Text bekommt einen Herkunfts-Stempel `_via webterm · <host> · <user>_`
+  (nach dem Trenner `\n\n---\n`, da es keinen Login in der App gibt); das Frontend blendet
+  ihn in der Kompaktliste aus, GitHub zeigt ihn voll.
+
 ## ⚠️ Diese Instanz (butlive) hat KEIN globales node/npm — `vendor/node` benutzen
 
 Auf dieser Maschine ist bewusst **kein node/npm installiert**. Nebenan liegt `../but2-react`,
