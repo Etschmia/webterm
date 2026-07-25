@@ -263,6 +263,115 @@ const IMG_MIME = {
   '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
 };
 
+// --- Git-Status je Verzeichnis (Faerbung im Datei-Explorer) -----------------
+// Zwei Aufrufe: `rev-parse --show-prefix` (ist es ueberhaupt ein Repo, und wo
+// liegt das Verzeichnis relativ zur Repo-Wurzel?) und ein `status` im
+// Porcelain-v2-Format, das Branch UND Eintraege in einem Rutsch liefert.
+// Pfade sind dort immer relativ zur Repo-Wurzel — daher der Prefix-Abgleich.
+// Der Pathspec '.' begrenzt den Scan auf das angezeigte Verzeichnis; die
+// '# branch.*'-Kopfzeilen kommen trotzdem vollstaendig.
+const GIT_FS_TTL_MS = 1500;                 // deckt Bursts ab (mehrere Panels/Polls)
+const GIT_FS_CACHE_MAX = 40;
+const gitFsCache = new Map();               // abs -> { at, data }
+const GIT_NONE = { repo: false, branch: '', detached: false, ahead: 0, behind: 0, entries: {} };
+
+function gitIn(cwd, args) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => resolve(err ? null : stdout));
+  });
+}
+
+// Das n-te durch Leerzeichen getrennte Feld bis zum Zeilenende (Pfade duerfen
+// selbst Leerzeichen enthalten, deshalb kein split(' ')).
+function gitField(s, n) {
+  let i = 0;
+  for (let k = 0; k < n; k++) {
+    i = s.indexOf(' ', i);
+    if (i < 0) return '';
+    i++;
+  }
+  return s.slice(i);
+}
+
+// Ein Code je Eintrag: U Konflikt > D geloescht > A neu (staged) > R umbenannt
+// > M geaendert > ? unversioniert > ! ignoriert. Unterverzeichnisse erben den
+// hoechsten Code ihres Inhalts (wie in VS Code).
+const GIT_RANK = { U: 6, D: 5, A: 4, R: 3, M: 2, '?': 1, '!': 0 };
+
+function gitCodeFromXY(xy) {
+  const x = xy[0], y = xy[1];
+  if (x === 'D' || y === 'D') return 'D';
+  if (x === 'A') return 'A';
+  if (x === 'R' || x === 'C' || y === 'R' || y === 'C') return 'R';
+  return 'M';
+}
+
+function gitParseStatusV2(out, prefix) {
+  const info = { repo: true, branch: '', detached: false, ahead: 0, behind: 0, entries: {} };
+  const put = (p, code) => {
+    if (prefix && !p.startsWith(prefix)) return;
+    const rest = p.slice(prefix.length);
+    const name = rest.split('/')[0];
+    if (!name) return;
+    // 'ignoriert' gilt nur fuer den Eintrag selbst: eine einzelne ignorierte
+    // Datei in einem versionierten Ordner darf den Ordner nicht ausgrauen.
+    if (code === '!' && rest !== name && rest !== name + '/') return;
+    const cur = info.entries[name];
+    if (cur == null || GIT_RANK[code] > GIT_RANK[cur]) info.entries[name] = code;
+  };
+  const toks = out.split('\0');
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (!t) continue;
+    if (t.startsWith('# ')) {
+      if (t.startsWith('# branch.head ')) {
+        const v = t.slice(14).trim();
+        info.detached = v === '(detached)';
+        if (!info.detached) info.branch = v;
+      } else if (t.startsWith('# branch.oid ')) {
+        info.oid = t.slice(13).trim().slice(0, 7);
+      } else if (t.startsWith('# branch.ab ')) {
+        const m = t.slice(12).match(/\+(\d+)\s+-(\d+)/);
+        if (m) { info.ahead = +m[1]; info.behind = +m[2]; }
+      }
+      continue;
+    }
+    const kind = t[0];
+    if (kind === '?' || kind === '!') { put(t.slice(2), kind); continue; }
+    // 1/2 = getrackt (2 = umbenannt/kopiert, mit Original-Pfad im NAECHSTEN
+    // NUL-Feld), u = ungemergt. Der Pfad beginnt jeweils nach dem n-ten Feld.
+    if (kind === '1' || kind === '2' || kind === 'u') {
+      const p = gitField(t, kind === '1' ? 8 : kind === '2' ? 9 : 10);
+      if (p) put(p, kind === 'u' ? 'U' : gitCodeFromXY(t.slice(2, 4)));
+      if (kind === '2') i++;              // Original-Pfad ueberspringen
+    }
+  }
+  if (info.detached && info.oid) info.branch = info.oid;
+  return info;
+}
+
+async function gitDirStatus(abs) {
+  const hit = gitFsCache.get(abs);
+  if (hit && Date.now() - hit.at < GIT_FS_TTL_MS) return hit.data;
+
+  let data = GIT_NONE;
+  const prefixOut = await gitIn(abs, ['rev-parse', '--show-prefix']);
+  if (prefixOut != null) {
+    const prefix = prefixOut.split('\n')[0].trim();   // '' an der Repo-Wurzel
+    const status = await gitIn(abs, [
+      'status', '--porcelain=v2', '--branch', '-z',
+      '--untracked-files=normal', '--ignored=traditional', '--', '.',
+    ]);
+    // status kann scheitern (index.lock, Timeout, Riesen-Ausgabe) — dann bleibt
+    // es ein Repo, nur ohne Faerbung.
+    data = status == null ? { ...GIT_NONE, repo: true } : gitParseStatusV2(status, prefix);
+  }
+  if (gitFsCache.size >= GIT_FS_CACHE_MAX) gitFsCache.clear();
+  gitFsCache.set(abs, { at: Date.now(), data });
+  return data;
+}
+
 async function handleFs(req, res, route) {
   const u = new URL(req.url, 'http://localhost');
 
@@ -311,6 +420,14 @@ async function handleFs(req, res, route) {
     // Verzeichnisse zuerst, dann alphabetisch.
     entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1)));
     return sendJson(res, 200, { path: rel, entries });
+  }
+
+  // Git-Zustand des angezeigten Verzeichnisses -> { repo, branch, detached,
+  // ahead, behind, entries: { <name>: <code> } }. Bewusst ein EIGENER Endpunkt
+  // statt Teil von /list: `git status` kann in grossen Repos bummeln, die
+  // Dateiliste soll darauf nicht warten (das Frontend faerbt nachtraeglich).
+  if (route === '/api/fs/git' && req.method === 'GET') {
+    return sendJson(res, 200, await gitDirStatus(abs));
   }
 
   // Datei herunterladen (als Attachment).

@@ -43,6 +43,20 @@
   --syn-tag: #c2453a;
   --syn-heading: #2f6fb0;
   --syn-invalid: #c2453a;
+  /* Datei-Explorer: Icon-Farbrollen (Dateityp) und git-Status */
+  --ic-yellow: #a97e12;
+  --ic-blue: #2f6fb0;
+  --ic-orange: #c2691f;
+  --ic-green: #0f8a5f;
+  --ic-red: #c2453a;
+  --ic-purple: #7a4fc9;
+  --ic-cyan: #0e8b80;
+  --ic-gray: #8d8574;
+  --git-mod: #9c6b12;
+  --git-new: #1f8a55;
+  --git-del: #c2453a;
+  --git-ren: #2f6fb0;
+  --git-con: #c0392b;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
 }
@@ -84,6 +98,19 @@
   --syn-tag: #f2766b;
   --syn-heading: #8fccff;
   --syn-invalid: #ff8f84;
+  --ic-yellow: #e3c46b;
+  --ic-blue: #6fb0e8;
+  --ic-orange: #f0883e;
+  --ic-green: #35c692;
+  --ic-red: #ef8079;
+  --ic-purple: #c79bf0;
+  --ic-cyan: #39c5bb;
+  --ic-gray: #9a917f;
+  --git-mod: #e2c08d;
+  --git-new: #73c991;
+  --git-del: #f47067;
+  --git-ren: #8ab4f8;
+  --git-con: #ff9a76;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -760,9 +787,35 @@ body.col-resizing, body.col-resizing * {
   color: var(--muted-foreground);
   border-bottom: 1px solid var(--border);
 }
+.fx-crumbs-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .fx-crumb { cursor: pointer; padding: 1px 4px; border-radius: 5px; }
 .fx-crumb:hover { background: var(--hover); color: var(--foreground); }
 .fx-sep { opacity: 0.5; }
+/* Ausgecheckter Branch — rechtsbuendig gegenueber dem Verzeichnisnamen. */
+.fx-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 1px 6px 1px 5px;
+  max-width: 55%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: var(--panel-tint);
+}
+.fx-branch svg { flex: 0 0 auto; opacity: 0.75; }
+.fx-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-branch.detached { font-family: var(--font-mono); font-size: 10.5px; }
 
 .fx-list {
   flex: 1 1 auto;
@@ -802,6 +855,34 @@ body.col-resizing, body.col-resizing * {
 }
 .fx-item.dir .fx-name { font-weight: 550; }
 .fx-size { flex: 0 0 auto; font-size: 10.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+/* Dateityp-Farben der Icons (VS-Code-Anmutung); Ordner behalten var(--primary). */
+.fx-icon.ic-yellow { color: var(--ic-yellow); }
+.fx-icon.ic-blue { color: var(--ic-blue); }
+.fx-icon.ic-orange { color: var(--ic-orange); }
+.fx-icon.ic-green { color: var(--ic-green); }
+.fx-icon.ic-red { color: var(--ic-red); }
+.fx-icon.ic-purple { color: var(--ic-purple); }
+.fx-icon.ic-cyan { color: var(--ic-cyan); }
+.fx-icon.ic-gray { color: var(--ic-gray); }
+
+/* git-Status: Name eingefaerbt, dazu ein knappes Kuerzel vor der Groesse.
+   Ordner erben den hoechsten Status ihres Inhalts (wie in VS Code). */
+.fx-git {
+  flex: 0 0 auto;
+  width: 11px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: inherit;
+}
+.fx-item.g-mod .fx-name, .fx-item.g-mod .fx-git { color: var(--git-mod); }
+.fx-item.g-new .fx-name, .fx-item.g-new .fx-git { color: var(--git-new); }
+.fx-item.g-del .fx-name, .fx-item.g-del .fx-git { color: var(--git-del); }
+.fx-item.g-ren .fx-name, .fx-item.g-ren .fx-git { color: var(--git-ren); }
+.fx-item.g-con .fx-name, .fx-item.g-con .fx-git { color: var(--git-con); }
+.fx-item.g-del .fx-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.fx-item.g-ign { opacity: 0.45; }
 
 .fx-status {
   flex: 0 0 auto;

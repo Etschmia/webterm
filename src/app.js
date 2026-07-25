@@ -971,7 +971,7 @@ function renderLinks(urls) {
 let scanTimer = null;
 function scheduleScan() {
   clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => { renderLinks(extractLinks()); fxFollowCwd(false); }, 350);
+  scanTimer = setTimeout(() => { renderLinks(extractLinks()); fxFollowCwd(false); fxGitPoll(); }, 350);
 }
 
 // ---------------------------------------------------------------- Datei-Explorer
@@ -999,6 +999,111 @@ let fxCwd404Warned = false; // /api/fs/cwd 404 nur einmal ins Log schreiben (nic
 const ICON_DIR = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.6 4.2a1 1 0 0 1 1-1H6l1.3 1.5h6.1a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1z"/></svg>';
 const ICON_FILE = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h4.6l3 3V13.7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2.3A.5.5 0 0 1 4 1.8z"/><path d="M8.4 1.8v3.1h3"/></svg>';
 const ICON_UP = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V4M4.5 7.5 8 4l3.5 3.5"/></svg>';
+
+// ---- Datei-Icons nach Dateityp (VS-Code-/Seti-Anmutung) --------------------
+// Buchstaben-Glyphen fuer Sprachen, Formen fuer alles andere. Gezeichnet wird
+// durchweg in currentColor; die Farbe setzt eine Klasse am .fx-icon (CSS-Token
+// je Theme) — so bleibt hell wie dunkel lesbar. Alle Icons teilen dieselbe
+// 16er-Viewbox wie ICON_DIR/ICON_FILE, damit die Zeilen nicht springen.
+const fxSvg = (inner, w = 1.4) =>
+  `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const fxGlyph = (text, size = 9) =>
+  `<svg viewBox="0 0 16 16" width="15" height="15"><text x="8" y="8" text-anchor="middle" dominant-baseline="central" fill="currentColor" style="font:700 ${size}px var(--font-mono)">${text}</text></svg>`;
+
+const IC = {
+  // Konfiguration: Schieberegler statt Zahnrad — bei 15px deutlich besser
+  // lesbar (ein Zahnrad zerfaellt in dieser Groesse zum Sternchen).
+  gear: fxSvg('<path d="M2.4 5.2h11.2M2.4 10.8h11.2"/><circle cx="6" cy="5.2" r="1.8" fill="var(--sidebar)"/><circle cx="10.4" cy="10.8" r="1.8" fill="var(--sidebar)"/>', 1.35),
+  git: fxSvg('<path d="M8 1.5 14.5 8 8 14.5 1.5 8Z"/><path d="M6.3 6.3 9.4 9.4"/><circle cx="5.5" cy="5.5" r=".85"/><circle cx="10.2" cy="10.2" r=".85"/>', 1.2),
+  md: fxSvg('<path d="M8 2.6v7.3M4.9 6.8 8 9.9l3.1-3.1"/><path d="M3.4 13h9.2"/>', 1.6),
+  info: fxSvg('<circle cx="8" cy="8" r="6.1"/><path d="M8 7.3v3.6M8 5v.9"/>'),
+  image: fxSvg('<rect x="2" y="3.2" width="12" height="9.6" rx="1.5"/><circle cx="5.7" cy="6.5" r="1.1"/><path d="M2.4 11.6 6 8.6l2.3 1.9 2.1-1.7 3.2 2.8"/>', 1.3),
+  archive: fxSvg('<rect x="2.2" y="3" width="11.6" height="10" rx="1.4"/><path d="M2.2 6.3h11.6"/><path d="M6.7 9.3h2.6"/>', 1.3),
+  lock: fxSvg('<rect x="3.3" y="7" width="9.4" height="6.4" rx="1.4"/><path d="M5.7 7V5.5a2.3 2.3 0 0 1 4.6 0V7"/>', 1.3),
+  db: fxSvg('<ellipse cx="8" cy="3.9" rx="4.8" ry="1.9"/><path d="M3.2 3.9v8.2c0 1 2.2 1.9 4.8 1.9s4.8-.9 4.8-1.9V3.9"/><path d="M12.8 8c0 1-2.2 1.9-4.8 1.9S3.2 9 3.2 8"/>', 1.3),
+  text: fxSvg('<path d="M3.4 3.9h9.2M3.4 6.6h9.2M3.4 9.4h9.2M3.4 12.1h5.4"/>', 1.3),
+  table: fxSvg('<rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.3"/><path d="M2.2 6.4h11.6M6.3 6.4v6.4M10 3.2v9.6"/>', 1.3),
+  video: fxSvg('<rect x="1.9" y="3.6" width="12.2" height="8.8" rx="1.5"/><path d="M6.7 6.2 10.8 8l-4.1 1.8z" fill="currentColor"/>', 1.3),
+  audio: fxSvg('<path d="M6.2 11.2V4.1l6.1-1.3v7.1"/><circle cx="4.4" cy="11.3" r="1.8"/><circle cx="10.5" cy="9.9" r="1.8"/>', 1.3),
+  medal: fxSvg('<circle cx="8" cy="6.1" r="3.5"/><path d="M5.8 9.1 4.9 14 8 12.4 11.1 14l-.9-4.9"/>', 1.3),
+  box: fxSvg('<path d="M8 1.9 13.6 5v6L8 14.1 2.4 11V5z"/><path d="M2.4 5 8 8.1 13.6 5M8 8.1v6"/>', 1.3),
+  chip: fxSvg('<rect x="4.3" y="4.3" width="7.4" height="7.4" rx="1.2"/><path d="M6.4 2v2.3M9.6 2v2.3M6.4 11.7V14M9.6 11.7V14M2 6.4h2.3M2 9.6h2.3M11.7 6.4H14M11.7 9.6H14"/>', 1.2),
+};
+
+// Endung -> [Icon, Farbklasse]. Reihenfolge/Farben lehnen sich an VS Code an.
+const FX_EXT_ICON = {
+  js: [fxGlyph('JS'), 'ic-yellow'], mjs: [fxGlyph('JS'), 'ic-yellow'], cjs: [fxGlyph('JS'), 'ic-yellow'],
+  jsx: [fxGlyph('JS'), 'ic-cyan'], ts: [fxGlyph('TS'), 'ic-blue'], mts: [fxGlyph('TS'), 'ic-blue'],
+  cts: [fxGlyph('TS'), 'ic-blue'], tsx: [fxGlyph('TS'), 'ic-cyan'],
+  json: [fxGlyph('{}', 10), 'ic-yellow'], jsonc: [fxGlyph('{}', 10), 'ic-yellow'], json5: [fxGlyph('{}', 10), 'ic-yellow'],
+  md: [IC.md, 'ic-blue'], markdown: [IC.md, 'ic-blue'], mdx: [IC.md, 'ic-blue'],
+  html: [fxGlyph('&lt;&gt;', 8.5), 'ic-orange'], htm: [fxGlyph('&lt;&gt;', 8.5), 'ic-orange'],
+  xml: [fxGlyph('&lt;&gt;', 8.5), 'ic-green'], vue: [fxGlyph('V', 10), 'ic-green'],
+  svelte: [fxGlyph('S', 10), 'ic-orange'], astro: [fxGlyph('A', 10), 'ic-purple'],
+  css: [fxGlyph('#', 11), 'ic-blue'], scss: [fxGlyph('#', 11), 'ic-purple'],
+  sass: [fxGlyph('#', 11), 'ic-purple'], less: [fxGlyph('#', 11), 'ic-blue'],
+  sh: [fxGlyph('$', 11), 'ic-green'], bash: [fxGlyph('$', 11), 'ic-green'],
+  zsh: [fxGlyph('$', 11), 'ic-green'], fish: [fxGlyph('$', 11), 'ic-green'],
+  py: [fxGlyph('PY'), 'ic-blue'], rb: [fxGlyph('RB'), 'ic-red'], go: [fxGlyph('GO'), 'ic-cyan'],
+  rs: [fxGlyph('RS'), 'ic-orange'], php: [fxGlyph('PHP', 6.5), 'ic-purple'],
+  java: [fxGlyph('JV'), 'ic-red'], kt: [fxGlyph('KT'), 'ic-purple'], swift: [fxGlyph('SW'), 'ic-orange'],
+  lua: [fxGlyph('LU'), 'ic-blue'], c: [fxGlyph('C', 10), 'ic-blue'], h: [fxGlyph('H', 10), 'ic-purple'],
+  cpp: [fxGlyph('C+'), 'ic-blue'], cc: [fxGlyph('C+'), 'ic-blue'], cxx: [fxGlyph('C+'), 'ic-blue'],
+  hpp: [fxGlyph('H+'), 'ic-purple'], cs: [fxGlyph('C#'), 'ic-purple'],
+  sql: [IC.db, 'ic-blue'], db: [IC.db, 'ic-blue'], sqlite: [IC.db, 'ic-blue'], sqlite3: [IC.db, 'ic-blue'],
+  yml: [IC.gear, 'ic-gray'], yaml: [IC.gear, 'ic-gray'], toml: [IC.gear, 'ic-gray'],
+  ini: [IC.gear, 'ic-gray'], conf: [IC.gear, 'ic-gray'], cfg: [IC.gear, 'ic-gray'],
+  env: [IC.gear, 'ic-gray'], properties: [IC.gear, 'ic-gray'], service: [IC.gear, 'ic-gray'],
+  txt: [IC.text, 'ic-gray'], log: [IC.text, 'ic-gray'], text: [IC.text, 'ic-gray'],
+  csv: [IC.table, 'ic-green'], tsv: [IC.table, 'ic-green'], xls: [IC.table, 'ic-green'],
+  xlsx: [IC.table, 'ic-green'], ods: [IC.table, 'ic-green'],
+  pdf: [ICON_FILE, 'ic-red'], doc: [ICON_FILE, 'ic-blue'], docx: [ICON_FILE, 'ic-blue'],
+  odt: [ICON_FILE, 'ic-blue'], rtf: [ICON_FILE, 'ic-blue'],
+  ppt: [ICON_FILE, 'ic-orange'], pptx: [ICON_FILE, 'ic-orange'],
+  zip: [IC.archive, 'ic-orange'], tar: [IC.archive, 'ic-orange'], gz: [IC.archive, 'ic-orange'],
+  tgz: [IC.archive, 'ic-orange'], bz2: [IC.archive, 'ic-orange'], xz: [IC.archive, 'ic-orange'],
+  zst: [IC.archive, 'ic-orange'], '7z': [IC.archive, 'ic-orange'], rar: [IC.archive, 'ic-orange'],
+  png: [IC.image, 'ic-purple'], jpg: [IC.image, 'ic-purple'], jpeg: [IC.image, 'ic-purple'],
+  gif: [IC.image, 'ic-purple'], webp: [IC.image, 'ic-purple'], avif: [IC.image, 'ic-purple'],
+  bmp: [IC.image, 'ic-purple'], ico: [IC.image, 'ic-purple'], svg: [IC.image, 'ic-yellow'],
+  mp4: [IC.video, 'ic-purple'], mkv: [IC.video, 'ic-purple'], mov: [IC.video, 'ic-purple'],
+  avi: [IC.video, 'ic-purple'], webm: [IC.video, 'ic-purple'],
+  mp3: [IC.audio, 'ic-cyan'], wav: [IC.audio, 'ic-cyan'], flac: [IC.audio, 'ic-cyan'],
+  ogg: [IC.audio, 'ic-cyan'], m4a: [IC.audio, 'ic-cyan'], aac: [IC.audio, 'ic-cyan'],
+  ttf: [fxGlyph('A', 10), 'ic-red'], otf: [fxGlyph('A', 10), 'ic-red'],
+  woff: [fxGlyph('A', 10), 'ic-red'], woff2: [fxGlyph('A', 10), 'ic-red'],
+  lock: [IC.lock, 'ic-gray'], pem: [IC.lock, 'ic-yellow'], key: [IC.lock, 'ic-yellow'],
+  crt: [IC.lock, 'ic-yellow'], cer: [IC.lock, 'ic-yellow'], pub: [IC.lock, 'ic-yellow'],
+  exe: [IC.chip, 'ic-gray'], bin: [IC.chip, 'ic-gray'], so: [IC.chip, 'ic-gray'],
+  dll: [IC.chip, 'ic-gray'], deb: [IC.box, 'ic-red'], rpm: [IC.box, 'ic-red'],
+  appimage: [IC.box, 'ic-gray'], patch: [IC.git, 'ic-orange'], diff: [IC.git, 'ic-orange'],
+};
+
+// Ganze Dateinamen, die ihre Endung schlagen (bzw. gar keine haben).
+const FX_NAME_ICON = {
+  dockerfile: [IC.box, 'ic-blue'], '.dockerignore': [IC.box, 'ic-blue'],
+  makefile: [IC.gear, 'ic-orange'], 'cmakelists.txt': [IC.gear, 'ic-orange'],
+  license: [IC.medal, 'ic-yellow'], licence: [IC.medal, 'ic-yellow'], copying: [IC.medal, 'ic-yellow'],
+  '.editorconfig': [IC.gear, 'ic-gray'], '.npmrc': [IC.gear, 'ic-red'], '.nvmrc': [IC.gear, 'ic-green'],
+};
+
+// Icon + Farbklasse einer Datei bestimmen: erst ganzer Name, dann Sonderfaelle
+// (README, .git*, .env.*), zuletzt die Endung.
+function fxFileIcon(name) {
+  const lower = name.toLowerCase();
+  const exact = FX_NAME_ICON[lower];
+  if (exact) return { svg: exact[0], cls: exact[1] };
+  if (lower === 'readme' || lower.startsWith('readme.')) return { svg: IC.info, cls: 'ic-blue' };
+  if (lower.startsWith('.git')) return { svg: IC.git, cls: 'ic-orange' };
+  if (lower === '.env' || lower.startsWith('.env.')) return { svg: IC.gear, cls: 'ic-yellow' };
+  if (lower.startsWith('.bash') || lower.startsWith('.zsh') || lower.startsWith('.profile')) {
+    return { svg: fxGlyph('$', 11), cls: 'ic-green' };
+  }
+  const dot = lower.lastIndexOf('.');
+  const ext = dot > 0 ? lower.slice(dot + 1) : '';
+  const hit = FX_EXT_ICON[ext];
+  return hit ? { svg: hit[0], cls: hit[1] } : { svg: ICON_FILE, cls: '' };
+}
 
 // Hover-Vorschau fuer Bilddateien: schwebendes, dem Cursor folgendes <img>.
 const IMG_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
@@ -1088,6 +1193,100 @@ function fxHideDocPreview() {
   fxDocEl.hidden = true;
 }
 
+// ---- Git-Status: Faerbung der Eintraege + Branch in der Pfadzeile ----------
+// Der Status kommt aus einem eigenen Endpunkt (/api/fs/git), damit die Liste
+// nicht auf `git status` wartet; sie wird nachtraeglich eingefaerbt. Der
+// zuletzt geholte Stand haengt am Pfad, damit ein Re-Render (Sortwechsel) die
+// Farben ohne neuen Fetch wieder auftraegt.
+const ICON_BRANCH = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="5.6" r="1.7"/><path d="M11.4 7.3c0 2.4-1.9 3.2-4 3.6M4.6 5.1v5.8"/></svg>';
+// Code -> [Kuerzel in der Liste, Klasse, Tooltip]. '!' (ignoriert) bekommt kein
+// Kuerzel, nur die gedaempfte Darstellung.
+const FX_GIT_META = {
+  M: ['M', 'g-mod', 'geändert'],
+  A: ['A', 'g-new', 'neu (vorgemerkt)'],
+  D: ['D', 'g-del', 'gelöscht'],
+  R: ['R', 'g-ren', 'umbenannt'],
+  U: ['C', 'g-con', 'Konflikt'],
+  '?': ['U', 'g-new', 'nicht versioniert'],
+  '!': ['', 'g-ign', 'von git ignoriert'],
+};
+const FX_GIT_CLASSES = ['g-mod', 'g-new', 'g-del', 'g-ren', 'g-con', 'g-ign'];
+const FX_GIT_MIN_MS = 5000;               // Poll-Bremse fuer die Terminal-Ausgabe
+let fxGit = { path: null, repo: false, branch: '', entries: {} };
+let fxGitToken = 0;
+let fxGitAt = 0;
+let fxGit404Warned = false;
+
+async function fxLoadGit(rel) {
+  const token = ++fxGitToken;
+  fxGitAt = Date.now();
+  let data = null;
+  try {
+    const r = await fetch(`${BASE}api/fs/git?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    if (r.ok) data = await r.json();
+    else if (r.status === 404 && !fxGit404Warned) {
+      fxGit404Warned = true;
+      console.warn('[term] /api/fs/git -> 404: Backend kennt den Endpunkt nicht — keine git-Faerbung. Deploy unvollständig? (Backend-Restart nötig)');
+    }
+  } catch {}
+  if (token !== fxGitToken || rel !== fxPath) return;   // Verzeichnis inzwischen gewechselt
+  fxGit = { path: rel, repo: false, branch: '', entries: {}, ...(data || {}) };
+  fxApplyGit();
+  fxRenderBranch();
+}
+
+// Nach Terminal-Ausgabe nachfassen (commit/checkout im Terminal soll sichtbar
+// werden), aber gedrosselt — `git status` ist in grossen Repos nicht gratis.
+function fxGitPoll() {
+  if (appEl.classList.contains('fx-collapsed')) return;
+  if (Date.now() - fxGitAt < FX_GIT_MIN_MS) return;
+  fxLoadGit(fxPath);
+}
+
+function fxApplyGit() {
+  const map = fxGit.path === fxPath && fxGit.repo ? (fxGit.entries || {}) : {};
+  for (const el of fxListEl.children) {
+    const name = el.dataset.name || '';
+    let code = map[name];
+    // Ein Ordner erbt 'geloescht' nur von seinem Inhalt — er selbst ist ja noch
+    // da; durchgestrichen/rot waere irrefuehrend, also als 'geaendert' zeigen.
+    if (code === 'D' && el.classList.contains('dir')) code = 'M';
+    const meta = FX_GIT_META[code];
+    el.classList.remove(...FX_GIT_CLASSES);
+    const old = el.querySelector('.fx-git');
+    if (old) old.remove();
+    const nameEl = el.querySelector('.fx-name');
+    if (nameEl) nameEl.title = meta ? `${name} — ${meta[2]}` : name;
+    if (!meta) continue;
+    el.classList.add(meta[1]);
+    if (!meta[0]) continue;
+    const badge = document.createElement('span');
+    badge.className = 'fx-git';
+    badge.textContent = meta[0];
+    el.insertBefore(badge, el.querySelector('.fx-size'));   // vor der Groesse, sonst ans Ende
+  }
+}
+
+function fxRenderBranch() {
+  const old = fxCrumbsEl.querySelector('.fx-branch');
+  if (old) old.remove();
+  if (fxGit.path !== fxPath || !fxGit.repo || !fxGit.branch) return;
+  const el = document.createElement('span');
+  el.className = 'fx-branch';
+  el.innerHTML = ICON_BRANCH;
+  const name = document.createElement('span');
+  name.className = 'fx-branch-name';
+  name.textContent = fxGit.branch;
+  el.append(name);
+  const ab = [];
+  if (fxGit.ahead) ab.push(`${fxGit.ahead} voraus`);
+  if (fxGit.behind) ab.push(`${fxGit.behind} zurück`);
+  el.title = (fxGit.detached ? 'Abgekoppelter HEAD: ' : 'Branch: ') + fxGit.branch
+    + (ab.length ? ` (${ab.join(', ')})` : '');
+  if (fxGit.detached) el.classList.add('detached');
+  fxCrumbsEl.append(el);
+}
+
 function fxSetStatus(text, isErr) {
   if (!text) { fxStatusEl.hidden = true; return; }
   fxStatusEl.hidden = false;
@@ -1128,6 +1327,7 @@ async function fxLoad(rel) {
   fxSetStatus(null);
   fxRenderCrumbs();
   fxRenderList(fxEntries);
+  fxLoadGit(fxPath);
 }
 
 // ---- Sortierung: Buttons unterhalb der Kopfzeile. Ordner bleiben immer vor
@@ -1196,8 +1396,11 @@ async function fxFollowCwd(force) {
   if (typeof data.path === 'string' && data.path !== fxPath) fxLoad(data.path);
 }
 
+// Pfadzeile: links die Krumen, rechtsbuendig der ausgecheckte Branch (den
+// haengt fxRenderBranch an, sobald /api/fs/git geantwortet hat).
 function fxRenderCrumbs() {
-  fxCrumbsEl.replaceChildren();
+  const pathEl = document.createElement('span');
+  pathEl.className = 'fx-crumbs-path';
   const mk = (label, target) => {
     const c = document.createElement('span');
     c.className = 'fx-crumb';
@@ -1205,13 +1408,15 @@ function fxRenderCrumbs() {
     c.addEventListener('click', () => fxLoad(target));
     return c;
   };
-  fxCrumbsEl.append(mk('~', ''));
+  pathEl.append(mk('~', ''));
   let acc = '';
   for (const part of (fxPath ? fxPath.split('/').filter(Boolean) : [])) {
     acc = acc ? acc + '/' + part : part;
     const sep = document.createElement('span'); sep.className = 'fx-sep'; sep.textContent = '/';
-    fxCrumbsEl.append(sep, mk(part, acc));
+    pathEl.append(sep, mk(part, acc));
   }
+  fxCrumbsEl.replaceChildren(pathEl);
+  fxRenderBranch();   // bereits bekannter Stand (gleicher Pfad) sofort wieder anzeigen
 }
 
 function fxRenderList(entries) {
@@ -1219,7 +1424,7 @@ function fxRenderList(entries) {
   fxHideDocPreview();
   fxListEl.replaceChildren();
   if (fxPath) {
-    fxListEl.append(fxItem({ name: '..', type: 'dir' }, ICON_UP, () => {
+    fxListEl.append(fxItem({ name: '..', type: 'dir' }, { svg: ICON_UP }, () => {
       const parts = fxPath.split('/').filter(Boolean); parts.pop();
       fxLoad(parts.join('/'));
     }));
@@ -1236,7 +1441,8 @@ function fxRenderList(entries) {
     const docPreview = (!isImg && e.type === 'file' && DOC_PREVIEW_RE.test(e.name))
       ? { rel: child, name: e.name, size: e.size }
       : null;
-    const item = fxItem(e, e.type === 'dir' ? ICON_DIR : ICON_FILE, onClick, previewUrl, docPreview);
+    const icon = e.type === 'dir' ? { svg: ICON_DIR } : fxFileIcon(e.name);
+    const item = fxItem(e, icon, onClick, previewUrl, docPreview);
     // Kontextmenue fuer Dateien: Bearbeiten (Textdateien) + Vorschau (md/html) + Herunterladen.
     if (e.type === 'file') {
       item.addEventListener('contextmenu', (ev) => {
@@ -1255,14 +1461,16 @@ function fxRenderList(entries) {
     }
     fxListEl.append(item);
   }
+  fxApplyGit();   // bekannter git-Stand (Re-Render bei Sortwechsel) sofort auftragen
 }
 
-function fxItem(e, iconSvg, onClick, previewUrl, docPreview) {
+function fxItem(e, iconDef, onClick, previewUrl, docPreview) {
   const el = document.createElement('div');
   el.className = 'fx-item ' + (e.type === 'dir' ? 'dir' : 'file');
+  el.dataset.name = e.name;
   const icon = document.createElement('span');
-  icon.className = 'fx-icon';
-  icon.innerHTML = iconSvg;
+  icon.className = 'fx-icon' + (iconDef.cls ? ' ' + iconDef.cls : '');
+  icon.innerHTML = iconDef.svg;
   const name = document.createElement('span');
   name.className = 'fx-name';
   name.textContent = e.name;
