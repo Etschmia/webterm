@@ -477,10 +477,31 @@ function cleanTitle(t) {
 // den Session-Namen zurueck, wenn der Titel nur ein Shell-Default ist
 // (leer, = laufendes Kommando wie "bash", ein "user@host"-Prompt-Titel oder der
 // blanke Maschinen-Hostname, den tmux als pane_title-Default setzt).
+// Verzeichnisname (Basename) des Pane-Arbeitsverzeichnisses, '' wenn unbekannt.
+function sessionDir(s) {
+  const p = (s.path || '').replace(/\/+$/, '');
+  return p ? p.split('/').pop() : '';
+}
+
+// Frisch gestartetes Claude setzt als pane_title generisch "Claude Code" —
+// in der Sidebar sehen dann alle Claude-Sessions gleich aus. Erst spaeter
+// ersetzt Claude den Titel durch den Aufgabentext.
+function isGenericClaudeTitle(clean) {
+  return /^claude code$/i.test(clean);
+}
+
 function sessionLabel(s) {
   // Vom Nutzer vergebener Name (Inline-Edit) hat Vorrang vor dem pane_title.
   if (s.userNamed) return s.name;
   const clean = cleanTitle(s.title);
+  // Generisches "Claude Code": Verzeichnis voranstellen und auf "Claude"
+  // kuerzen. Ist Claude beendet (der Titel bleibt als Leiche stehen), faellt
+  // das "Claude" weg und nur das Verzeichnis bleibt.
+  if (isGenericClaudeTitle(clean)) {
+    const dir = sessionDir(s);
+    if (s.claude) return dir ? `${dir} — Claude` : 'Claude';
+    return dir || s.name;
+  }
   const cmd = (s.command || '').toLowerCase();
   // Hostname-Default: gegen den vollen und den kurzen (bis zum ersten Punkt)
   // Namen pruefen — je nach System liefert der pane_title die eine oder andere Form.

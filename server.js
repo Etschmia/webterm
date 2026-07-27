@@ -105,29 +105,77 @@ function tmux(args) {
   });
 }
 
+// Namen aller tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein `claude`
+// laeuft. pane_current_command taugt dafuer nicht: hinter dem
+// claude-auto-retry-Wrapper meldet es 'bash'/'node'. Verlaesslich ist nur der
+// Prozessname comm=claude irgendwo im Baum unter dem Pane-PID (gleiche
+// Heuristik wie deploy/term-restart).
+async function claudeSessions() {
+  const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{session_name}']);
+  if (!panes.ok) return new Set();
+  const paneSession = new Map();
+  for (const line of panes.out.split('\n')) {
+    const [pid, session] = line.split('\t');
+    if (pid && session) paneSession.set(pid, session);
+  }
+  if (!paneSession.size) return new Set();
+
+  const ps = await new Promise((resolve) => {
+    execFile('ps', ['-e', '-o', 'pid=,ppid=,comm='], { timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : stdout);
+    });
+  });
+  const parent = new Map();
+  const claudePids = [];
+  for (const line of ps.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    if (!m) continue;
+    parent.set(m[1], m[2]);
+    if (m[3].trim() === 'claude') claudePids.push(m[1]);
+  }
+  const found = new Set();
+  for (const pid of claudePids) {
+    let x = pid;
+    for (let i = 0; i < 64 && x && x !== '0'; i++) {
+      const session = paneSession.get(x);
+      if (session) { found.add(session); break; }
+      x = parent.get(x);
+    }
+  }
+  return found;
+}
+
 // Liefert die aktuell laufenden tmux-Sessions als Array.
 async function listSessions() {
   // pane_title als LETZTES Feld: es kann Leerzeichen enthalten (Tabs sind in
   // Titeln unueblich), so bleibt das Splitten der Fixfelder stabil.
   const fmt = [
     '#{session_name}', '#{session_attached}', '#{session_windows}',
-    '#{pane_in_mode}', '#{pane_current_command}', '#{@user-named}', '#{pane_title}',
+    '#{pane_in_mode}', '#{pane_current_command}', '#{@user-named}',
+    '#{pane_current_path}', '#{pane_title}',
   ].join('\t');
-  const r = await tmux(['list-sessions', '-F', fmt]);
+  const [r, claude] = await Promise.all([
+    tmux(['list-sessions', '-F', fmt]),
+    claudeSessions(),
+  ]);
   if (!r.ok) return []; // kein tmux-Server -> leere Liste
   return r.out
     .split('\n')
     .filter(Boolean)
     .map((line) => {
       const parts = line.split('\t');
-      const [name, attached, windows, inMode, command, userNamed] = parts;
-      const title = parts.slice(6).join('\t'); // Rest = pane_title (robust ggü. Tabs)
+      const [name, attached, windows, inMode, command, userNamed, path] = parts;
+      const title = parts.slice(7).join('\t'); // Rest = pane_title (robust ggü. Tabs)
       return {
         name,
         attached: Number(attached) > 0,
         windows: Number(windows) || 0,
         copyMode: inMode === '1',
         command: command || '',
+        path: path || '',
+        // Laeuft in dieser Session gerade Claude? Steuert das Sidebar-Label
+        // ("<Verzeichnis> — Claude"), das nach dem Beenden wieder verschwindet.
+        claude: claude.has(name),
         // Vom Nutzer umbenannt (Session-Option @user-named): Sidebar zeigt
         // dann den Session-Namen statt des pane_title.
         userNamed: userNamed === '1',
