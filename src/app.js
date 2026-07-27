@@ -142,6 +142,36 @@ term.attachCustomKeyEventHandler((e) => {
     openSearch();
     return false;
   }
+  // Reload-Tasten dem Browser ueberlassen: 'false' heisst hier nur "xterm
+  // schickt nichts an die PTY", und wir rufen absichtlich KEIN preventDefault —
+  // so fuehrt Chrome sein Neuladen aus. Ohne das macht xterm aus Strg+F5 die
+  // Sequenz ESC[15;5~ und schreibt sie ins Terminal, statt neu zu laden.
+  // Strg+R bleibt unangetastet (Rueckwaertssuche der Shell).
+  if ((e.ctrlKey || e.metaKey) &&
+      (e.key === 'F5' || (e.shiftKey && (e.key === 'r' || e.key === 'R')))) {
+    return false;
+  }
+  // Paste-Tasten: xterm wuerde Strg+V zu ^V machen und die native Paste per
+  // preventDefault verwerfen (siehe pasteFromClipboard). Windows-Erwartung
+  // Strg+V, Linux-Konvention Strg+Umschalt+V und Umschalt+Einfg tun hier alle
+  // dasselbe. ^V selbst (bash quoted-insert) gibt es dafuer auf Strg+Alt+V —
+  // explizit, weil xterm diese Kombi unter Windows als AltGr deutet und gar
+  // kein Steuerzeichen mehr schickt.
+  if (e.ctrlKey && e.altKey && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    send({ t: 'input', d: '\x16' });
+    return false;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    pasteFromClipboard();
+    return false;
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === 'Insert') {
+    e.preventDefault();
+    pasteFromClipboard();
+    return false;
+  }
   if (e.key === 'F3' && !searchBar.hidden) {
     e.preventDefault();
     doSearch(e.shiftKey ? 'prev' : 'next', false);
@@ -417,6 +447,78 @@ document.addEventListener('paste', async (e) => {
     setStatus(err.message || 'Übertragung fehlgeschlagen', true);
   }
 }, true);
+
+// ------------------------------------------------------------- Text-Paste
+// Paste wird bewusst selbst bedient, statt xterm zu vertrauen:
+//  * Strg+V ist bei xterm KEIN Paste. evaluateKeyboardEvent bildet Ctrl+Buchstabe
+//    ausnahmslos auf das Steuerzeichen ab (V -> ^V/0x16) und _keyDown ruft danach
+//    cancel(ev) -> preventDefault(); die native Browser-Paste faellt damit weg.
+//    Unter Windows sieht das aus wie "Strg+V bewirkt nichts" (bash schluckt ^V
+//    als quoted-insert). Wir lesen daher die Zwischenablage selbst.
+//  * Beim Rechtsklick-Paste schiebt xterms rightClickHandler die versteckte
+//    Textarea unter den Cursor und legt die Auswahl hinein; ob Chrome danach ein
+//    vollstaendiges 'paste'-Event liefert oder nur ein 'input'-Event mit
+//    inputType 'insertFromPaste' (das xterm verwirft — es reagiert nur auf
+//    'insertText'), ist browserabhaengig. Wir nehmen das paste-Event in der
+//    Capture-Phase selbst ab, dann ist der Weg immer derselbe.
+// term.paste() setzt die Bracketed-Paste-Marker, wenn die Anwendung DECSET 2004
+// angefordert hat (Claude, vim) — mehrzeiliger Text loest dort also kein
+// zeilenweises Ausfuehren aus.
+function notePaste(n) {
+  setStatus(`${n} Zeichen eingefügt`);
+  setTimeout(() => {
+    if (statusEl.textContent === `${n} Zeichen eingefügt`) setStatus(null);
+  }, 1500);
+}
+
+function pasteText(text) {
+  if (!text) return;
+  if (!(ws && ws.readyState === WebSocket.OPEN)) { setStatus('Nicht verbunden', true); return; }
+  term.paste(text);
+  notePaste(text.length);
+}
+
+async function pasteFromClipboard() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    setStatus('Browser gibt die Zwischenablage nicht her — Rechtsklick → Einfügen nutzen', true, 6000);
+    return;
+  }
+  try {
+    pasteText(await navigator.clipboard.readText());
+  } catch {
+    // Kein Zugriff (Berechtigung abgelehnt oder kein sicherer Kontext).
+    setStatus('Zwischenablage nicht lesbar (Berechtigung?) — Rechtsklick → Einfügen nutzen', true, 8000);
+  }
+}
+
+// Reine Text-Paste (Rechtsklick → Einfügen, Strg+Umschalt+V des Browsers):
+// vor xterm abfangen. Die Bild-Paste oben hat Vorrang und ist schon behandelt.
+document.addEventListener('paste', (e) => {
+  if (copyMode) return;
+  if (!workEl.contains(e.target)) return;
+  if (imageFromClipboard(e)) return; // Bildpfad — eigener Handler oben
+  const text = e.clipboardData && e.clipboardData.getData('text/plain');
+  if (!text) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pasteText(text);
+}, true);
+
+// Rechtsklick nicht als Mausereignis an die Anwendung melden: bei aktivem
+// Mausmodus (tmux mit 'mouse on') faengt tmux den Rechtsklick ab und oeffnet
+// sein eigenes Menue (Pane teilen/wechseln) — der anschliessende Paste landet
+// dann im falschen Pane. Button 2 wird deshalb in der Capture-Phase gestoppt,
+// bevor xterms Maus-Reporting ihn sieht.
+// Das contextmenu-Event laeuft absichtlich weiter zu xterm: dort schiebt
+// rightClickHandler die versteckte Textarea unter den Cursor — nur deshalb
+// bietet Chrome im Menue ueberhaupt "Einfügen" an. Unter Firefox nutzt xterm
+// fuer denselben Zweck mousedown, dort wird also nicht gestoppt.
+const isFirefox = /firefox/i.test(navigator.userAgent);
+for (const type of ['mousedown', 'mouseup']) {
+  workEl.addEventListener(type, (e) => {
+    if (e.button === 2 && !isFirefox && !copyMode) e.stopPropagation();
+  }, true);
+}
 
 // ---------------------------------------------------------------- Sidebar
 const sessionsEl = document.getElementById('sessions');

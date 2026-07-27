@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import crypto from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, 'src');
@@ -62,6 +63,29 @@ function copyAssets() {
 }
 copyAssets();
 
+// Cache-Busting: die Asset-Verweise in public/index.html bekommen ein
+// ?v=<Inhalts-Hash>. Ohne das liefert der Browser nach einem Deploy weiter das
+// alte Bundle aus dem Cache — ein normaler Reload half dann nicht, und Strg+F5
+// erreicht den Browser im Terminal gar nicht (xterm macht daraus ESC[15;5~).
+// Der Hash aendert sich genau dann, wenn sich der Inhalt aendert; unveraenderte
+// Assets bleiben also gecacht (serveStatic liefert sie mit 'immutable' aus).
+function stampAssets() {
+  const htmlFile = path.join(PUBLIC, 'index.html');
+  const hash = (name) => {
+    try {
+      return crypto.createHash('sha1')
+        .update(fs.readFileSync(path.join(PUBLIC, name)))
+        .digest('base64url').slice(0, 12);
+    } catch { return null; }
+  };
+  let html = fs.readFileSync(htmlFile, 'utf8');
+  for (const name of ['xterm.css', 'styles.css', 'mdlite.css', 'app.bundle.js']) {
+    const h = hash(name);
+    if (h) html = html.replaceAll(`"${name}"`, `"${name}?v=${h}"`);
+  }
+  fs.writeFileSync(htmlFile, html);
+}
+
 const options = {
   entryPoints: [path.join(SRC, 'app.js')],
   bundle: true,
@@ -82,12 +106,14 @@ const options = {
 if (watch) {
   const ctx = await esbuild.context(options);
   await ctx.watch();
+  stampAssets();
   // index.html/styles.css ebenfalls beobachten
   for (const [from] of copies) {
-    if (from.startsWith(SRC)) fs.watch(from, () => { copyAssets(); console.log('copied assets'); });
+    if (from.startsWith(SRC)) fs.watch(from, () => { copyAssets(); stampAssets(); console.log('copied assets'); });
   }
   console.log('esbuild watching …');
 } else {
   await esbuild.build(options);
+  stampAssets(); // erst nach dem Bundle-Schreiben: der Hash soll das neue Bundle treffen
   console.log('build complete -> public/');
 }

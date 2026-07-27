@@ -10,6 +10,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -280,7 +281,28 @@ function serveStatic(req, res) {
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // Cache-Header sind hier Pflicht, nicht Kosmetik: ohne sie darf der Browser
+    // heuristisch cachen und liefert nach einem Deploy weiter das alte Bundle
+    // aus, ohne nachzufragen — ein normaler Reload half dann nicht, nur ein
+    // harter (und Strg+F5 kommt im Terminal gar nicht beim Browser an, xterm
+    // schickt daraus ESC[15;5~ an die PTY).
+    //   no-cache = darf gecacht werden, muss aber JEDES Mal revalidiert werden.
+    //   ETag     = Revalidierung endet dann meist in einem billigen 304.
+    // Assets mit ?v=<Hash> im Namen (siehe build.mjs) sind unveraenderlich und
+    // duerfen lange liegen bleiben.
+    const etag = `"${crypto.createHash('sha1').update(data).digest('base64url').slice(0, 16)}"`;
+    const immutable = /[?&]v=/.test(req.url || '');
+    const headers = {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+      ETag: etag,
+    };
+    if (!immutable && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
