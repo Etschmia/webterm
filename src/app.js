@@ -719,6 +719,23 @@ function makeCopyToggle() {
   return row;
 }
 
+// Ampel-Klasse fuer den Eintrags-Punkt: Claude-Status (Herdr-Idee) hat Vorrang
+// vor der Attached-Markierung — blocked (wartet auf Freigabe) sticht working.
+function sessionDotClass(s) {
+  if (!s) return '';
+  if (s.claudeStatus === 'blocked') return 'blocked';
+  if (s.claudeStatus === 'working') return 'working';
+  return s.attached ? 'attached' : '';
+}
+
+// Tooltip-Zusatz zum Status, damit die Farbe erklaerbar ist.
+function statusTooltip(s) {
+  if (!s) return '';
+  if (s.claudeStatus === 'blocked') return ' · wartet auf Freigabe';
+  if (s.claudeStatus === 'working') return ' · Claude arbeitet';
+  return '';
+}
+
 function renderSidebar() {
   // Offenes Inline-Edit nicht zerstoeren: das 4s-Session-Polling (und andere
   // Render-Anlaesse) warten, bis das Eingabefeld geschlossen ist.
@@ -740,11 +757,15 @@ function renderSidebar() {
 
   // Standard
   const stdActive = isActive('standard', null);
+  // Die dahinterliegende tmux-Session, falls sie schon laeuft — fuer die
+  // Status-Ampel (auch in der Standard-Session kann Claude arbeiten/warten).
+  const stdSession = state.sessions.find((s) => s.standard);
   const stdEntry = makeEntry({
     label: 'Standard',
+    tooltip: 'Standard' + statusTooltip(stdSession),
     // Dahinter liegt serverseitig die persistente tmux-Session
     // "Standard-Webterm" (tmux new-session -A).
-    dotClass: '',
+    dotClass: sessionDotClass(stdSession),
     badge: 'tmux',
     active: stdActive,
     onClick: () => switchTo('standard', null),
@@ -763,8 +784,8 @@ function renderSidebar() {
     const entry = makeEntry({
       label,
       // Tooltip zeigt zusaetzlich den echten Session-Namen (intern fuer Attach).
-      tooltip: label === s.name ? s.name : `${label} · ${s.name}`,
-      dotClass: s.attached ? 'attached' : '',
+      tooltip: (label === s.name ? s.name : `${label} · ${s.name}`) + statusTooltip(s),
+      dotClass: sessionDotClass(s),
       badge: `${s.windows}▦`,
       active,
       onClick: () => switchTo('session', s.name),
@@ -985,32 +1006,52 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', () => { setDoneBadge(false); refreshSessions(); refreshSysStat(); });
 
-const busyByName = new Map(); // Session-Name -> war beim letzten Poll beschaeftigt?
-let busyInitialized = false;  // erster Poll setzt nur den Grundzustand
+const statusByName = new Map(); // Session-Name -> Claude-Status beim letzten Poll
+let statusInitialized = false;  // erster Poll setzt nur den Grundzustand
 function isClaudeBusy(s) { return /^[⠀-⣿]/.test((s.title || '').trim()); }
 
+// Effektiver Status: bevorzugt den serverseitig ermittelten claudeStatus
+// (working/blocked/idle); Fallback auf die alte Spinner-Erkennung, falls das
+// Backend noch keinen Status liefert (Version-Skew nach Deploy).
+function claudeStatusOf(s) {
+  if (s.claudeStatus) return s.claudeStatus;
+  return isClaudeBusy(s) ? 'working' : 'idle';
+}
+
+// Status-Uebergaenge auswerten: working -> idle heisst "fertig", jeder Wechsel
+// nach blocked heisst "wartet auf Freigabe". Der Umweg ueber blocked loest
+// dabei bewusst KEIN "fertig" aus — frueher (reine Spinner-Erkennung) galt eine
+// auf Freigabe wartende Session faelschlich als fertig.
 function updateBusyAndNotify() {
   const current = new Map();
   for (const s of state.sessions) current.set(s.name, s);
-  if (busyInitialized) {
+  if (statusInitialized) {
     for (const [name, s] of current) {
-      if (busyByName.get(name) === true && !isClaudeBusy(s)) claudeDone(s);
+      const prev = statusByName.get(name);
+      const now = claudeStatusOf(s);
+      if (!prev || prev === now) continue;
+      if (now === 'blocked') claudeBlocked(s);
+      else if (prev === 'working' && now === 'idle') claudeDone(s);
     }
   }
-  busyByName.clear();
-  for (const [name, s] of current) busyByName.set(name, isClaudeBusy(s));
-  busyInitialized = true;
+  statusByName.clear();
+  for (const [name, s] of current) statusByName.set(name, claudeStatusOf(s));
+  statusInitialized = true;
 }
 
-function claudeDone(s) {
+// Gemeinsamer Melde-Weg fuer "fertig" und "wartet auf Freigabe": Statuszeile,
+// wenn die Session gerade nicht sichtbar ist; Tab-Badge und (optionale)
+// Desktop-Benachrichtigung, wenn der Tab im Hintergrund liegt. Klick auf die
+// Benachrichtigung springt direkt in die betroffene Session.
+function claudeAnnounce(s, statusText, notifyTitle, tagPrefix) {
   const label = s.standard ? 'Standard' : sessionLabel(s);
   const watching = !document.hidden && (s.standard
     ? state.active.mode === 'standard'
     : state.active.mode === 'session' && state.active.name === s.name);
-  if (!watching) setStatus(`${label}: Claude ist fertig ✓`, false, 6000);
+  if (!watching) setStatus(`${label}: ${statusText}`, false, 6000);
   if (document.hidden) setDoneBadge(true);
   if (notifyEnabled && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-    const n = new Notification('Claude ist fertig', { body: label, tag: 'term-done-' + s.name });
+    const n = new Notification(notifyTitle, { body: label, tag: tagPrefix + s.name });
     n.onclick = () => {
       window.focus();
       if (s.standard) switchTo('standard', null);
@@ -1018,6 +1059,16 @@ function claudeDone(s) {
       n.close();
     };
   }
+}
+
+function claudeDone(s) {
+  claudeAnnounce(s, 'Claude ist fertig ✓', 'Claude ist fertig', 'term-done-');
+}
+
+// Claude zeigt einen Freigabe-/Frage-Dialog (Herdr-Idee: "blocked" gezielt
+// melden, statt dass der Nutzer alle Sessions durchklickt).
+function claudeBlocked(s) {
+  claudeAnnounce(s, 'Claude wartet auf Freigabe ⏸', 'Claude wartet auf Freigabe', 'term-blocked-');
 }
 
 // ---------------------------------------------------------------- Hilfe-Panel

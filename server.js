@@ -146,6 +146,30 @@ async function claudeSessions() {
   return found;
 }
 
+// Agent-Status einer Claude-Session: 'working' | 'blocked' | 'idle'.
+// Idee von herdr.dev: primaeres Signal ist der Spinner, den Claude Code in den
+// pane_title schreibt; fuer die Unterscheidung blocked/idle wird der sichtbare
+// untere Bildschirmrand des Panes gegen BEKANNTE Dialog-Muster geprueft.
+// Konservativ wie bei Herdr: 'blocked' nur bei erkanntem Prompt, sonst 'idle'.
+async function claudePaneStatus(name, title) {
+  // Braille-Spinner am Titelanfang = Claude arbeitet (gleiche Erkennung wie
+  // die "Claude ist fertig"-Logik im Frontend).
+  if (/^[⠀-⣿]/.test((title || '').trim())) return 'working';
+  const r = await tmux(['capture-pane', '-p', '-t', name]);
+  if (!r.ok) return 'idle';
+  const tail = r.out.split('\n').slice(-25).join('\n');
+  // Permission-/Frage-Dialoge: Auswahlpfeil vor nummerierter Option ("❯ 1. Yes")
+  // faengt alle Dialogarten (Tool-Freigabe, Plan-Freigabe, AskUserQuestion,
+  // Trust-Prompt); die Fragetexte decken Varianten ohne sichtbaren Pfeil ab.
+  if (/❯\s+\d+\./.test(tail) || /\b(Do you want|Do you trust|Would you like)\b/.test(tail)) {
+    return 'blocked';
+  }
+  // Arbeitszeile am unteren Rand ("… (esc to interrupt)") — greift, falls der
+  // Titel-Spinner (noch) fehlt, z. B. direkt nach dem Start.
+  if (/esc to interrupt/i.test(tail)) return 'working';
+  return 'idle';
+}
+
 // Liefert die aktuell laufenden tmux-Sessions als Array.
 async function listSessions() {
   // pane_title als LETZTES Feld: es kann Leerzeichen enthalten (Tabs sind in
@@ -160,7 +184,7 @@ async function listSessions() {
     claudeSessions(),
   ]);
   if (!r.ok) return []; // kein tmux-Server -> leere Liste
-  return r.out
+  const sessions = r.out
     .split('\n')
     .filter(Boolean)
     .map((line) => {
@@ -185,8 +209,15 @@ async function listSessions() {
         // aber fuer die "Claude ist fertig"-Erkennung.
         standard: name === STANDARD_SESSION,
         title: (title || '').trim(),
+        // Agent-Status, nur fuer Claude-Sessions (sonst null); wird unten
+        // nachgetragen. Steuert Ampel-Punkt und Benachrichtigungen der Sidebar.
+        claudeStatus: null,
       };
     });
+  await Promise.all(sessions.filter((s) => s.claude).map(async (s) => {
+    s.claudeStatus = await claudePaneStatus(s.name, s.title);
+  }));
+  return sessions;
 }
 
 // Validiert einen vom Client gelieferten Session-Namen gegen die echte Liste.

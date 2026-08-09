@@ -453,6 +453,23 @@ body.col-resizing, body.col-resizing * {
 .entry.active .entry-dot { background: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 18%, transparent); }
 .entry-dot.attached { background: var(--primary); }
 
+/* Claude-Status-Ampel (Herdr-Idee): gruen = arbeitet, amber pulsierend = wartet
+   auf eine Freigabe/Antwort. Schlaegt auch die active/attached-Faerbung. */
+.entry-dot.working,
+.entry.active .entry-dot.working {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px color-mix(in oklab, #22c55e 20%, transparent);
+}
+.entry-dot.blocked,
+.entry.active .entry-dot.blocked {
+  background: #e3a008;
+  box-shadow: 0 0 0 3px color-mix(in oklab, #e3a008 25%, transparent);
+  animation: dot-blocked 1.2s ease-in-out infinite;
+}
+@keyframes dot-blocked {
+  50% { box-shadow: 0 0 0 5px color-mix(in oklab, #e3a008 35%, transparent); }
+}
+
 .entry-name {
   flex: 1 1 auto;
   min-width: 0;

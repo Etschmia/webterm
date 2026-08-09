@@ -78,8 +78,8 @@
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5a3.8 3.8 0 0 0-3.8 3.8v2.4L3 10.8h10l-1.2-2.1V6.3A3.8 3.8 0 0 0 8 2.5z"/><path d="M6.6 13a1.5 1.5 0 0 0 2.8 0"/></svg>
           Benachrichtigung
         </span>
-        <label class="switch" title="Desktop-Benachrichtigung, wenn Claude fertig ist">
-          <input type="checkbox" id="notify-toggle" aria-label="Benachrichtigung, wenn Claude fertig ist" />
+        <label class="switch" title="Desktop-Benachrichtigung, wenn Claude fertig ist oder auf eine Freigabe wartet">
+          <input type="checkbox" id="notify-toggle" aria-label="Benachrichtigung, wenn Claude fertig ist oder auf eine Freigabe wartet" />
           <span class="track"></span>
           <span class="thumb"></span>
         </label>
@@ -177,12 +177,15 @@
         </section>
 
         <section>
-          <h3>Benachrichtigung, wenn Claude fertig ist</h3>
-          <p>Arbeitet Claude Code in einer Session, erkennt das Terminal das Ende automatisch:
-          Im Browser-Tab erscheint dann ein <b>●</b> vor dem Titel (verschwindet beim
-          Zurückwechseln). Für echte Desktop-Benachrichtigungen den Schalter
-          <b>Benachrichtigung</b> unten links aktivieren — der Browser fragt einmalig um
-          Erlaubnis. Ein Klick auf die Meldung springt direkt zur betreffenden Session.</p>
+          <h3>Claude-Status &amp; Benachrichtigungen</h3>
+          <p>Läuft Claude Code in einer Session, zeigt der Punkt im Session-Eintrag den
+          Status: <b style="color:#22c55e">grün</b> = arbeitet,
+          <b style="color:#e3a008">amber (pulsierend)</b> = wartet auf eine Freigabe oder
+          Antwort. Wird Claude fertig oder stellt eine Rückfrage, erscheint im Browser-Tab
+          ein <b>●</b> vor dem Titel (verschwindet beim Zurückwechseln). Für echte
+          Desktop-Benachrichtigungen den Schalter <b>Benachrichtigung</b> unten links
+          aktivieren — der Browser fragt einmalig um Erlaubnis. Ein Klick auf die Meldung
+          springt direkt zur betreffenden Session.</p>
         </section>
 
         <section>
