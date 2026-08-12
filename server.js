@@ -106,20 +106,20 @@ function tmux(args) {
   });
 }
 
-// Namen aller tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein `claude`
-// laeuft. pane_current_command taugt dafuer nicht: hinter dem
+// tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein Agent (`claude` oder
+// `kimi`) laeuft. pane_current_command taugt dafuer nicht: hinter dem
 // claude-auto-retry-Wrapper meldet es 'bash'/'node'. Verlaesslich ist nur der
-// Prozessname comm=claude irgendwo im Baum unter dem Pane-PID (gleiche
-// Heuristik wie deploy/term-restart).
-async function claudeSessions() {
+// Prozessname comm irgendwo im Baum unter dem Pane-PID (gleiche
+// Heuristik wie deploy/term-restart). Liefert Map: Session-Name -> Agent.
+async function agentSessions() {
   const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{session_name}']);
-  if (!panes.ok) return new Set();
+  if (!panes.ok) return new Map();
   const paneSession = new Map();
   for (const line of panes.out.split('\n')) {
     const [pid, session] = line.split('\t');
     if (pid && session) paneSession.set(pid, session);
   }
-  if (!paneSession.size) return new Set();
+  if (!paneSession.size) return new Map();
 
   const ps = await new Promise((resolve) => {
     execFile('ps', ['-e', '-o', 'pid=,ppid=,comm='], { timeout: 5000 }, (err, stdout) => {
@@ -127,37 +127,54 @@ async function claudeSessions() {
     });
   });
   const parent = new Map();
-  const claudePids = [];
+  const agentPids = new Map(); // pid -> 'claude'|'kimi'
   for (const line of ps.split('\n')) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
     parent.set(m[1], m[2]);
-    if (m[3].trim() === 'claude') claudePids.push(m[1]);
+    const comm = m[3].trim();
+    if (comm === 'claude' || comm === 'kimi') agentPids.set(m[1], comm);
   }
-  const found = new Set();
-  for (const pid of claudePids) {
+  const found = new Map();
+  for (const [pid, agent] of agentPids) {
     let x = pid;
     for (let i = 0; i < 64 && x && x !== '0'; i++) {
       const session = paneSession.get(x);
-      if (session) { found.add(session); break; }
+      if (session) {
+        // Pro Session ein Agent-Eintrag (bei mehreren Panes gewinnt der erste).
+        if (!found.has(session)) found.set(session, agent);
+        break;
+      }
       x = parent.get(x);
     }
   }
   return found;
 }
 
-// Agent-Status einer Claude-Session: 'working' | 'blocked' | 'idle'.
-// Idee von herdr.dev: primaeres Signal ist der Spinner, den Claude Code in den
-// pane_title schreibt; fuer die Unterscheidung blocked/idle wird der sichtbare
-// untere Bildschirmrand des Panes gegen BEKANNTE Dialog-Muster geprueft.
-// Konservativ wie bei Herdr: 'blocked' nur bei erkanntem Prompt, sonst 'idle'.
-async function claudePaneStatus(name, title) {
+// Agent-Status einer Agent-Session: 'working' | 'blocked' | 'idle'.
+// Idee von herdr.dev: primaeres Signal bei Claude ist der Spinner, den Claude
+// Code in den pane_title schreibt; kimi setzt stattdessen eine Mondphasen-
+// Glyphe (🌑–🌘) an den Zeilenanfang seiner Statuszeile im Pane (empirisch
+// ermittelt, s. Git-History). Fuer die Unterscheidung blocked/idle wird der
+// sichtbare untere Bildschirmrand des Panes gegen BEKANNTE Dialog-Muster
+// geprueft. Konservativ wie bei Herdr: 'blocked' nur bei erkanntem Prompt,
+// sonst 'idle'.
+async function agentPaneStatus(name, title, agent) {
   // Braille-Spinner am Titelanfang = Claude arbeitet (gleiche Erkennung wie
-  // die "Claude ist fertig"-Logik im Frontend).
-  if (/^[⠀-⣿]/.test((title || '').trim())) return 'working';
+  // die "Claude ist fertig"-Logik im Frontend). Bei kimi steht nichts im Titel.
+  if (agent === 'claude' && /^[⠀-⣿]/.test((title || '').trim())) return 'working';
   const r = await tmux(['capture-pane', '-p', '-t', name]);
   if (!r.ok) return 'idle';
   const tail = r.out.split('\n').slice(-25).join('\n');
+  if (agent === 'kimi') {
+    // Mondphasen-Spinner in der Statuszeile ("🌖 · Tip: …") = kimi arbeitet.
+    if (/^\s*[\u{1F311}-\u{1F318}]/mu.test(tail)) return 'working';
+    // Freigabe-/Frage-Dialog: nummerierte Optionen mit Auswahl-Fusszeile
+    // ("↑/↓ select · 1/2/3/4 choose · ↵ confirm") — deckt Tool-Freigaben und
+    // Rückfragen ab.
+    if (/↑\/↓ select .* choose .* ↵ confirm/.test(tail)) return 'blocked';
+    return 'idle';
+  }
   // Permission-/Frage-Dialoge: Auswahlpfeil vor nummerierter Option ("❯ 1. Yes")
   // faengt alle Dialogarten (Tool-Freigabe, Plan-Freigabe, AskUserQuestion,
   // Trust-Prompt); die Fragetexte decken Varianten ohne sichtbaren Pfeil ab.
@@ -179,9 +196,9 @@ async function listSessions() {
     '#{pane_in_mode}', '#{pane_current_command}', '#{@user-named}',
     '#{pane_current_path}', '#{pane_title}',
   ].join('\t');
-  const [r, claude] = await Promise.all([
+  const [r, agents] = await Promise.all([
     tmux(['list-sessions', '-F', fmt]),
-    claudeSessions(),
+    agentSessions(),
   ]);
   if (!r.ok) return []; // kein tmux-Server -> leere Liste
   const sessions = r.out
@@ -198,9 +215,10 @@ async function listSessions() {
         copyMode: inMode === '1',
         command: command || '',
         path: path || '',
-        // Laeuft in dieser Session gerade Claude? Steuert das Sidebar-Label
-        // ("<Verzeichnis> — Claude"), das nach dem Beenden wieder verschwindet.
-        claude: claude.has(name),
+        // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi')? Steuert
+        // das Sidebar-Label ("<Verzeichnis> — Claude"), das nach dem Beenden
+        // wieder verschwindet.
+        agent: agents.get(name) || null,
         // Vom Nutzer umbenannt (Session-Option @user-named): Sidebar zeigt
         // dann den Session-Namen statt des pane_title.
         userNamed: userNamed === '1',
@@ -209,13 +227,13 @@ async function listSessions() {
         // aber fuer die "Claude ist fertig"-Erkennung.
         standard: name === STANDARD_SESSION,
         title: (title || '').trim(),
-        // Agent-Status, nur fuer Claude-Sessions (sonst null); wird unten
+        // Agent-Status, nur fuer Agent-Sessions (sonst null); wird unten
         // nachgetragen. Steuert Ampel-Punkt und Benachrichtigungen der Sidebar.
-        claudeStatus: null,
+        agentStatus: null,
       };
     });
-  await Promise.all(sessions.filter((s) => s.claude).map(async (s) => {
-    s.claudeStatus = await claudePaneStatus(s.name, s.title);
+  await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
+    s.agentStatus = await agentPaneStatus(s.name, s.title, s.agent);
   }));
   return sessions;
 }

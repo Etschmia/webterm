@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# term-restart — startet term-server.service neu, OHNE laufende Claude-Sessions zu verlieren.
+# term-restart — startet term-server.service neu, OHNE laufende Agent-Sessions zu verlieren.
 #
 # Hintergrund: Das Webterminal (server.js) hostet ALLE tmux-Sessions im cgroup von
 # term-server.service. Ein einfaches `systemctl restart term-server` reißt wegen
 # KillMode=control-group das gesamte cgroup ab — also den tmux-Server samt jeder
-# darin laufenden Claude-Sitzung (auch fremder!). Genau das ist am 24.06.2026 passiert.
+# darin laufenden Claude-/Kimi-Sitzung (auch fremder!). Genau das ist am 24.06.2026 passiert.
 #
 # Dieser Wrapper:
-#   1. snapshottet alle tmux-Panes, die gerade `claude` laufen (Session-Name + cwd),
+#   1. snapshottet alle tmux-Panes, die gerade `claude` oder `kimi` laufen
+#      (Session-Name + cwd + Tool),
 #   2. führt den Restart aus einer ENTKOPPELTEN transienten systemd-Unit aus, die den
 #      cgroup-Abriss überlebt (KillMode=none, eigenes cgroup unter system.slice),
-#   3. setzt nach dem Restart jede Sitzung per `claude --resume <neueste-session-id>`
-#      wieder auf — die Konversationen kommen also mit voller Historie zurück.
+#   3. setzt nach dem Restart jede Sitzung wieder auf — claude per
+#      `claude --resume <neueste-session-id>`, kimi per `kimi --continue`
+#      (nimmt selbst die neueste Session im cwd) — die Konversationen kommen
+#      also mit voller Historie zurück.
 #
 # Benutze IMMER diesen Befehl statt `systemctl restart term-server`, wenn du aus einer
 # Sitzung heraus neu startest, die selbst im Webterminal läuft.
@@ -103,9 +106,10 @@ newest_session_id(){
   [ -n "$f" ] && printf '%s' "${f%.jsonl}"
 }
 
-# name<TAB>cwd je tmux-Pane, in dessen Prozess-Subtree ein `claude` läuft.
-# (Robust gegen den claude-auto-retry-Wrapper: dort meldet pane_current_command
-#  'bash'/'node'; verlässlich ist nur der Prozessname comm=claude irgendwo im Baum.)
+# name<TAB>cwd<TAB>tool je tmux-Pane, in dessen Prozess-Subtree ein `claude`
+# oder `kimi` läuft. (Robust gegen den claude-auto-retry-Wrapper: dort meldet
+# pane_current_command 'bash'/'node'; verlässlich ist nur der Prozessname comm
+# irgendwo im Baum.)
 snapshot(){
   local panes
   panes=$(tmux list-panes -a -F '#{pane_pid}|#{session_name}|#{pane_current_path}' 2>/dev/null) || return 0
@@ -118,32 +122,37 @@ snapshot(){
     { ppid[$1]=$2; comm[$1]=$3 }
     END{
       for(pid in comm){
-        if(comm[pid]!="claude") continue
+        if(comm[pid]!="claude" && comm[pid]!="kimi") continue
         x=pid
         while(x!="" && x!=0 && (x in ppid)){
-          if(x in paneinfo){ found[x]=1; break }
+          if(x in paneinfo){ found[x]=comm[pid]; break }
           x=ppid[x]
         }
       }
-      for(p in found) print paneinfo[p]
+      # Pro Session ein Eintrag (bei mehreren Agent-Panes gewinnt einer).
+      for(p in found) if(!seen[paneinfo[p]]++) print paneinfo[p] "\t" found[p]
     }' | sort -u
 }
 
 # Phase 2 (in der entkoppelten Unit): warten bis Service zurück ist, dann Sessions resumen.
 restore(){
-  local snapfile="$1" name cwd sid i
+  local snapfile="$1" name cwd tool sid i
   for i in $(seq 1 60); do
     sysctl is-active --quiet "$SERVICE" && break
     sleep 0.5
   done
-  while IFS=$'\t' read -r name cwd; do
+  while IFS=$'\t' read -r name cwd tool; do
     [ -n "${name:-}" ] || continue
     if tmux has-session -t "$name" 2>/dev/null; then
       log "Session '$name' existiert bereits — übersprungen."
       continue
     fi
     tmux new-session -d -s "$name" -c "$cwd"
-    if sid=$(newest_session_id "$cwd"); then
+    if [ "$tool" = "kimi" ]; then
+      # kimi findet die neueste Session im cwd selbst — keine ID nötig.
+      log "Restore '$name' ($cwd) -> kimi --continue"
+      tmux send-keys -t "$name" "kimi --continue" Enter
+    elif sid=$(newest_session_id "$cwd"); then
       log "Restore '$name' ($cwd) -> claude --resume $sid"
       tmux send-keys -t "$name" "claude --resume $sid" Enter
     else
@@ -156,7 +165,7 @@ restore(){
 
 usage(){
   cat >&2 <<USAGE
-term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-Sessions.
+term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-/Kimi-Sessions.
 
   deploy/term-restart                       entkoppelter Restart + Restore
   deploy/term-restart --restore <snapfile>  intern, von der Unit aufgerufen
@@ -205,7 +214,7 @@ fi
 
 SNAP=$(mktemp /tmp/term-restart.XXXXXX)
 snapshot > "$SNAP"
-log "$(wc -l < "$SNAP") aktive Claude-Session(s) gesichert."
+log "$(wc -l < "$SNAP") aktive Agent-Session(s) gesichert."
 
 SELF=$(readlink -f "$0")
 UNIT="term-restart-$$-$(id -u)"
@@ -244,4 +253,4 @@ else
 fi
 
 log "Restart entkoppelt angestoßen. Diese Sitzung wird gleich beendet —"
-log "die Claude-Sessions kommen automatisch per 'claude --resume' zurück."
+log "die Claude-/Kimi-Sessions kommen automatisch per 'claude --resume' bzw. 'kimi --continue' zurück."

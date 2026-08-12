@@ -100,10 +100,10 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   Stamp mit `/api/version` und warnt bei Versatz sichtbar („Backend veraltet — Deploy
   unvollständig?"). So fällt ein *neues Frontend gegen altes Backend* (Restart vergessen)
   sofort auf, statt dass Feature-Aufrufe stumm ins Leere laufen.
-- **claude/codex/grok in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
+- **claude/codex/grok/kimi in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
-  legt beim Aufruf von `claude`/`codex`/`grok` aus der Standard-Sitzung automatisch eine
+  legt beim Aufruf von `claude`/`codex`/`grok`/`kimi` aus der Standard-Sitzung automatisch eine
   neue tmux-Session an (`<tool>-<verzeichnis>`) und wechselt dorthin; eine vorhandene
   `claude`-Funktion (claude-auto-retry) wird gesichert und weiter durchgereicht.
 - **Ohne sudo (User ohne Root-Rechte)**: die oben genannte **systemd-User-Unit**
@@ -123,10 +123,11 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 - **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
   Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
   direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab
-  und killt damit jede laufende Claude-Sitzung (auch fremde) — genau das ist am
-  24.06.2026 passiert. `deploy/term-restart` snapshottet die aktiven Claude-Panes, startet
+  und killt damit jede laufende Claude-/Kimi-Sitzung (auch fremde) — genau das ist am
+  24.06.2026 passiert. `deploy/term-restart` snapshottet die aktiven Agent-Panes, startet
   aus einer **entkoppelten** transienten systemd-Unit neu (überlebt den cgroup-Abriss) und
-  setzt jede Sitzung danach automatisch per `claude --resume` wieder auf.
+  setzt jede Sitzung danach automatisch wieder auf — claude per `claude --resume`,
+  kimi per `kimi --continue`.
 - **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
   `.caddy`-Datei mit bcrypt-Hash). Manuell: Hash via `caddy hash-password` erzeugen, in
   einer `deploy/<domain>.caddy` als `basic_auth { <user> <hash> }` eintragen, nach

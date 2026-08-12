@@ -592,6 +592,19 @@ function isGenericClaudeTitle(clean) {
   return /^claude code$/i.test(clean);
 }
 
+// Welcher Agent laeuft in der Session ('claude'|'kimi'|null)? Primaer das
+// aktuelle agent-Feld; der Rueckfall aufs alte claude-Flag ueberbrueckt den
+// Version-Skew kurz nach einem Deploy (neues Frontend, altes Backend).
+function agentOf(s) {
+  if (s.agent !== undefined) return s.agent;
+  return s.claude ? 'claude' : null;
+}
+
+// Anzeigename des Agenten fuer Labels, Tooltips und Benachrichtigungen.
+function agentName(s) {
+  return agentOf(s) === 'kimi' ? 'Kimi' : 'Claude';
+}
+
 function sessionLabel(s) {
   // Vom Nutzer vergebener Name (Inline-Edit) hat Vorrang vor dem pane_title.
   if (s.userNamed) return s.name;
@@ -601,7 +614,7 @@ function sessionLabel(s) {
   // das "Claude" weg und nur das Verzeichnis bleibt.
   if (isGenericClaudeTitle(clean)) {
     const dir = sessionDir(s);
-    if (s.claude) return dir ? `${dir} — Claude` : 'Claude';
+    if (agentOf(s) === 'claude') return dir ? `${dir} — Claude` : 'Claude';
     return dir || s.name;
   }
   const cmd = (s.command || '').toLowerCase();
@@ -719,20 +732,22 @@ function makeCopyToggle() {
   return row;
 }
 
-// Ampel-Klasse fuer den Eintrags-Punkt: Claude-Status (Herdr-Idee) hat Vorrang
+// Ampel-Klasse fuer den Eintrags-Punkt: Agent-Status (Herdr-Idee) hat Vorrang
 // vor der Attached-Markierung — blocked (wartet auf Freigabe) sticht working.
 function sessionDotClass(s) {
   if (!s) return '';
-  if (s.claudeStatus === 'blocked') return 'blocked';
-  if (s.claudeStatus === 'working') return 'working';
+  const st = agentStatusOf(s);
+  if (st === 'blocked') return 'blocked';
+  if (st === 'working') return 'working';
   return s.attached ? 'attached' : '';
 }
 
 // Tooltip-Zusatz zum Status, damit die Farbe erklaerbar ist.
 function statusTooltip(s) {
   if (!s) return '';
-  if (s.claudeStatus === 'blocked') return ' · wartet auf Freigabe';
-  if (s.claudeStatus === 'working') return ' · Claude arbeitet';
+  const st = agentStatusOf(s);
+  if (st === 'blocked') return ' · wartet auf Freigabe';
+  if (st === 'working') return ` · ${agentName(s)} arbeitet`;
   return '';
 }
 
@@ -968,10 +983,12 @@ async function refreshSysStat() {
   sysEl.procs.textContent = s.procs == null ? '–' : String(s.procs);
 }
 
-// ---------------------------------------------------------------- "Claude ist fertig"
+// ---------------------------------------------------------------- "Agent ist fertig"
 // Claude Code setzt waehrend der Arbeit einen Braille-Spinner (⠋⠙⠸ …) an den
-// Anfang des pane_title. Verschwindet der Spinner zwischen zwei Polls, ist die
-// Session fertig: Badge im Tab-Titel/Favicon, optional Desktop-Benachrichtigung.
+// Anfang des pane_title, kimi eine Mondphasen-Glyphe in seine Statuszeile — die
+// serverseitige Erkennung (agentStatus) wertet beides aus. Wird eine Session
+// zwischen zwei Polls fertig, gibt es Badge im Tab-Titel/Favicon und optional
+// eine Desktop-Benachrichtigung.
 const notifyToggle = document.getElementById('notify-toggle');
 let notifyEnabled = localStorage.getItem('term-notify') === '1';
 notifyToggle.checked = notifyEnabled;
@@ -1006,15 +1023,17 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', () => { setDoneBadge(false); refreshSessions(); refreshSysStat(); });
 
-const statusByName = new Map(); // Session-Name -> Claude-Status beim letzten Poll
+const statusByName = new Map(); // Session-Name -> Agent-Status beim letzten Poll
 let statusInitialized = false;  // erster Poll setzt nur den Grundzustand
 function isClaudeBusy(s) { return /^[⠀-⣿]/.test((s.title || '').trim()); }
 
-// Effektiver Status: bevorzugt den serverseitig ermittelten claudeStatus
+// Effektiver Status: bevorzugt den serverseitig ermittelten agentStatus
 // (working/blocked/idle); Fallback auf die alte Spinner-Erkennung, falls das
-// Backend noch keinen Status liefert (Version-Skew nach Deploy).
-function claudeStatusOf(s) {
-  if (s.claudeStatus) return s.claudeStatus;
+// Backend noch keinen Status liefert (Version-Skew nach Deploy — das alte
+// Backend sendet claudeStatus, ein noch aelteres gar keinen Status).
+function agentStatusOf(s) {
+  const st = s.agentStatus !== undefined ? s.agentStatus : s.claudeStatus;
+  if (st) return st;
   return isClaudeBusy(s) ? 'working' : 'idle';
 }
 
@@ -1028,14 +1047,14 @@ function updateBusyAndNotify() {
   if (statusInitialized) {
     for (const [name, s] of current) {
       const prev = statusByName.get(name);
-      const now = claudeStatusOf(s);
+      const now = agentStatusOf(s);
       if (!prev || prev === now) continue;
-      if (now === 'blocked') claudeBlocked(s);
-      else if (prev === 'working' && now === 'idle') claudeDone(s);
+      if (now === 'blocked') agentBlocked(s);
+      else if (prev === 'working' && now === 'idle') agentDone(s);
     }
   }
   statusByName.clear();
-  for (const [name, s] of current) statusByName.set(name, claudeStatusOf(s));
+  for (const [name, s] of current) statusByName.set(name, agentStatusOf(s));
   statusInitialized = true;
 }
 
@@ -1043,7 +1062,7 @@ function updateBusyAndNotify() {
 // wenn die Session gerade nicht sichtbar ist; Tab-Badge und (optionale)
 // Desktop-Benachrichtigung, wenn der Tab im Hintergrund liegt. Klick auf die
 // Benachrichtigung springt direkt in die betroffene Session.
-function claudeAnnounce(s, statusText, notifyTitle, tagPrefix) {
+function agentAnnounce(s, statusText, notifyTitle, tagPrefix) {
   const label = s.standard ? 'Standard' : sessionLabel(s);
   const watching = !document.hidden && (s.standard
     ? state.active.mode === 'standard'
@@ -1061,14 +1080,16 @@ function claudeAnnounce(s, statusText, notifyTitle, tagPrefix) {
   }
 }
 
-function claudeDone(s) {
-  claudeAnnounce(s, 'Claude ist fertig ✓', 'Claude ist fertig', 'term-done-');
+function agentDone(s) {
+  const name = agentName(s);
+  agentAnnounce(s, `${name} ist fertig ✓`, `${name} ist fertig`, 'term-done-');
 }
 
-// Claude zeigt einen Freigabe-/Frage-Dialog (Herdr-Idee: "blocked" gezielt
+// Der Agent zeigt einen Freigabe-/Frage-Dialog (Herdr-Idee: "blocked" gezielt
 // melden, statt dass der Nutzer alle Sessions durchklickt).
-function claudeBlocked(s) {
-  claudeAnnounce(s, 'Claude wartet auf Freigabe ⏸', 'Claude wartet auf Freigabe', 'term-blocked-');
+function agentBlocked(s) {
+  const name = agentName(s);
+  agentAnnounce(s, `${name} wartet auf Freigabe ⏸`, `${name} wartet auf Freigabe`, 'term-blocked-');
 }
 
 // ---------------------------------------------------------------- Hilfe-Panel
@@ -2244,7 +2265,7 @@ function upRender() {
   } else if (upState.behind > 0) {
     upBtn.title = `Update verfügbar: ${upState.behind} Commit${upState.behind === 1 ? '' : 's'} hinter ${upState.upstream}.\n`
       + 'Klick startet deploy/update: git pull → Build → bei Backend-Änderung sessions-schonender Neustart '
-      + '(laufende Claude-Sessions kommen per --resume zurück).';
+      + '(laufende Claude-/Kimi-Sessions kommen per --resume/--continue zurück).';
   } else if (upState.behind === 0) {
     upBtn.title = `Installation ist aktuell (Stand ${upState.head || '?'}, geprüft gegen ${upState.upstream}).\n`
       + 'Klick prüft erneut.';
@@ -2347,7 +2368,7 @@ async function upStart() {
   const n = upState.behind;
   const msg = `Jetzt aktualisieren? (${n} Commit${n === 1 ? '' : 's'} hinter ${upState.upstream})\n\n`
     + 'deploy/update führt aus: git pull → Build → bei Backend-Änderung ein sessions-schonender '
-    + 'Neustart (laufende Claude-Sessions werden automatisch per --resume wiederhergestellt; '
+    + 'Neustart (laufende Claude-/Kimi-Sessions werden automatisch per --resume/--continue wiederhergestellt; '
     + 'die Verbindung bricht dabei kurz ab).';
   if (!window.confirm(msg)) return;
   upState.phase = 'run';

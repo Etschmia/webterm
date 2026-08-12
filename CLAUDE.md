@@ -17,11 +17,12 @@ sämtliche laufenden Sessions — du killst dich u. U. **selbst** mitten im Depl
 deploy/term-restart
 ```
 
-Das Skript snapshottet die aktiven Claude-Panes (Erkennung über `comm=claude` im
+Das Skript snapshottet die aktiven Agent-Panes (Erkennung über `comm=claude`/`kimi` im
 Prozess-Subtree, robust gegen den `claude-auto-retry`-Wrapper), startet den Service aus einer
 **entkoppelten** transienten systemd-Unit neu (eigenes cgroup unter `system.slice`,
-`KillMode=none` → überlebt den Abriss) und setzt danach jede Session per
-`claude --resume <neueste-session-id>` automatisch wieder auf. Voraussetzung: passwortloses
+`KillMode=none` → überlebt den Abriss) und setzt danach jede Session wieder auf — claude per
+`claude --resume <neueste-session-id>`, kimi per `kimi --continue` (findet die neueste
+Session im cwd selbst). Voraussetzung: passwortloses
 `sudo` (vorhanden) und `systemd-run`.
 
 Wenn du den Restart doch von außerhalb des Webterminals fährst (z. B. echte SSH-Sitzung,

@@ -1,4 +1,4 @@
-# term-web — claude/codex/grok aus der Standard-Sitzung in eigene tmux-Sessions.
+# term-web — claude/codex/grok/kimi aus der Standard-Sitzung in eigene tmux-Sessions.
 #
 # Wird aus ~/.bashrc gesourct (install.sh richtet die Zeile ein). Hintergrund:
 # Die Standard-Sitzung des Webterminals ist selbst eine tmux-Session
@@ -16,7 +16,7 @@
 # die Reihenfolge in der ~/.bashrc ist damit egal.
 _term_install_wrappers() {
   local t
-  for t in claude codex grok; do
+  for t in claude codex grok kimi; do
     if declare -f "$t" >/dev/null 2>&1 \
        && [[ "$(declare -f "$t")" != *_term_tool_session* ]]; then
       eval "$(declare -f "$t" | sed "1s/^$t/_term_orig_$t/")"
@@ -69,7 +69,7 @@ _term_tool_session() {
 
 _term_install_wrappers
 
-# Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok() (z. B. der
+# Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok()/kimi() (z. B. der
 # claude-auto-retry-Block, der hinter dieser Source-Zeile stehen kann) wuerde
 # die Wrapper wieder ueberschreiben — genau so lief claude einmal doch in der
 # Standard-Sitzung. Deshalb vor dem ersten Prompt noch einmal einsammeln:

@@ -10,8 +10,9 @@
 #   No-op. Backend-Aenderungen in server.js wuerden nach `git pull && install.sh`
 #   also gar nicht aktiv (nur das neu gebaute Frontend, das ein Tab-Reload holt).
 #   deploy/update fasst die Konfiguration NICHT an und aktiviert Backend-
-#   Aenderungen ueber deploy/term-restart, das laufende Claude-Sessions vorher
-#   snapshottet und per `claude --resume` wiederherstellt.
+#   Aenderungen ueber deploy/term-restart, das laufende Claude-/Kimi-Sessions
+#   vorher snapshottet und per `claude --resume` bzw. `kimi --continue`
+#   wiederherstellt.
 #
 # Erstlauf-sicher — Entscheidungen bewusst NICHT aus dem Pull-Diff abgeleitet:
 #   Beim ersten Einsatz ging dem Aufruf ein manuelles `git pull` voraus (so kommt
@@ -360,7 +361,7 @@ run_npm run build || die "Build fehlgeschlagen."
 log "Build ok -> public/"
 
 # ---- Phase 3b: Standard-Session-Wrapper (bashrc) ---------------------------
-# deploy/standard-session-wrappers.sh (claude/codex/grok aus der Standard-
+# deploy/standard-session-wrappers.sh (claude/codex/grok/kimi aus der Standard-
 # Sitzung in eigene tmux-Sessions umlenken) wird aus der ~/.bashrc gesourct.
 # Zwei Dinge erledigt ein reines git pull NICHT:
 #   * Instanzen, deren install.sh-Lauf aelter ist als das Feature, haben die
@@ -373,7 +374,7 @@ log "Build ok -> public/"
 WRAP_SRC="$SCRIPT_DIR/deploy/standard-session-wrappers.sh"
 BASHRC="$HOME/.bashrc"
 if [ -f "$WRAP_SRC" ] && ! grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
-  printf '\n# term-web: claude/codex/grok aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
+  printf '\n# term-web: claude/codex/grok/kimi aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
     "$WRAP_SRC" "$WRAP_SRC" >> "$BASHRC"
   log "Standard-Session-Wrapper in ~/.bashrc eingebunden (Zeile fehlte noch)."
 fi
@@ -413,7 +414,7 @@ if [ "$SERVICE_ACTIVE" -eq 1 ]; then
     log "#########################################################################"
     exit 4
   elif [ "$NEED_RESTART" -eq 1 ]; then
-    log "-> sessions-schonender Restart via deploy/term-restart (Claude-Sessions kommen per --resume zurueck) …"
+    log "-> sessions-schonender Restart via deploy/term-restart (Claude-/Kimi-Sessions kommen per --resume/--continue zurueck) …"
     TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$SCRIPT_DIR/deploy/term-restart"
     # term-restart beendet diese Sitzung ggf. selbst; danach resumt sie automatisch.
   else
