@@ -2,7 +2,7 @@
   "name": "term-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Web-Terminal mit Sidebar (Standard-Shell + tmux-Sessions + URL-Parsing) fuer term.martuni.de",
+  "description": "Web-Terminal mit Sidebar (Standard-Shell + tmux-Sessions + URL-Parsing)",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

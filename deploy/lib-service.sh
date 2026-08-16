@@ -48,7 +48,7 @@ term_detect_repo_backend_pid(){
 }
 
 # systemd-Unit-Name aus /proc/<pid>/cgroup (letztes '<name>.service' im Pfad).
-# system: /system.slice/ag-webterm.service ; user: …/user@1000.service/…/tbterm.service
+# system: /system.slice/webterm.service ; user: …/user@1000.service/…/webterm.service
 term_unit_from_pid(){
   local pid="$1" unit
   [ -r "/proc/$pid/cgroup" ] || return 1

@@ -56,7 +56,7 @@ loadDotEnv(path.join(__dirname, '.env'));
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '7681', 10);
-const HOME = process.env.HOME || '/home/librechat';
+const HOME = process.env.HOME || os.homedir();
 const SHELL = process.env.SHELL || '/bin/bash';
 // Persistente tmux-Session hinter dem "Standard"-Eintrag: attach falls
 // vorhanden, sonst neu anlegen (tmux new-session -A). Ueberlebt Reloads
@@ -81,9 +81,8 @@ const CLIP_EXT = {                               // erlaubte Bildtypen -> Endung
 // Basic Auth (Caddy) bleibt die primaere Schranke.
 // Der oeffentliche Origin (Domain hinter Caddy) kommt portabel ueber
 // PUBLIC_ORIGIN aus der Umgebung/.env — mehrere kommagetrennt moeglich.
-// term.martuni.de bleibt als Default-Fallback erhalten.
+// Ohne PUBLIC_ORIGIN sind nur die lokalen Origins erlaubt.
 const ALLOWED_ORIGINS = new Set([
-  'https://term.martuni.de',
   `http://${HOST}:${PORT}`,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,

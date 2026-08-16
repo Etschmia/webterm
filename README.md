@@ -1,8 +1,8 @@
 # term-web
 
 Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
-(TLS + HTTP Basic Auth). Portabel betreibbar unter eigener Domain oder Unterpfad;
-die Referenz-Instanz läuft unter **term.martuni.de**.
+(TLS + HTTP Basic Auth). Portabel betreibbar unter eigener Domain oder Unterpfad
+— der öffentliche Origin wird über `PUBLIC_ORIGIN` in der `.env` gesetzt.
 
 ## Schnellstart
 **Voraussetzungen:** Node.js + npm sowie native Build-Tools für `node-pty`
@@ -144,7 +144,7 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester
   Client gewinnt). Stört das eine parallel laufende Session, global in `~/.tmux.conf` auf
   `set -g window-size largest` (bzw. `manual`) umstellen.
-- **Sicherheit**: Voller Shell-Zugriff als `librechat`. Schutz = TLS + Basic Auth (Caddy) +
+- **Sicherheit**: Voller Shell-Zugriff als der Service-User. Schutz = TLS + Basic Auth (Caddy) +
   localhost-Bindung. Credentials geheim halten.
 - **claude-auto-retry-Update-Check**: Das Paket hat keinen eigenen Update-Mechanismus —
   `./install.sh` richtet dafür optional einen täglichen Cron ein

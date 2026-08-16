@@ -173,7 +173,7 @@ term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-/Kimi-Sess
 
 Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
 mehreren Instanzen ZWINGEND setzen, sonst trifft es die fremde Instanz:
-  TERM_SERVICE=tbterm deploy/term-restart
+  TERM_SERVICE=<unit> deploy/term-restart
 
 System- vs. User-Unit wird automatisch erkannt (User-Unit => kein sudo noetig).
 Override: TERM_USER_UNIT=1 (User-Unit) bzw. TERM_USER_UNIT=0 (System-Unit).

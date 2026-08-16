@@ -2708,7 +2708,7 @@ explorerGrip?.addEventListener('dblclick', () => resetCol('explorer'));
 
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
-// term.martuni.de verdrahtet).
+// eine Domain verdrahtet).
 // Hostname als eigene, gedimmte Untertitel-Zeile (volle Breite, siehe .brand-host)
 // — statt frueher an die Wortmarke angehaengt ("term.<host>"), was bei langen
 // Domains abschnitt und das "term.term…"-Doppel erzeugte.
