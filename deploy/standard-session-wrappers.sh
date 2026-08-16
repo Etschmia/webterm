@@ -72,14 +72,33 @@ _term_install_wrappers
 # Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok()/kimi() (z. B. der
 # claude-auto-retry-Block, der hinter dieser Source-Zeile stehen kann) wuerde
 # die Wrapper wieder ueberschreiben — genau so lief claude einmal doch in der
-# Standard-Sitzung. Deshalb vor dem ersten Prompt noch einmal einsammeln:
-# die Fremd-Funktion wird dabei als _term_orig_<tool> gesichert und vom
-# Wrapper durchgereicht. Danach entschaerft sich der Hook selbst zum No-op.
-_term_wrappers_rearm() {
+# Standard-Sitzung. Zweites Problem: Shells in tmux-Sessions laufen wochenlang
+# und behalten die beim Start gesourcte Version dieser Datei — neu aufgenommene
+# Tools (z. B. kimi) kaemen dort nie an, wenn der Pane beim deploy/update-Lauf
+# gerade belegt ist. Deshalb laeuft vor JEDEM Prompt ein Hook, der
+# (1) nachtraeglich definierte Fremd-Funktionen einsammelt (als _term_orig_<tool>
+#     gesichert und vom Wrapper durchgereicht) und
+# (2) diese Datei neu sourct, sobald sie sich auf der Platte geaendert hat.
+_TERM_WRAPPERS_FILE="${BASH_SOURCE[0]}"
+_TERM_WRAPPERS_MTIME="$(stat -c %Y "$_TERM_WRAPPERS_FILE" 2>/dev/null)"
+
+_term_wrappers_hook() {
   _term_install_wrappers
-  _term_wrappers_rearm() { :; }
+  local m
+  m="$(stat -c %Y "$_TERM_WRAPPERS_FILE" 2>/dev/null)"
+  if [ -n "$m" ] && [ "$m" != "${_TERM_WRAPPERS_MTIME:-}" ]; then
+    . "$_TERM_WRAPPERS_FILE"
+  fi
 }
+
+# Hook genau einmal in PROMPT_COMMAND haengen (auch beim Neu-Sourcen der Datei).
 case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
-  'declare -a'*) PROMPT_COMMAND+=(_term_wrappers_rearm) ;;
-  *) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;}_term_wrappers_rearm" ;;
+  'declare -a'*)
+    [[ " ${PROMPT_COMMAND[*]} " == *" _term_wrappers_hook "* ]] \
+      || PROMPT_COMMAND+=(_term_wrappers_hook) ;;
+  *)
+    case ";${PROMPT_COMMAND:-};" in
+      *";_term_wrappers_hook;"*) ;;
+      *) PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}_term_wrappers_hook" ;;
+    esac ;;
 esac

@@ -59,9 +59,11 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   `deploy/standard-session-wrappers.sh` in der `~/.bashrc` nach, falls sie fehlt (Instanzen
   mit altem `install.sh`-Stand), und lässt untätige bash-Panes die `~/.bashrc` per
   `send-keys` neu einlesen; belegte Panes (laufendes claude etc.) werden nur gemeldet —
-  dort nach Ende `. ~/.bashrc`. Der Wrapper selbst ist reihenfolge-unabhängig: ein
-  `PROMPT_COMMAND`-Hook sammelt später definierte Fremd-Funktionen (claude-auto-retry)
-  vor dem ersten Prompt wieder ein.
+  dort nach Ende `. ~/.bashrc`. Der Wrapper selbst ist reihenfolge-unabhängig und
+  selbstheilend: ein permanenter `PROMPT_COMMAND`-Hook sammelt später definierte
+  Fremd-Funktionen (claude-auto-retry) wieder ein und sourct die Wrapper-Datei neu,
+  sobald sich ihre mtime ändert — so erreichen Updates auch Shells, die beim
+  Update-Lauf belegt waren.
 - `--no-pull` überspringt den Pull.
 - **Self-Update-Icon** (Sidebar, neben „?"): Backend prüft gedrosselt (TTL 5 min, Klick
   erzwingt) per `git fetch` + `rev-list --count HEAD..@{u}`, ob das Remote voraus ist
