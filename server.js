@@ -542,6 +542,27 @@ async function listSessions() {
   return sessions;
 }
 
+// Session-Namen aus der Sidebar (Anlegen/Umbenennen) pruefen und auf das
+// bringen, was tmux tatsaechlich speichert. tmux ersetzt in Session-Namen
+// selbst '.' und ':' durch '_' (Target-Syntax session:window.pane) — frueher
+// hat die Validierung solche Namen stattdessen mit "Ungueltiger Name"
+// abgelehnt, obwohl sie voellig unproblematisch sind. Deshalb hier dieselbe
+// Ersetzung vornehmen, damit Antwort und Frontend-State den echten Namen
+// tragen (und nicht den eingetippten mit Punkt).
+function normalizeSessionName(raw) {
+  const cleaned = String(raw || '').trim().replace(/[.:]/g, '_');
+  // Fuehrendes '-' bleibt verboten: tmux wuerde es als Option lesen.
+  // Erlaubt sind sonst Buchstaben/Ziffern/_ am Anfang, danach zusaetzlich
+  // Leerzeichen und '-'; max. 50 Zeichen.
+  if (!/^[\p{L}\p{N}_][\p{L}\p{N} _-]{0,49}$/u.test(cleaned)) {
+    return {
+      error: 'Ungueltiger Name (erlaubt: Buchstaben, Ziffern, Leerzeichen, _ und -, '
+        + 'max. 50 Zeichen, nicht mit "-" beginnend)',
+    };
+  }
+  return { name: cleaned };
+}
+
 // Validiert einen vom Client gelieferten Session-Namen gegen die echte Liste.
 async function sessionExists(name) {
   if (typeof name !== 'string' || !name) return false;
@@ -1297,18 +1318,15 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/sessions/rename' && req.method === 'POST') {
     const q = new URL(req.url, 'http://localhost').searchParams;
     const from = q.get('name') || '';
-    const to = (q.get('new') || '').trim();
     if (from === STANDARD_SESSION) {
       return sendJson(res, 400, { error: 'Standard-Session kann nicht umbenannt werden' });
     }
     if (!(await sessionExists(from))) {
       return sendJson(res, 404, { error: `Session '${from}' nicht gefunden` });
     }
-    // Buchstaben/Ziffern plus Leerzeichen, _ und -; kein ':' oder '.'
-    // (tmux-Target-Syntax), max. 50 Zeichen.
-    if (!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,49}$/u.test(to)) {
-      return sendJson(res, 400, { error: 'Ungueltiger Name' });
-    }
+    const checked = normalizeSessionName(q.get('new'));
+    if (checked.error) return sendJson(res, 400, { error: checked.error });
+    const to = checked.name;
     if (to === from) return sendJson(res, 200, { ok: true, name: to });
     if (to === STANDARD_SESSION || (await sessionExists(to))) {
       return sendJson(res, 409, { error: 'Name bereits vergeben' });
@@ -1324,10 +1342,9 @@ const server = http.createServer(async (req, res) => {
   // (statt eines spaeteren pane_title), wie beim Umbenennen.
   if (url === '/api/sessions/create' && req.method === 'POST') {
     const q = new URL(req.url, 'http://localhost').searchParams;
-    const name = (q.get('name') || '').trim();
-    if (!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,49}$/u.test(name)) {
-      return sendJson(res, 400, { error: 'Ungueltiger Name' });
-    }
+    const checked = normalizeSessionName(q.get('name'));
+    if (checked.error) return sendJson(res, 400, { error: checked.error });
+    const name = checked.name;
     if (name === STANDARD_SESSION || (await sessionExists(name))) {
       return sendJson(res, 409, { error: 'Name bereits vergeben' });
     }
