@@ -5,8 +5,9 @@
 # Fuehrt schrittweise durch die Einrichtung:
 #   1. Prueft, ob der vorgesehene Port frei ist (sonst Alternative erfragen).
 #   2. Findet npm/node und baut das Projekt (npm install + npm run build).
-#   3. Prueft tmux; bietet ggf. die Installation von claude-auto-retry an
+#   3. Prueft tmux; bietet optional (Default: nein) claude-auto-retry an
 #      (inkl. taeglichem Update-Check per Cron, siehe deploy/claude-auto-retry-update.sh).
+#      Seit Claude Code 2.1.234 wartet die CLI Usage-Limits selbst aus, siehe unten.
 #   4. Sorgt fuer "set -g mouse on" in ~/.tmux.conf und rollt die git-Statuszeile
 #      aus (deploy/git-status.sh -> ~/.tmux/, status-right in ~/.tmux.conf).
 #   5. Hilft optional beim Erstellen einer Caddy-Datei (Subdomain oder Unterpfad),
@@ -348,11 +349,28 @@ if command -v tmux >/dev/null 2>&1; then
     "$NPM_BIN" ls -g --depth=0 claude-auto-retry >/dev/null 2>&1 && have_car=1
   fi
 
+  # Seit Claude Code 2.1.234 wartet die CLI ein erreichtes Usage-Limit SELBST aus
+  # ("Continue automatically at usage limit", /config, ab Werk an) — das war der
+  # Hauptzweck von claude-auto-retry und ist damit abgedeckt. Das Paket bleibt
+  # trotzdem waehlbar, weil es drei Dinge kann, die das native Feature nicht tut:
+  # Retry bei anhaltendem API-Overload (529), Retry bei Safeguard-Fehlalarmen, und
+  # Wiederaufnahme, wenn der claude-PROZESS die Wartezeit nicht ueberlebt (nativ
+  # gilt: "relaunched/exited during the wait => task will not resume" — genau der
+  # Fall bei deploy/term-restart). Beide Mechanismen gleichzeitig koennen sich ins
+  # Gehege kommen (der Monitor scrapet das Pane und weiss nichts vom nativen
+  # Warten), deshalb Default NEIN.
   if [ "$have_car" -eq 1 ]; then
     ok "claude-auto-retry ist bereits installiert."
   elif [ -z "$NPM_BIN" ]; then
     warn "claude-auto-retry kann ohne npm nicht installiert werden — uebersprungen."
-  elif ask_yes_no "claude-auto-retry global installieren (npm i -g claude-auto-retry)?" "y"; then
+  else
+    note "Usage-Limits wartet Claude Code seit 2.1.234 selbst aus (/config)."
+    note "claude-auto-retry ergaenzt nur noch: Overload-(529-) und Safeguard-Retry"
+    note "sowie Wiederaufnahme nach einem Neustart des claude-Prozesses."
+  fi
+
+  if [ "$have_car" -eq 0 ] && [ -n "$NPM_BIN" ] \
+     && ask_yes_no "claude-auto-retry trotzdem global installieren (npm i -g claude-auto-retry)?" "n"; then
     if "$NPM_BIN" i -g claude-auto-retry; then
       car_bin="$(command -v claude-auto-retry 2>/dev/null || true)"
       if [ -z "$car_bin" ]; then
@@ -380,8 +398,8 @@ if command -v tmux >/dev/null 2>&1; then
     else
       err "npm i -g claude-auto-retry fehlgeschlagen (evtl. Rechte? -> ggf. mit sudo, oder npm-Prefix auf ~/.local setzen)."
     fi
-  else
-    info "claude-auto-retry uebersprungen."
+  elif [ "$have_car" -eq 0 ]; then
+    info "claude-auto-retry uebersprungen (Usage-Limits deckt Claude Code selbst ab)."
   fi
 
   # claude-auto-retry hat keinen eigenen Update-Mechanismus. Ohne regelmaessigen

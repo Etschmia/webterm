@@ -122,6 +122,36 @@ npm install          # bzw. npm run build
 Der PATH-Präfix ist beim Bauen zwingend: `node-pty` ist nativ, und sein `binding.gyp` ruft
 intern `node` auf.
 
+## claude-auto-retry: seit Claude Code 2.1.234 nur noch Ergänzung
+
+Claude Code wartet ein erreichtes Usage-Limit **selbst** aus — Schalter
+`autoContinueAtUsageLimit` („Continue automatically at usage limit", `/config`, **ab Werk
+an**). Das war der Hauptzweck von `claude-auto-retry`; das Paket ist damit **optional**
+(`install.sh` fragt es weiterhin, aber mit Default **nein**).
+
+Was nativ **nicht** abgedeckt ist und wofür das Paket weiterhin taugt:
+
+- **Overload-Retry** bei anhaltendem `API Error: 529` / `overloaded_error` im Pane.
+- **Safeguard-Retry** bei „safeguards flagged this message"-Fehlalarmen.
+- **Überleben eines Prozess-Neustarts.** Das native Warten läuft *im* claude-Prozess
+  („relaunched/exited during the wait, so the task will not resume"). `deploy/term-restart`
+  reißt genau diesen Prozess ab. Der externe Monitor wird per `reconcile`-Timer neu armiert
+  und schickt nach dem Reset trotzdem „continue".
+
+⚠️ **Beide gleichzeitig können sich ins Gehege kommen.** Der Monitor scrapet das Pane und
+weiß nichts vom nativen Warten; erkennt er dessen Zeile („Continuing automatically when your
+limit resets · esc to cancel") nicht als „working", tippt er nach *seiner* geparsten
+Resetzeit sein `retryMessage` in eine Session, die ohnehin schon weiterläuft — doppelter Turn
+oder Text im wartenden Prompt. Wenn das auftritt: in `~/.claude-auto-retry/config.json` den
+Usage-Limit-Pfad abschalten und nur Overload/Safeguard laufen lassen (oder umgekehrt in
+`/config` das native Fortsetzen aus). Nie beide auf denselben Fall ansetzen.
+
+Das Paket hat keinen eigenen Update-Mechanismus; `deploy/claude-auto-retry-update.sh` (Cron)
+holt das nach. Achtung, hier steckte ein stiller Fehler: `npm` ist selbst ein node-Skript mit
+`#!/usr/bin/env node` — ohne `node` im (dürftigen) Cron-PATH scheitert `npm root -g` still,
+das Paket gilt als „nicht installiert" und der Check läuft wochenlang als No-op. Das Skript
+stellt dem PATH deshalb das Verzeichnis des gefundenen `node` voran.
+
 ## claude-auto-retry unter bun
 
 Ist `claude-auto-retry` per `bun add -g` statt per npm installiert, ruft das Paket an drei

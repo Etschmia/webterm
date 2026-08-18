@@ -213,6 +213,31 @@
         </section>
 
         <section>
+          <h3>Wenn Claude ins Usage-Limit läuft</h3>
+          <p>Seit <b>Claude Code 2.1.234</b> wartet die CLI ein erreichtes Limit <b>selbst</b>
+          aus: es erscheint <i>„Continuing automatically when your limit resets · esc to
+          cancel"</i>, und nach dem Reset läuft die Aufgabe von allein weiter. Der Schalter dazu
+          heißt in <code>/config</code> <b>„Continue automatically at usage limit"</b> und ist
+          ab Werk <b>an</b>. Wichtig: das Warten passiert <b>im laufenden Prozess</b> — die
+          Session muss offen bleiben. Wird <code>claude</code> beendet oder neu gestartet
+          (auch durch ein Update per <b>Self-Update</b>), ist die Wartung weg; dann nach dem
+          Reset einfach einen Prompt abschicken.</p>
+          <p>Das Zusatzpaket <b>claude-auto-retry</b> (ein tmux-Monitor außerhalb der Session)
+          war genau dafür gedacht und ist deshalb <b>nicht mehr nötig</b> — der Installer
+          schlägt es nur noch mit „nein" vor. Es kann weiterhin drei Dinge, die das eingebaute
+          Feature nicht tut: erneut versuchen bei anhaltender <b>API-Überlast</b>
+          (<code>API Error: 529</code>), erneut versuchen bei
+          <b>Safeguard-Fehlalarmen</b> („safeguards flagged this message") und die Aufgabe
+          <b>nach einem Neustart des Prozesses</b> wieder anstoßen.</p>
+          <p>Laufen <b>beide</b> auf denselben Fall, kann es doppelt zünden: der Monitor liest
+          nur den Bildschirminhalt und weiß nichts vom eingebauten Warten — im Zweifel landet
+          nach dem Reset ein zweites „continue" in der Session. Wer das Paket behält, schaltet
+          darum am besten eine der beiden Seiten ab: entweder den Usage-Limit-Teil in
+          <code>~/.claude-auto-retry/config.json</code> oder das eingebaute Fortsetzen in
+          <code>/config</code>.</p>
+        </section>
+
+        <section>
           <h3>Dateien &amp; Editor</h3>
           <p>Rechte Spalte: Klick öffnet bzw. lädt herunter, Bilder zeigen beim Überfahren eine
           Vorschau, Rechtsklick öffnet das Menü (u.&nbsp;a. Bearbeiten). Hochladen per

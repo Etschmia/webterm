@@ -12,8 +12,8 @@ Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
 ./install.sh
 ```
 Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Build),
-richtet optional `claude-auto-retry` (inkl. täglichem Update-Check per Cron —
-`deploy/claude-auto-retry-update.sh`) sowie die tmux-Konfiguration (Maussteuerung +
+richtet optional `claude-auto-retry` (Default **nein**, siehe Hinweise; inkl. täglichem
+Update-Check per Cron — `deploy/claude-auto-retry-update.sh`) sowie die tmux-Konfiguration (Maussteuerung +
 git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`) ein und hilft beim
 Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) inkl.
 bcrypt-Hash für Basic Auth. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
@@ -146,8 +146,22 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   `set -g window-size largest` (bzw. `manual`) umstellen.
 - **Sicherheit**: Voller Shell-Zugriff als der Service-User. Schutz = TLS + Basic Auth (Caddy) +
   localhost-Bindung. Credentials geheim halten.
+- **claude-auto-retry ist seit Claude Code 2.1.234 nur noch Ergänzung**: Usage-Limits wartet
+  die CLI selbst aus („Continue automatically at usage limit", `/config`, ab Werk an) — das war
+  der Hauptzweck des Pakets, deshalb fragt `install.sh` es jetzt mit Default **nein**. Was das
+  Paket weiterhin abdeckt: Retry bei anhaltendem API-Overload (529), Retry bei
+  Safeguard-Fehlalarmen und Wiederaufnahme, wenn der `claude`-Prozess die Wartezeit nicht
+  überlebt (nativ gilt „relaunched/exited during the wait → task will not resume" — genau der
+  Fall bei `deploy/term-restart`). **Beides parallel auf denselben Fall anzusetzen ist keine
+  gute Idee**: der Monitor scrapet das Pane und weiß nichts vom nativen Warten, im Zweifel
+  landet nach dem Reset ein doppeltes „continue" in der Session. Dann entweder in
+  `~/.claude-auto-retry/config.json` den Usage-Limit-Pfad abschalten oder in `/config` das
+  native Fortsetzen.
 - **claude-auto-retry-Update-Check**: Das Paket hat keinen eigenen Update-Mechanismus —
   `./install.sh` richtet dafür optional einen täglichen Cron ein
   (`deploy/claude-auto-retry-update.sh`, Log unter `~/.claude-auto-retry/logs/update-check.log`).
   Startet laufende `monitor.js`-Prozesse bei einem Versionswechsel automatisch neu, da deren
-  ES-Module-Code sonst bis zum nächsten Prozessstart auf dem alten Stand bleibt.
+  ES-Module-Code sonst bis zum nächsten Prozessstart auf dem alten Stand bleibt. Das Skript
+  stellt dem PATH das Verzeichnis des gefundenen `node` voran — `npm` ist selbst ein
+  node-Skript, und ohne `node` im dürftigen Cron-PATH scheitert `npm root -g` still, womit der
+  Check ergebnislos durchläuft, statt zu melden.

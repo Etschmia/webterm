@@ -64,6 +64,17 @@ BUN_BIN="$(find_cmd bun || true)"
 NPM_BIN="$(find_cmd npm || true)"
 NODE_BIN="$(find_cmd node || true)"
 
+# npm ist selbst ein node-Skript mit Shebang '#!/usr/bin/env node'. Cron hat kaum PATH,
+# und liegt node nicht in /usr/bin, scheitert JEDER npm-Aufruf still mit
+# "env: 'node': No such file or directory" — 'npm root -g' liefert dann leer, das Paket
+# gilt faelschlicherweise als "nicht installiert" und das Skript beendet sich als No-op.
+# Genau so lief dieser Cron wochenlang leer (0.6.0 statt 0.7.3). Also: node-Verzeichnis
+# dem PATH voranstellen, sobald wir es gefunden haben.
+if [ -n "$NODE_BIN" ]; then
+  PATH="$(dirname "$NODE_BIN"):$PATH"
+  export PATH
+fi
+
 log "=== claude-auto-retry-Update gestartet ==="
 
 # Installationsort bestimmen. Reihenfolge: bun zuerst, dann npm. Gesetzt werden
