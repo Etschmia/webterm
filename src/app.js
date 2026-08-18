@@ -628,7 +628,7 @@ function sessionLabel(s) {
   return looksDefault ? s.name : clean;
 }
 
-function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename, onKill }) {
+function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename, onKill, chips }) {
   const el = document.createElement('div');
   el.className = 'entry' + (active ? ' active' : '');
   const row = document.createElement('div');
@@ -702,8 +702,45 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameVal
     row.append(b);
   }
   el.append(row);
+
+  // Zweite Zeile: Modell/Effort der Agent-Session (leer -> gar keine Zeile).
+  if (chips && chips.length) {
+    const meta = document.createElement('div');
+    meta.className = 'entry-meta';
+    for (const c of chips) {
+      const chip = document.createElement('span');
+      chip.className = 'meta-chip' + (c.cls ? ' ' + c.cls : '');
+      chip.textContent = c.text;
+      if (c.title) chip.title = c.title;
+      meta.append(chip);
+    }
+    el.append(meta);
+  }
+
   el.addEventListener('click', onClick);
   return el;
+}
+
+// Chips einer Agent-Session: Modell und — falls bekannt — Effort. Liefert der
+// Server nichts (fremdes Tool, mehrdeutige Zuordnung, Datei nicht lesbar),
+// bleibt die Zeile weg; bewusst kein "?" oder "unbekannt".
+function modelChips(s) {
+  if (!s || !s.modelLabel) return [];
+  const chips = [{
+    text: s.modelLabel,
+    cls: 'model',
+    title: `Modell: ${s.model || s.modelLabel}`,
+  }];
+  if (s.effort) {
+    chips.push({
+      text: s.effort,
+      cls: 'effort',
+      title: s.effortScope === 'global'
+        ? `Effort: ${s.effort} — globale Einstellung des Tools, nicht pro Session`
+        : `Effort: ${s.effort} — für diese Session`,
+    });
+  }
+  return chips;
 }
 
 function makeCopyToggle() {
@@ -781,6 +818,7 @@ function renderSidebar() {
     // Dahinter liegt serverseitig die persistente tmux-Session
     // "Standard-Webterm" (tmux new-session -A).
     dotClass: sessionDotClass(stdSession),
+    chips: modelChips(stdSession),
     badge: 'tmux',
     active: stdActive,
     onClick: () => switchTo('standard', null),
@@ -801,6 +839,7 @@ function renderSidebar() {
       // Tooltip zeigt zusaetzlich den echten Session-Namen (intern fuer Attach).
       tooltip: (label === s.name ? s.name : `${label} · ${s.name}`) + statusTooltip(s),
       dotClass: sessionDotClass(s),
+      chips: modelChips(s),
       badge: `${s.windows}▦`,
       active,
       onClick: () => switchTo('session', s.name),

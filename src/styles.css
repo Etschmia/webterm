@@ -529,6 +529,35 @@ body.col-resizing, body.col-resizing * {
   outline: none;
 }
 
+/* Modell/Effort einer Agent-Session: zweite Zeile unter dem Namen. Eingerueckt
+   auf Hoehe des Namens (11px Padding + 7px Punkt + 9px Abstand). */
+.entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 11px 8px 27px;
+  margin-top: -4px;
+}
+.meta-chip {
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: var(--muted-foreground);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta-chip.model {
+  color: var(--foreground);
+  border-color: color-mix(in oklab, var(--primary) 30%, var(--border));
+  background: color-mix(in oklab, var(--primary) 10%, transparent);
+}
+
 .entry-badge {
   flex: 0 0 auto;
   font-size: 10.5px;

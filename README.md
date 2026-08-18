@@ -32,6 +32,17 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   (Titel leer, = laufendes Kommando oder `user@host`-Prompt) bleiben beim Session-Namen. Intern
   (Attach, Copy-Mode via `-t`) wird immer der echte Session-Name verwendet; der Tooltip zeigt
   beides.
+- **Modell & Effort je Agent-Session**: Läuft in einer Session `claude`, `codex`, `grok` oder
+  `kimi`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell** und dem
+  **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das nicht aus dem Pane — die TUIs zeigen
+  es dort nicht verlässlich —, sondern aus dem Sitzungszustand der Tools unter `$HOME`:
+  `~/.claude/sessions/<pid>.json` → Transcript (Modell/Effort stehen dort **pro Turn**, ein
+  `/model`-Wechsel ist also sofort sichtbar), bei codex der letzte `turn_context` des Rollouts,
+  bei grok `summary.json`, bei kimi das Wire-Log (Effort dort nur global aus der `config.toml`;
+  der Tooltip sagt das dazu). Nur Claude führt eine PID-Registry — die übrigen drei werden über
+  das Arbeitsverzeichnis des Prozesses zugeordnet; laufen zwei gleiche Tools im **selben**
+  Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Ergebnisse sind auf
+  mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
 

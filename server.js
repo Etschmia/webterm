@@ -105,11 +105,14 @@ function tmux(args) {
   });
 }
 
-// tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein Agent (`claude` oder
-// `kimi`) laeuft. pane_current_command taugt dafuer nicht: hinter dem
-// claude-auto-retry-Wrapper meldet es 'bash'/'node'. Verlaesslich ist nur der
-// Prozessname comm irgendwo im Baum unter dem Pane-PID (gleiche
-// Heuristik wie deploy/term-restart). Liefert Map: Session-Name -> Agent.
+// Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
+const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok'];
+
+// tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein Agent laeuft.
+// pane_current_command taugt dafuer nicht: hinter dem claude-auto-retry-Wrapper
+// meldet es 'bash'/'node'. Verlaesslich ist nur der Prozessname comm irgendwo im
+// Baum unter dem Pane-PID (gleiche Heuristik wie deploy/term-restart).
+// Liefert Map: Session-Name -> { agent, pid }.
 async function agentSessions() {
   const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{session_name}']);
   if (!panes.ok) return new Map();
@@ -126,13 +129,13 @@ async function agentSessions() {
     });
   });
   const parent = new Map();
-  const agentPids = new Map(); // pid -> 'claude'|'kimi'
+  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'
   for (const line of ps.split('\n')) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
     parent.set(m[1], m[2]);
     const comm = m[3].trim();
-    if (comm === 'claude' || comm === 'kimi') agentPids.set(m[1], comm);
+    if (AGENT_COMMANDS.includes(comm)) agentPids.set(m[1], comm);
   }
   const found = new Map();
   for (const [pid, agent] of agentPids) {
@@ -141,13 +144,278 @@ async function agentSessions() {
       const session = paneSession.get(x);
       if (session) {
         // Pro Session ein Agent-Eintrag (bei mehreren Panes gewinnt der erste).
-        if (!found.has(session)) found.set(session, agent);
+        if (!found.has(session)) found.set(session, { agent, pid });
         break;
       }
       x = parent.get(x);
     }
   }
   return found;
+}
+
+// ---------------------------------------------------------------------------
+// Modell & Effort einer Agent-Session (Chip-Zeile der Sidebar)
+// ---------------------------------------------------------------------------
+// Quelle ist NICHT das Pane: die TUIs zeigen das aktive Modell nicht
+// verlaesslich an (bei Claude Code steht in der Fusszeile je nach Breite und
+// Zustand etwas anderes). Alle vier Agenten schreiben ihren Sitzungszustand
+// aber unter $HOME weg — von dort kommen Modell und Effort:
+//
+//   claude  ~/.claude/sessions/<pid>.json  -> sessionId (echte PID-Registry!)
+//           ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl  -> je Assistant-
+//           Record `message.model` + `effort` (also pro Turn, ein /model- oder
+//           /effort-Wechsel mitten in der Sitzung ist damit sofort sichtbar)
+//   codex   ~/.codex/sessions/<Y>/<M>/<D>/rollout-*.jsonl -> letzter
+//           `turn_context` mit `model` + `effort`
+//   grok    ~/.grok/sessions/<urlencodeter cwd>/<id>/summary.json ->
+//           `current_model_id` + `reasoning_effort`
+//   kimi    ~/.kimi-code/sessions/wd_<dir>_<hash>/session_*/agents/main/
+//           wire.jsonl -> `model`; einen Effort kennt die Sitzung nicht, der
+//           steht global in ~/.kimi-code/config.toml ([thinking].effort)
+//
+// Nur claude fuehrt eine PID-Registry; die anderen drei sind ausschliesslich
+// ueber das Arbeitsverzeichnis des Prozesses zuzuordnen — daher der
+// Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche Tools im selben
+// Verzeichnis => lieber nichts anzeigen als das Falsche).
+
+function readJsonFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+// "<mtime>:<size>" als Cache-Signatur einer Datei ('' wenn nicht lesbar).
+function statSig(file) {
+  try { const st = fs.statSync(file); return `${st.mtimeMs}:${st.size}`; } catch { return ''; }
+}
+
+// Die letzten <bytes> einer Datei als Zeilen, NEUESTE ZUERST. Transcripte
+// werden viele MB gross (Tool-Ergebnisse), gelesen wird deshalb nur der
+// Schwanz; die erste — womoeglich angeschnittene — Zeile faellt weg.
+function tailLines(file, bytes = 512 * 1024) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').split('\n');
+    if (len < size) lines.shift();
+    return lines.reverse();
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch { /* egal */ } }
+  }
+}
+
+// Erste Zeile einer Datei (ohne sie ganz zu lesen). Gegenstueck zu tailLines:
+// bei codex steht die Zuordnung zum Arbeitsverzeichnis im ERSTEN Record.
+function headLine(file, bytes = 64 * 1024) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(bytes);
+    const read = fs.readSync(fd, buf, 0, bytes, 0);
+    const text = buf.toString('utf8', 0, read);
+    const nl = text.indexOf('\n');
+    return nl === -1 ? text : text.slice(0, nl);
+  } catch {
+    return '';
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch { /* egal */ } }
+  }
+}
+
+// Ergebnis-Cache. Die Sidebar pollt alle 4 s, die Quelldateien aendern sich nur
+// bei echter Agent-Aktivitaet — ohne Cache wuerde jeder Poll dieselben Dateien
+// neu parsen. Schluessel = Quelle, Gueltigkeit = deren mtime+size.
+const modelCache = new Map(); // key -> { sig, value }
+function cachedBySig(key, sig, compute) {
+  const hit = modelCache.get(key);
+  if (hit && hit.sig === sig) return hit.value;
+  const value = compute();
+  // Grob deckeln: beendete Sessions sollen den Cache nicht ewig fuellen.
+  if (modelCache.size > 256) modelCache.clear();
+  modelCache.set(key, { sig, value });
+  return value;
+}
+
+// Anzeigename aus der rohen Modell-ID. Bewusst konservativ: was nicht sicher
+// erkannt wird, bleibt wie es ist (lieber roh als falsch huebsch).
+function modelLabel(id) {
+  const raw = String(id || '').split('/').pop().trim();
+  if (!raw) return '';
+  let m;
+  // claude-opus-5 -> "Opus 5", claude-haiku-4-5-20251001 -> "Haiku 4.5"
+  if ((m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(raw))) {
+    return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
+  }
+  if (/^gpt-/i.test(raw)) return `GPT-${raw.slice(4)}`;
+  if ((m = /^grok-(.+)$/.exec(raw))) return `Grok ${m[1]}`;
+  if (/^k\d/i.test(raw)) return raw.toUpperCase();          // kimi: k3, k3-256k
+  return raw;
+}
+
+// Arbeitsverzeichnis eines Prozesses (Linux). Auf Systemen ohne /proc bleibt
+// nur der von tmux gemeldete Pfad — den reicht der Aufrufer als Fallback rein.
+function procCwd(pid) {
+  try { return fs.readlinkSync(`/proc/${pid}/cwd`); } catch { return ''; }
+}
+
+function claudeModelInfo(pid) {
+  const reg = readJsonFile(path.join(HOME, '.claude', 'sessions', `${pid}.json`));
+  if (!reg || !reg.sessionId || !reg.cwd) return null;
+  // Projekt-Ordnername: jedes Nicht-alphanumerische Zeichen wird zum Bindestrich
+  // ("/home/librechat/term" -> "-home-librechat-term").
+  const slug = String(reg.cwd).replace(/[^a-zA-Z0-9]/g, '-');
+  const file = path.join(HOME, '.claude', 'projects', slug, `${reg.sessionId}.jsonl`);
+  return cachedBySig(`claude:${file}`, statSig(file), () => {
+    for (const line of tailLines(file)) {
+      if (!line.includes('"assistant"')) continue;
+      let d;
+      try { d = JSON.parse(line); } catch { continue; }
+      // Sidechains sind Subagenten — die laufen u. U. auf einem anderen Modell
+      // und wuerden das der Hauptsitzung ueberschreiben. Ebenso raus:
+      // synthetische Records ("<synthetic>"), die kein echtes Modell nennen.
+      if (d.type !== 'assistant' || d.isSidechain) continue;
+      const model = d.message && d.message.model;
+      if (model && !String(model).startsWith('<')) return { model, effort: d.effort || '' };
+    }
+    return null;
+  });
+}
+
+// Die neuesten Rollout-Dateien, ohne den ganzen Baum zu lesen: Jahr/Monat/Tag
+// sind lexikografisch sortierbar, es reicht, von hinten so weit zu laufen, bis
+// genug Kandidaten beisammen sind.
+function newestCodexRollouts(root, limit = 40) {
+  const out = [];
+  const desc = (dir) => {
+    try { return fs.readdirSync(dir).sort().reverse(); } catch { return []; }
+  };
+  for (const y of desc(root)) {
+    for (const mo of desc(path.join(root, y))) {
+      for (const d of desc(path.join(root, y, mo))) {
+        const dir = path.join(root, y, mo, d);
+        for (const f of desc(dir)) {
+          if (f.startsWith('rollout-') && f.endsWith('.jsonl')) out.push(path.join(dir, f));
+          if (out.length >= limit) return out;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function codexModelInfo(cwd) {
+  const root = path.join(HOME, '.codex', 'sessions');
+  // Zuordnung Rollout <-> cwd steht in der ERSTEN Zeile (session_meta). Das
+  // Ergebnis haengt an der mtime der jeweils neuesten Kandidatendatei: laeuft
+  // der Turn weiter, bleibt die Datei dieselbe und der Scan entfaellt.
+  const candidates = newestCodexRollouts(root);
+  if (!candidates.length) return null;
+  const file = cachedBySig(`codex-file:${cwd}`, statSig(candidates[0]), () => {
+    const byTime = candidates
+      .map((f) => ({ f, t: (() => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } })() }))
+      .sort((a, b) => b.t - a.t);
+    for (const { f } of byTime) {
+      let d;
+      try { d = JSON.parse(headLine(f)); } catch { continue; }
+      const meta = d && d.payload;
+      if (meta && meta.cwd === cwd) return f;
+    }
+    return '';
+  });
+  if (!file) return null;
+  return cachedBySig(`codex:${file}`, statSig(file), () => {
+    for (const line of tailLines(file)) {
+      if (!line.includes('"turn_context"')) continue;
+      let d;
+      try { d = JSON.parse(line); } catch { continue; }
+      if (d.type !== 'turn_context' || !d.payload) continue;
+      if (d.payload.model) return { model: d.payload.model, effort: d.payload.effort || '' };
+    }
+    return null;
+  });
+}
+
+function grokModelInfo(cwd) {
+  // Der Sitzungsordner ist der URL-kodierte cwd.
+  const dir = path.join(HOME, '.grok', 'sessions', encodeURIComponent(cwd));
+  let subs;
+  try { subs = fs.readdirSync(dir); } catch { return null; }
+  let newest = '', newestT = 0;
+  for (const sub of subs) {
+    const f = path.join(dir, sub, 'summary.json');
+    let t = 0;
+    try { t = fs.statSync(f).mtimeMs; } catch { continue; }
+    if (t > newestT) { newestT = t; newest = f; }
+  }
+  if (!newest) return null;
+  return cachedBySig(`grok:${newest}`, statSig(newest), () => {
+    const d = readJsonFile(newest);
+    if (!d || !d.current_model_id) return null;
+    return { model: d.current_model_id, effort: d.reasoning_effort || '' };
+  });
+}
+
+// kimi kennt keinen sitzungseigenen Effort — nur den globalen aus der
+// config.toml ([thinking] effort = "…"). Wird als solcher angezeigt.
+function kimiEffort() {
+  const file = path.join(HOME, '.kimi-code', 'config.toml');
+  return cachedBySig(`kimi-effort:${file}`, statSig(file), () => {
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); } catch { return ''; }
+    const sec = /^\[thinking\]([\s\S]*?)(?=^\[|$(?![\s\S]))/m.exec(text);
+    const m = sec && /^\s*effort\s*=\s*"([^"]+)"/m.exec(sec[1]);
+    return m ? m[1] : '';
+  });
+}
+
+function kimiModelInfo(cwd) {
+  // Arbeitsverzeichnis-Ordner heisst wd_<basename>_<hash> — der Praefix macht
+  // die Suche billig; die Zugehoerigkeit belegt erst state.json (cwd).
+  const root = path.join(HOME, '.kimi-code', 'sessions');
+  const prefix = `wd_${path.basename(cwd)}_`;
+  let wds;
+  try { wds = fs.readdirSync(root).filter((d) => d.startsWith(prefix)); } catch { return null; }
+  let wire = '', newestT = 0;
+  for (const wd of wds) {
+    let sessions;
+    try { sessions = fs.readdirSync(path.join(root, wd)); } catch { continue; }
+    for (const sess of sessions) {
+      if (!sess.startsWith('session_')) continue;
+      const dir = path.join(root, wd, sess);
+      const state = readJsonFile(path.join(dir, 'state.json'));
+      if (!state || state.cwd !== cwd) continue;
+      const f = path.join(dir, 'agents', 'main', 'wire.jsonl');
+      let t = 0;
+      try { t = fs.statSync(f).mtimeMs; } catch { continue; }
+      if (t > newestT) { newestT = t; wire = f; }
+    }
+  }
+  if (!wire) return null;
+  const model = cachedBySig(`kimi:${wire}`, statSig(wire), () => {
+    for (const line of tailLines(wire)) {
+      const m = /"model"\s*:\s*"([^"]+)"/.exec(line);
+      if (m) return m[1];
+    }
+    return '';
+  });
+  return model ? { model, effort: kimiEffort() } : null;
+}
+
+// Modell + Effort einer Agent-Session. Fehlerhafte/fehlende Quellen liefern
+// null — die Sidebar zeigt dann einfach keine Chips (nie ein Fragezeichen).
+function agentModelInfo(agent, pid, cwd) {
+  try {
+    if (agent === 'claude') return claudeModelInfo(pid);
+    if (!cwd) return null;
+    if (agent === 'codex') return codexModelInfo(cwd);
+    if (agent === 'grok') return grokModelInfo(cwd);
+    if (agent === 'kimi') return kimiModelInfo(cwd);
+  } catch { /* defekte/teilgeschriebene Datei: lieber nichts anzeigen */ }
+  return null;
 }
 
 // Agent-Status einer Agent-Session: 'working' | 'blocked' | 'idle'.
@@ -214,10 +482,22 @@ async function listSessions() {
         copyMode: inMode === '1',
         command: command || '',
         path: path || '',
-        // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi')? Steuert
-        // das Sidebar-Label ("<Verzeichnis> — Claude"), das nach dem Beenden
-        // wieder verschwindet.
-        agent: agents.get(name) || null,
+        // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi'|'codex'|
+        // 'grok')? Steuert das Sidebar-Label ("<Verzeichnis> — Claude"), das
+        // nach dem Beenden wieder verschwindet.
+        agent: (agents.get(name) || {}).agent || null,
+        // PID des Agenten — nur intern (Modell-/Effort-Lookup), wird unten
+        // wieder entfernt und geht nicht an den Client.
+        agentPid: (agents.get(name) || {}).pid || null,
+        // Modell + Effort der Agent-Session (Chip-Zeile); null = unbekannt.
+        model: null,
+        modelLabel: '',
+        effort: '',
+        // Woher der Effort stammt: 'session' (pro Turn mitgeschrieben) oder
+        // 'global' (nur eine globale Einstellung, so bei kimi) — das Frontend
+        // sagt es im Tooltip dazu, damit die Anzeige nicht mehr verspricht,
+        // als die Quelle hergibt.
+        effortScope: '',
         // Vom Nutzer umbenannt (Session-Option @user-named): Sidebar zeigt
         // dann den Session-Namen statt des pane_title.
         userNamed: userNamed === '1',
@@ -234,6 +514,31 @@ async function listSessions() {
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
     s.agentStatus = await agentPaneStatus(s.name, s.title, s.agent);
   }));
+
+  // Modell/Effort nachtragen. Zuordnung ueber das Arbeitsverzeichnis des
+  // Prozesses (bei claude ueber dessen PID-Registry, das ist exakt).
+  const agentRows = sessions.filter((s) => s.agent && s.agentPid);
+  for (const s of agentRows) s.agentCwd = procCwd(s.agentPid) || s.path || '';
+  // Mehrdeutigkeits-Riegel: laufen ZWEI Prozesse desselben Tools im selben
+  // Verzeichnis, laesst sich die Sitzungsdatei nicht mehr eindeutig zuordnen —
+  // dann lieber nichts anzeigen als das Falsche. claude ist ausgenommen, dort
+  // fuehrt die PID zur richtigen Datei.
+  const perKey = new Map();
+  for (const s of agentRows) {
+    const key = `${s.agent}\u0000${s.agentCwd}`;
+    perKey.set(key, (perKey.get(key) || 0) + 1);
+  }
+  for (const s of agentRows) {
+    const ambiguous = s.agent !== 'claude' && perKey.get(`${s.agent}\u0000${s.agentCwd}`) > 1;
+    const info = ambiguous ? null : agentModelInfo(s.agent, s.agentPid, s.agentCwd);
+    if (info) {
+      s.model = info.model;
+      s.modelLabel = modelLabel(info.model);
+      s.effort = info.effort || '';
+      s.effortScope = s.effort ? (s.agent === 'kimi' ? 'global' : 'session') : '';
+    }
+  }
+  for (const s of sessions) { delete s.agentPid; delete s.agentCwd; }
   return sessions;
 }
 

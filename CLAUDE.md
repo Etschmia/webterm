@@ -122,6 +122,20 @@ npm install          # bzw. npm run build
 Der PATH-Präfix ist beim Bauen zwingend: `node-pty` ist nativ, und sein `binding.gyp` ruft
 intern `node` auf.
 
+## Modell/Effort der Agent-Sessions: Quellen unter `$HOME`, nicht das Pane
+
+Die Chip-Zeile der Sidebar liest Modell und Effort **nicht** aus dem tmux-Pane (die TUIs
+zeigen das Modell je nach Breite/Zustand gar nicht), sondern aus dem Sitzungszustand der
+Tools: `~/.claude/sessions/<pid>.json` → `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl`
+(dort je Assistant-Record `message.model` + `effort`), codex aus dem letzten `turn_context`
+des Rollouts, grok aus `summary.json`, kimi aus dem Wire-Log (+ `[thinking].effort` der
+`config.toml`).
+
+Wichtig für Änderungen daran: **nur Claude führt eine PID-Registry** — die anderen drei
+werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
+Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt dann bewusst
+nichts an. Diesen Riegel nicht wegoptimieren.
+
 ## claude-auto-retry: seit Claude Code 2.1.234 nur noch Ergänzung
 
 Claude Code wartet ein erreichtes Usage-Limit **selbst** aus — Schalter
