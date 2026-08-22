@@ -1427,12 +1427,34 @@ const FX_DOC_MAX = 512 * 1024;            // groessere Dateien nicht fuer den fl
 const fxDocEl = document.createElement('div');
 fxDocEl.className = 'fx-preview fx-docprev';
 fxDocEl.hidden = true;
+fxDocEl.tabIndex = 0;
+fxDocEl.setAttribute('role', 'region');
 const fxDocProse = document.createElement('div');
 fxDocProse.className = 'mdlite-prose';
 fxDocEl.append(fxDocProse);
 document.body.append(fxDocEl);
 let fxDocX = 0, fxDocY = 0, fxDocToken = 0;
+let fxDocPinned = false, fxDocHideTimer = null;
 const fxDocCache = new Map();             // rel -> gerendertes HTML (pro Sitzung)
+
+function fxCancelDocHide() {
+  clearTimeout(fxDocHideTimer);
+  fxDocHideTimer = null;
+}
+function fxScheduleDocHide() {
+  fxCancelDocHide();
+  if (fxDocPinned) return;
+  // Genug Zeit, um den kleinen Abstand zwischen Dateizeile und Vorschau zu
+  // ueberqueren, ohne dass das Panel unter dem Mauszeiger verschwindet.
+  fxDocHideTimer = setTimeout(() => fxHideDocPreview(), 220);
+}
+function fxPinDocPreview() {
+  if (fxDocEl.hidden) return;
+  fxCancelDocHide();
+  fxDocPinned = true;
+  fxDocEl.classList.add('is-active');
+  fxDocEl.focus({ preventScroll: true });
+}
 
 function fxMoveDocPreview(x, y) {
   fxDocX = x; fxDocY = y;
@@ -1440,6 +1462,7 @@ function fxMoveDocPreview(x, y) {
 }
 async function fxShowDocPreview(rel, name, size) {
   if (size > FX_DOC_MAX) return;          // zu gross fuer den fluechtigen Blick
+  if (fxDocPinned) return;                // angeklickte Vorschau nicht ersetzen
   const token = ++fxDocToken;
   let html = fxDocCache.get(rel);
   if (html == null) {
@@ -1453,13 +1476,36 @@ async function fxShowDocPreview(rel, name, size) {
   }
   if (token !== fxDocToken) return;       // Cursor inzwischen weiter -> nicht anzeigen
   fxDocProse.innerHTML = html;
+  fxDocEl.classList.remove('is-active');
+  fxDocEl.scrollTop = 0;
+  fxDocEl.setAttribute('aria-label', `Vorschau von ${name}. Anklicken zum Scrollen.`);
   fxDocEl.hidden = false;
   fxMoveDocPreview(fxDocX, fxDocY);
 }
-function fxHideDocPreview() {
+function fxHideDocPreview(force = false) {
+  if (fxDocPinned && !force) return;
+  fxCancelDocHide();
   fxDocToken++;                            // etwaigen laufenden Fetch entwerten
+  fxDocPinned = false;
+  fxDocEl.classList.remove('is-active');
   fxDocEl.hidden = true;
 }
+
+fxDocEl.addEventListener('mouseenter', fxCancelDocHide);
+fxDocEl.addEventListener('mouseleave', fxScheduleDocHide);
+fxDocEl.addEventListener('click', fxPinDocPreview);
+fxDocEl.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && !fxDocPinned) {
+    e.preventDefault();
+    fxPinDocPreview();
+  }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (fxDocPinned && !fxDocEl.contains(e.target)) fxHideDocPreview(true);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && fxDocPinned) fxHideDocPreview(true);
+});
 
 // ---- Git-Status: Faerbung der Eintraege + Branch in der Pfadzeile ----------
 // Der Status kommt aus einem eigenen Endpunkt (/api/fs/git), damit die Liste
@@ -1689,7 +1735,7 @@ function fxRenderCrumbs() {
 
 function fxRenderList(entries) {
   fxHidePreview(); // gehovertes Element wird ersetzt -> mouseleave faellt evtl. aus
-  fxHideDocPreview();
+  fxHideDocPreview(true);
   fxListEl.replaceChildren();
   if (fxPath) {
     fxListEl.append(fxItem({ name: '..', type: 'dir' }, { svg: ICON_UP }, () => {
@@ -1768,7 +1814,7 @@ function fxItem(e, iconDef, onClick, previewUrl, docPreview) {
       hoverTimer = setTimeout(() => fxShowDocPreview(docPreview.rel, docPreview.name, docPreview.size), FX_DOC_DELAY);
     });
     el.addEventListener('mousemove', (ev) => fxMoveDocPreview(ev.clientX, ev.clientY));
-    el.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); fxHideDocPreview(); });
+    el.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); fxScheduleDocHide(); });
   }
   return el;
 }
@@ -1851,7 +1897,7 @@ function fxHideMenu() {
 
 function fxShowMenu(x, y, items) {
   fxHidePreview(); // schwebende Bild-Vorschau nicht unter dem Menue stehen lassen
-  fxHideDocPreview();
+  fxHideDocPreview(true);
   fxMenuEl.replaceChildren();
   for (const it of items) {
     const b = document.createElement('button');

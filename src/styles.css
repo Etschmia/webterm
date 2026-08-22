@@ -1002,16 +1002,38 @@ body.col-resizing, body.col-resizing * {
   border-radius: 4px;
   background: var(--term-bg);
 }
-/* Fluechtige Markdown/HTML-Vorschau: begrenzter Ausschnitt, unten sanft
-   ausgeblendet (signalisiert "nur ein Blick") — voll gibt es die Vorschau im
-   Fenster ueber das Kontextmenue. */
+/* Markdown/HTML-Vorschau: auf Hover ein begrenzter, sanft ausgeblendeter
+   Ausschnitt. Das Panel ist erreichbar; ein Klick macht es scrollbar. */
 .fx-preview.fx-docprev {
   padding: 12px 15px;
   width: 360px;
   max-height: 420px;
   overflow: hidden;
+  pointer-events: auto;
+  cursor: default;
+  overscroll-behavior: contain;
   -webkit-mask-image: linear-gradient(to bottom, #000 85%, transparent);
   mask-image: linear-gradient(to bottom, #000 85%, transparent);
+}
+.fx-preview.fx-docprev.is-active {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+  -webkit-mask-image: none;
+  mask-image: none;
+  border-color: color-mix(in oklab, var(--primary) 35%, var(--border-strong));
+}
+.fx-preview.fx-docprev.is-active:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+}
+.fx-preview.fx-docprev::-webkit-scrollbar { width: 7px; }
+.fx-preview.fx-docprev::-webkit-scrollbar-track { background: transparent; }
+.fx-preview.fx-docprev::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 .fx-docprev .mdlite-prose { font-size: 12.5px; line-height: 1.55; }
 .fx-docprev .mdlite-prose h1 { font-size: 1.45em; }
