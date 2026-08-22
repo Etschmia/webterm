@@ -3,7 +3,7 @@ import * as esbuild from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,11 +26,11 @@ fs.mkdirSync(PUBLIC, { recursive: true });
 // ausloesen. So spiegelt der Stamp genau die Version des laufenden Backends.
 function buildStamp() {
   const git = (args) => {
-    try { return execSync(`git ${args}`, { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
+    try { return execFileSync('git', args, { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
     catch { return null; }
   };
-  return git('log -1 --format=%h -- server.js package.json package-lock.json')
-      || git('rev-parse --short HEAD');
+  return git(['log', '-1', '--format=%h', '--', 'server.js', 'package.json', 'package-lock.json'])
+      || git(['rev-parse', '--short', 'HEAD']);
 }
 const STAMP = buildStamp() || `build-${Date.now()}`;
 
@@ -41,7 +41,7 @@ const STAMP = buildStamp() || `build-${Date.now()}`;
 // reiner Frontend-Deploy einen Reload aus, aber KEINE falsch-positive Warnung, und
 // ein No-op-Rebuild (gleicher HEAD) laedt nicht neu.
 function headStamp() {
-  try { return execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
+  try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
   catch { return null; }
 }
 const HEAD = headStamp() || STAMP;
@@ -53,6 +53,7 @@ fs.writeFileSync(
 // Statische Dateien kopieren
 const copies = [
   [path.join(SRC, 'index.html'), path.join(PUBLIC, 'index.html')],
+  [path.join(SRC, 'theme-init.js'), path.join(PUBLIC, 'theme-init.js')],
   [path.join(SRC, 'styles.css'), path.join(PUBLIC, 'styles.css')],
   [path.join(__dirname, 'node_modules/@xterm/xterm/css/xterm.css'), path.join(PUBLIC, 'xterm.css')],
   // Prose-Styles der Markdown-Vorschau aus der mdlite-Bibliothek (single source of truth).
@@ -79,7 +80,7 @@ function stampAssets() {
     } catch { return null; }
   };
   let html = fs.readFileSync(htmlFile, 'utf8');
-  for (const name of ['xterm.css', 'styles.css', 'mdlite.css', 'app.bundle.js']) {
+  for (const name of ['theme-init.js', 'xterm.css', 'styles.css', 'mdlite.css', 'app.bundle.js']) {
     const h = hash(name);
     if (h) html = html.replaceAll(`"${name}"`, `"${name}?v=${h}"`);
   }
@@ -92,7 +93,9 @@ const options = {
   format: 'esm',
   target: ['es2020'],
   outfile: path.join(PUBLIC, 'app.bundle.js'),
-  sourcemap: true,
+  // Produktions-Sourcemaps legen die komplette interne API-Struktur offen.
+  // Im expliziten Watch-Modus bleiben sie fuer lokale Entwicklung verfuegbar.
+  sourcemap: watch,
   minify: !watch,
   legalComments: 'none',
   // Beide Stamps fest ins Bundle einbrennen: __BUILD_STAMP__ (Backend-Version, fuer
@@ -114,6 +117,9 @@ if (watch) {
   console.log('esbuild watching …');
 } else {
   await esbuild.build(options);
+  // Ein frueherer Development-/Alt-Build darf keine veraltete Map im statisch
+  // ausgelieferten public-Verzeichnis zuruecklassen.
+  fs.rmSync(path.join(PUBLIC, 'app.bundle.js.map'), { force: true });
   stampAssets(); // erst nach dem Bundle-Schreiben: der Hash soll das neue Bundle treffen
   console.log('build complete -> public/');
 }

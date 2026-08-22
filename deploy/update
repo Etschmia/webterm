@@ -252,41 +252,19 @@ run_npm(){
 }
 
 # ---------------------------------------------------------------------------
-# GitHub-Transport fuer die mdlite-git-Dependency mit Fallback-Kette:
+# GitHub-Transport fuer die mdlite-git-Dependency mit sicherer Fallback-Kette:
 #   1. git  (ssh-Key vorhanden)          -> nativer git+ssh-Clone (Standard)
 #   2. gh   (authentifiziertes gh-CLI)   -> git ueber gh-HTTPS, scoped Config
-#   3. Tarball (reines HTTPS, kein git)  -> npm zieht den Release-Tarball
-# Inhalt ist in allen drei Faellen identisch (derselbe Tag). Nur der Transport
-# unterscheidet sich; package.json/-lock bleiben committet auf der git-Form
-# (reproduzierbar, Commit-gepinnt) — git bleibt also die primaere Methode.
+# package.json/-lock pinnen einen unveraenderlichen Commit. Einen frueheren
+# Tarball-Fallback gibt es bewusst nicht mehr: GitHub-Tarballs zu beweglichen
+# Tags wurden ohne Inhalts-Hash installiert und unterliefen damit das Lockfile.
 # Hintergrund: npm normalisiert die github-git-Dependency im Lockfile IMMER auf
 # git+ssh; Server ohne GitHub-SSH-Key wuerden am Clone scheitern. Diese Kette
 # faengt das ab, ohne die Reproduzierbarkeit der committeten Dateien aufzugeben.
 MDLITE_REPO_SSH="git@github.com:Etschmia/mdlite.git"
-MDLITE_TARBALL="https://github.com/Etschmia/mdlite/archive/refs/tags/v0.2.0-lib.tar.gz"
 DEPLOY_GITCFG="$SCRIPT_DIR/.deploy-gitconfig"   # scoped, faerbt ~/.gitconfig nicht ein
 
-# mdlite aus dem Release-Tarball installieren, ohne die committeten
-# package.json/-lock DAUERHAFT zu veraendern (node_modules bleibt danach gefuellt;
-# der Inhalt ist identisch zum git-Commit desselben Tags).
-restore_committed_manifest(){
-  mv -f "$SCRIPT_DIR/.package.json.deploybak"      "$SCRIPT_DIR/package.json"      2>/dev/null || true
-  mv -f "$SCRIPT_DIR/.package-lock.json.deploybak" "$SCRIPT_DIR/package-lock.json" 2>/dev/null || true
-}
-
-install_deps_tarball(){
-  log "mdlite-Transport: Tarball (reines HTTPS)."
-  cp "$SCRIPT_DIR/package.json"      "$SCRIPT_DIR/.package.json.deploybak"
-  cp "$SCRIPT_DIR/package-lock.json" "$SCRIPT_DIR/.package-lock.json.deploybak"
-  run_npm pkg set "dependencies.mdlite=$MDLITE_TARBALL" \
-    || { restore_committed_manifest; die "package.json fuer Tarball-Fallback anpassen fehlgeschlagen."; }
-  local rc=0
-  run_npm install || rc=$?
-  restore_committed_manifest
-  [ "$rc" -eq 0 ] || die "npm install (Tarball-Fallback) fehlgeschlagen."
-}
-
-# npm install mit der Transport-Kette git -> gh -> Tarball.
+# npm install mit der Transport-Kette git -> gh; beide beziehen exakt den Commit.
 install_deps_resilient(){
   # 1. git (ssh): Clone-Faehigkeit billig proben (BatchMode: kein Passwort-Prompt).
   if GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=6' \
@@ -313,10 +291,9 @@ GITCFG
     unset GIT_CONFIG_GLOBAL
     rm -f "$DEPLOY_GITCFG"
     [ "$rc" -eq 0 ] && return 0
-    log "mdlite: gh-Install fehlgeschlagen -> Tarball."
+    log "mdlite: gh-Install fehlgeschlagen."
   fi
-  # 3. Tarball.
-  install_deps_tarball
+  die "mdlite konnte weder per git/SSH noch per authentifiziertem gh/HTTPS installiert werden. Kein ungepruefter Tarball-Fallback."
 }
 
 # Abhaengigkeiten nur bei ECHTER Aenderung installieren — anhand eines Inhalts-
@@ -339,7 +316,7 @@ have_hash=""; [ -f "$DEPS_STAMP" ] && have_hash="$(cat "$DEPS_STAMP" 2>/dev/null
 if [ ! -d "$SCRIPT_DIR/node_modules" ] || [ -z "$want_hash" ] || [ "$want_hash" != "$have_hash" ]; then
   log "Abhaengigkeiten aktualisieren (npm install) …"
   lock_mtime_before="$(stat -c %Y "$LOCK" 2>/dev/null || echo 0)"
-  install_deps_resilient   # git -> gh -> Tarball; endet mit committeten Manifesten
+  install_deps_resilient   # git -> gh; beide folgen dem gepinnten Commit
   after_hash="$(lock_hash)"
   if [ "$after_hash" = "$want_hash" ] && [ "$lock_mtime_before" -gt 0 ]; then
     # npm hat package-lock.json nur die mtime verpasst (Inhalt gleich). Original-

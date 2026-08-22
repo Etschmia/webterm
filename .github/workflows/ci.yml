@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # npm normalisiert die GitHub-Abhängigkeit im Lockfile auf SSH. mdlite ist
+      # öffentlich; HTTPS hält CI unabhängig von deploy-spezifischen SSH-Keys.
+      - run: git config --global url.https://github.com/.insteadOf ssh://git@github.com/
+      - run: git config --global --add url.https://github.com/.insteadOf git@github.com:
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: test ! -e public/app.bundle.js.map
+      # Build-Abhängigkeiten landen im ausgelieferten Browserbundle und gehören
+      # deshalb ausdrücklich in den Audit-Scope.
+      - run: npm audit
+      - run: bash -n install.sh deploy/*.sh deploy/update deploy/term-restart

@@ -210,6 +210,40 @@ function setStatus(text, isErr, autoHideMs) {
 // (https://host/term/). Voraussetzung fuer den Unterpfad: abschliessender
 // Slash — Caddy sollte /term auf /term/ umleiten (siehe install.sh-Snippet).
 const BASE = location.pathname.replace(/[^/]*$/, '');
+let csrfToken = null;
+let csrfPending = null;
+
+async function getCsrfToken(force = false) {
+  if (force) csrfToken = null;
+  if (csrfToken) return csrfToken;
+  if (!csrfPending) {
+    csrfPending = fetch(`${BASE}api/csrf`, { cache: 'no-store' })
+      .then((r) => {
+        if (!r.ok) throw new Error('CSRF-Token nicht verfuegbar');
+        return r.json();
+      })
+      .then((data) => {
+        if (!data.token) throw new Error('CSRF-Token fehlt');
+        csrfToken = data.token;
+        return csrfToken;
+      })
+      .finally(() => { csrfPending = null; });
+  }
+  return csrfPending;
+}
+
+async function protectedFetch(url, options = {}, retry = true) {
+  const headers = new Headers(options.headers || {});
+  headers.set('X-Term-CSRF', await getCsrfToken());
+  const response = await fetch(url, { ...options, headers });
+  // Ein Backend-Restart erzeugt absichtlich einen neuen Token. Offene Tabs
+  // synchronisieren sich beim ersten folgenden Schreibzugriff automatisch.
+  if (retry && response.status === 403) {
+    await getCsrfToken(true);
+    return protectedFetch(url, options, false);
+  }
+  return response;
+}
 
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -396,7 +430,7 @@ document.addEventListener('keydown', (e) => {
 // noetig, weil der Server headless ist: er hat keine System-Zwischenablage, das
 // Bild lebt allein im Browser des Nutzers. Text-Paste bleibt unberuehrt (xterm).
 async function uploadClip(file) {
-  const r = await fetch(`${BASE}api/clip`, {
+  const r = await protectedFetch(`${BASE}api/clip`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
@@ -891,7 +925,7 @@ function startCreateSession() {
 
 async function createSession(name) {
   try {
-    const r = await fetch(`${BASE}api/sessions/create?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    const r = await protectedFetch(`${BASE}api/sessions/create?name=${encodeURIComponent(name)}`, { method: 'POST' });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || 'Anlegen fehlgeschlagen');
     await refreshSessions();
@@ -909,7 +943,7 @@ async function killSession(name, label) {
   const what = label && label !== name ? `${label} (${name})` : name;
   if (!window.confirm(`Session „${what}" wirklich beenden?\nAlle darin laufenden Prozesse werden beendet.`)) return;
   try {
-    const r = await fetch(`${BASE}api/sessions/kill?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    const r = await protectedFetch(`${BASE}api/sessions/kill?name=${encodeURIComponent(name)}`, { method: 'POST' });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || 'Beenden fehlgeschlagen');
   } catch (e) {
@@ -923,7 +957,7 @@ async function killSession(name, label) {
 // tmux-Client bleibt dabei verbunden; nur die aktive Auswahl muss nachziehen.
 async function renameSession(oldName, newName) {
   try {
-    const r = await fetch(
+    const r = await protectedFetch(
       `${BASE}api/sessions/rename?name=${encodeURIComponent(oldName)}&new=${encodeURIComponent(newName)}`,
       { method: 'POST' },
     );
@@ -1753,7 +1787,7 @@ async function fxUpload(files) {
   for (const f of files) {
     fxSetStatus(`Lade hoch: ${f.name} …`);
     try {
-      const r = await fetch(
+      const r = await protectedFetch(
         `${BASE}api/fs/upload?path=${encodeURIComponent(fxPath)}&name=${encodeURIComponent(f.name)}`,
         { method: 'POST', body: f },
       );
@@ -2047,7 +2081,7 @@ async function edSave() {
   const i = ed.path.lastIndexOf('/');
   const dir = i === -1 ? '' : ed.path.slice(0, i);
   try {
-    const r = await fetch(
+    const r = await protectedFetch(
       `${BASE}api/fs/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(ed.name)}`,
       { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: content },
     );
@@ -2413,7 +2447,7 @@ async function upStart() {
   upState.phase = 'run';
   upRender();
   try {
-    const r = await fetch(`${BASE}api/update/run`, { method: 'POST' });
+    const r = await protectedFetch(`${BASE}api/update/run`, { method: 'POST' });
     const d = await r.json().catch(() => ({}));
     if (!r.ok && r.status !== 409) throw new Error(d.error || 'Start fehlgeschlagen');
   } catch (e) {
@@ -2616,7 +2650,7 @@ async function addBug() {
   const btn = document.getElementById('bug-add');
   btn.disabled = true;
   try {
-    const r = await fetch(`${BASE}api/bugs`, {
+    const r = await protectedFetch(`${BASE}api/bugs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, body }),
@@ -2636,7 +2670,7 @@ async function addBug() {
 
 async function toggleBug(id, done) {
   try {
-    const r = await fetch(`${BASE}api/bugs?id=${encodeURIComponent(id)}`, {
+    const r = await protectedFetch(`${BASE}api/bugs?id=${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ done }),

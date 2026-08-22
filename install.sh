@@ -19,6 +19,7 @@
 # beides ist von git ausgeschlossen.
 
 set -euo pipefail
+umask 077
 
 # --------------------------------------------------------------------------
 # Grundlagen
@@ -100,6 +101,7 @@ set_env() {
   # $1 = KEY, $2 = VALUE. Legt .env an / ersetzt den Schluessel.
   local key="$1" val="$2" tmp
   touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
   if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
     tmp="$(mktemp)"
     grep -vE "^${key}=" "$ENV_FILE" > "$tmp" || true
@@ -191,11 +193,11 @@ show_port_owner() {
 }
 
 caddy_hash() {
-  # bcrypt-Hash fuer Caddy basic_auth. Probiert mehrere CLI-Varianten.
+  # Passwort nur ueber stdin uebergeben: --plaintext wuerde es waehrend des
+  # Hashens fuer andere lokale Nutzer in der Prozessliste sichtbar machen.
   local pw="$1" out
-  out="$(caddy hash-password --plaintext "$pw" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
-  out="$(caddy hash-password -plaintext "$pw" 2>/dev/null)"  && { printf '%s' "$out"; return 0; }
-  out="$(printf '%s' "$pw" | caddy hash-password 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  out="$(printf '%s\n%s\n' "$pw" "$pw" | caddy hash-password 2>/dev/null)" \
+    && { printf '%s' "$out"; return 0; }
   return 1
 }
 
@@ -528,8 +530,8 @@ write_caddy_credentials_note() {
 prompt_credentials() {
   # Setzt globale CADDY_USER und CADDY_HASH.
   CADDY_USER="$(ask_value 'Loginname')"
-  while [ -z "$CADDY_USER" ]; do
-    warn "Loginname darf nicht leer sein."
+  while ! printf '%s' "$CADDY_USER" | grep -qE '^[A-Za-z0-9._-]+$'; do
+    warn "Loginname darf nur Buchstaben, Ziffern, Punkt, _ und - enthalten."
     CADDY_USER="$(ask_value 'Loginname')"
   done
   if [ "$HAVE_CADDY" -eq 1 ]; then
@@ -551,6 +553,19 @@ prompt_credentials() {
   fi
 }
 
+prompt_ip_allowlist() {
+  # Optionaler zusaetzlicher Schutz fuer eine Anwendung mit voller Shell. Die
+  # Eingabe wird bewusst auf die Zeichenmenge von IPv4/IPv6/CIDR-Listen begrenzt.
+  CADDY_ALLOWED_IPS="$(ask_value 'Optionale IP-Allowlist (CIDRs, komma-separiert; leer = keine)' '')"
+  if [ -n "$CADDY_ALLOWED_IPS" ]; then
+    if ! printf '%s' "$CADDY_ALLOWED_IPS" | grep -qE '^[0-9A-Fa-f:.,/[:space:]]+$'; then
+      err "Ungueltige IP-Allowlist — nur IPv4/IPv6/CIDR, Komma und Leerzeichen erlaubt."
+      exit 2
+    fi
+    CADDY_ALLOWED_IPS="$(printf '%s' "$CADDY_ALLOWED_IPS" | tr ',' ' ')"
+  fi
+}
+
 if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
   PUBLIC_ORIGIN=""
   CADDY_OUT=""
@@ -562,10 +577,14 @@ if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
   if [ "$MODE" = "1" ]; then
     # ---- dedizierte Subdomain -------------------------------------------
     HOST_NAME="$(ask_value 'Vollstaendiger Subdomain-Name (z. B. term.example.com)')"
-    while [ -z "$HOST_NAME" ]; do HOST_NAME="$(ask_value 'Subdomain-Name')"; done
+    while ! printf '%s' "$HOST_NAME" | grep -qE '^([A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z0-9][A-Za-z0-9-]*$'; do
+      warn "Bitte einen gueltigen DNS-Namen ohne Schema, Port oder Sonderzeichen eingeben."
+      HOST_NAME="$(ask_value 'Subdomain-Name')"
+    done
     warn "DNS: Lege einen A-/AAAA-Record fuer '$HOST_NAME' auf diesen Server an,"
     note "    bevor du Caddy neu laedst (sonst kann kein TLS-Zertifikat ausgestellt werden)."
     prompt_credentials
+    prompt_ip_allowlist
     PUBLIC_ORIGIN="https://$HOST_NAME"
     CADDY_OUT="$DEPLOY_DIR/${HOST_NAME}.local.caddy"
     cat > "$CADDY_OUT" <<EOF
@@ -577,6 +596,12 @@ $HOST_NAME {
         $CADDY_USER $CADDY_HASH
     }
 
+$(if [ -n "$CADDY_ALLOWED_IPS" ]; then cat <<EOF_IP
+    @term_denied not remote_ip $CADDY_ALLOWED_IPS
+    respond @term_denied "Forbidden" 403
+EOF_IP
+fi)
+
     # Backend bindet nur localhost; Caddy reicht den WebSocket-Upgrade
     # automatisch durch, Basic Auth deckt auch den WS-Handshake ab.
     reverse_proxy 127.0.0.1:$PORT {
@@ -587,6 +612,9 @@ $HOST_NAME {
         X-Content-Type-Options nosniff
         X-Frame-Options SAMEORIGIN
         Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000"
+        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
         -Server
     }
 
@@ -610,7 +638,10 @@ EOF
   else
     # ---- Unterpfad ------------------------------------------------------
     FULL_URL="$(ask_value 'Vollstaendige Wunsch-URL (z. B. https://tools.example.com/term)')"
-    while [ -z "$FULL_URL" ]; do FULL_URL="$(ask_value 'Wunsch-URL')"; done
+    while ! printf '%s' "$FULL_URL" | grep -qE '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$'; do
+      warn "Bitte eine HTTPS-URL ohne Query, Fragment, Port oder Sonderzeichen eingeben."
+      FULL_URL="$(ask_value 'Wunsch-URL')"
+    done
     scheme="${FULL_URL%%://*}"; [ "$scheme" = "$FULL_URL" ] && scheme="https"
     rest="${FULL_URL#*://}"
     HOST_NAME="${rest%%/*}"
@@ -636,11 +667,21 @@ EOF
     fi
 
     prompt_credentials
+    prompt_ip_allowlist
     CADDY_OUT="$DEPLOY_DIR/${HOST_NAME}${URL_PATH//\//_}.path.local.caddy"
     cat > "$CADDY_OUT" <<EOF
 # term-web — Unterpfad-Snippet, generiert von install.sh
 # Einzufuegen INNERHALB des bestehenden Site-Blocks:  $HOST_NAME { … }
 # Echte Zugangsdaten — NICHT committen (per .gitignore ausgeschlossen).
+
+$(if [ -n "$CADDY_ALLOWED_IPS" ]; then cat <<EOF_IP
+    @term_denied {
+        path $URL_PATH $URL_PATH/*
+        not remote_ip $CADDY_ALLOWED_IPS
+    }
+    respond @term_denied "Forbidden" 403
+EOF_IP
+fi)
 
     # Ohne abschliessenden Slash auf /-Form umleiten (relative Assets!)
     redir $URL_PATH ${URL_PATH}/
@@ -652,6 +693,15 @@ EOF
         }
         reverse_proxy 127.0.0.1:$PORT {
             header_up X-Real-IP {remote_host}
+        }
+        header {
+            X-Content-Type-Options nosniff
+            X-Frame-Options SAMEORIGIN
+            Referrer-Policy strict-origin-when-cross-origin
+            Strict-Transport-Security "max-age=31536000"
+            Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
+            Permissions-Policy "camera=(), microphone=(), geolocation=()"
+            -Server
         }
     }
 EOF

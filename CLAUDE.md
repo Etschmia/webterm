@@ -98,7 +98,11 @@ mit Admin-Recht hart löschen, ein normaler Collaborator nicht — deshalb kein 
 Dahinter liegt eine **volle Shell** unter dem Service-User. Der Schutz liegt vollständig beim
 Reverse Proxy (TLS + Basic Auth, sinnvollerweise plus IP-Allowlist) und der Bindung an
 `127.0.0.1`. Niemals einen dieser Pfade ohne diese Schranken exponieren, und die Bindung nie
-auf `0.0.0.0` ändern.
+auf `0.0.0.0` ändern. Der Server verweigert Nicht-Loopback-Adressen inzwischen fail-closed;
+`TERM_ALLOW_NON_LOOPBACK=1` ist ausschließlich ein ausdrücklicher Spezialfall-Override.
+Schreibende HTTP-Endpunkte verlangen zusätzlich einen pro Prozess erzeugten CSRF-Token und bei
+Browserrequests einen erlaubten Origin. Originlose WebSockets sind ab Werk verboten; der Override
+`TERM_ALLOW_ORIGINLESS_WS=1` ist nur für kontrollierte Nicht-Browser-Clients gedacht.
 
 ## Runtime: node, nicht bun
 

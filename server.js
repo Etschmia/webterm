@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
+import {
+  canonicalOrigin, isLoopbackHost, isPathInside, terminalSize, validCsrfRequest,
+} from './lib/security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -57,7 +60,10 @@ loadDotEnv(path.join(__dirname, '.env'));
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '7681', 10);
 const HOME = process.env.HOME || os.homedir();
-const SHELL = process.env.SHELL || '/bin/bash';
+if (!isLoopbackHost(HOST) && process.env.TERM_ALLOW_NON_LOOPBACK !== '1') {
+  throw new Error(`Unsichere Bind-Adresse ${HOST}: nur Loopback ist erlaubt. `
+    + 'Falls das wirklich beabsichtigt ist, TERM_ALLOW_NON_LOOPBACK=1 setzen.');
+}
 // Persistente tmux-Session hinter dem "Standard"-Eintrag: attach falls
 // vorhanden, sonst neu anlegen (tmux new-session -A). Ueberlebt Reloads
 // und Verbindungsabbrueche.
@@ -65,12 +71,18 @@ const STANDARD_SESSION = process.env.TERM_STANDARD_SESSION || 'Standard-Webterm'
 // Wurzel des Datei-Explorers. Die /api/fs/*-Endpunkte koennen NICHT darueber
 // hinaus (Schutz gegen Directory-Traversal in safePath). Default: Home.
 const FS_ROOT = path.resolve(process.env.FS_ROOT || HOME);
+let FS_ROOT_REAL;
+try { FS_ROOT_REAL = fs.realpathSync.native(FS_ROOT); }
+catch { throw new Error(`FS_ROOT existiert nicht oder ist nicht lesbar: ${FS_ROOT}`); }
 
 // Sammelverzeichnis fuer Bilder aus der Browser-Zwischenablage (/api/clip).
 // Liegt unter HOME, ist damit auch fuer den Datei-Explorer (FS_ROOT=HOME)
 // sichtbar. Alte Clips werden beim Hochladen nach CLIP_TTL_MS aufgeraeumt.
 const CLIP_DIR = path.join(HOME, '.term-clips');
 const CLIP_MAX_BYTES = 25 * 1024 * 1024;        // harte Obergrenze pro Bild
+const FS_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;  // harte Obergrenze pro Datei
+const WS_MAX_PAYLOAD = 1024 * 1024;              // Terminalinput/Control pro Frame
+const WS_MAX_CONNECTIONS = 32;                   // Schutz gegen PTY-Prozessflut
 const CLIP_TTL_MS = 7 * 24 * 60 * 60 * 1000;    // Aufbewahrung: 7 Tage
 const CLIP_EXT = {                               // erlaubte Bildtypen -> Endung
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
@@ -83,14 +95,16 @@ const CLIP_EXT = {                               // erlaubte Bildtypen -> Endung
 // PUBLIC_ORIGIN aus der Umgebung/.env — mehrere kommagetrennt moeglich.
 // Ohne PUBLIC_ORIGIN sind nur die lokalen Origins erlaubt.
 const ALLOWED_ORIGINS = new Set([
-  `http://${HOST}:${PORT}`,
+  `http://${HOST.includes(':') && !HOST.startsWith('[') ? `[${HOST}]` : HOST}:${PORT}`,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
-]);
+].map(canonicalOrigin).filter(Boolean));
 for (const o of (process.env.PUBLIC_ORIGIN || '').split(',')) {
-  const t = o.trim();
-  if (t) ALLOWED_ORIGINS.add(t);
+  const origin = canonicalOrigin(o);
+  if (o.trim() && !origin) throw new Error(`Ungueltiger PUBLIC_ORIGIN: ${o.trim()}`);
+  if (origin) ALLOWED_ORIGINS.add(origin);
 }
+const CSRF_TOKEN = crypto.randomBytes(32).toString('base64url');
 
 // ---------------------------------------------------------------------------
 // tmux-Helfer
@@ -639,7 +653,13 @@ const MIME = {
 };
 
 function serveStatic(req, res) {
-  let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { Allow: 'GET, HEAD' }).end('Method not allowed');
+    return;
+  }
+  let urlPath;
+  try { urlPath = decodeURIComponent((req.url || '/').split('?')[0]); }
+  catch { res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request'); return; }
   if (urlPath === '/') urlPath = '/index.html';
 
   // Pfad auf PUBLIC_DIR einschraenken (kein Directory-Traversal).
@@ -698,6 +718,25 @@ function safePath(rel) {
   const abs = path.resolve(FS_ROOT, cleaned);
   if (abs !== FS_ROOT && !abs.startsWith(FS_ROOT + path.sep)) return null;
   return abs;
+}
+
+// Lexikalische Pfadpruefung allein reicht nicht: stat/read/open folgen Symlinks.
+// Deshalb wird jedes bestehende Ziel real aufgeloest und erneut gegen die reale
+// FS_ROOT-Grenze geprueft. Uploads verwenden den realen Elternpfad plus O_NOFOLLOW.
+async function safeExistingPath(abs) {
+  try {
+    const real = await fs.promises.realpath(abs);
+    return isPathInside(FS_ROOT_REAL, real) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+function openUploadFile(dest, mode = 0o600) {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+    | (fs.constants.O_NOFOLLOW || 0);
+  return new Promise((resolve, reject) => fs.open(dest, flags, mode,
+    (err, fd) => err ? reject(err) : resolve(fd)));
 }
 
 // Bild-MIME-Typen fuer die Inline-Auslieferung (/api/fs/raw, Hover-Vorschau).
@@ -850,16 +889,18 @@ async function handleFs(req, res, route) {
 
   // Verzeichnis auflisten -> { path, entries: [{name,type,size,mtime}] }
   if (route === '/api/fs/list' && req.method === 'GET') {
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden oder ausserhalb von FS_ROOT' });
     let dirents;
     try {
-      dirents = await fs.promises.readdir(abs, { withFileTypes: true });
+      dirents = await fs.promises.readdir(real, { withFileTypes: true });
     } catch {
       return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden' });
     }
     const entries = await Promise.all(dirents.map(async (d) => {
       let size = 0, mtime = 0;
-      try { const st = await fs.promises.stat(path.join(abs, d.name)); size = st.size; mtime = st.mtimeMs; } catch {}
-      return { name: d.name, type: d.isDirectory() ? 'dir' : 'file', size, mtime };
+      try { const st = await fs.promises.stat(path.join(real, d.name)); size = st.size; mtime = st.mtimeMs; } catch {}
+      return { name: d.name, type: d.isDirectory() ? 'dir' : 'file', symlink: d.isSymbolicLink(), size, mtime };
     }));
     // Verzeichnisse zuerst, dann alphabetisch.
     entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1)));
@@ -871,13 +912,17 @@ async function handleFs(req, res, route) {
   // statt Teil von /list: `git status` kann in grossen Repos bummeln, die
   // Dateiliste soll darauf nicht warten (das Frontend faerbt nachtraeglich).
   if (route === '/api/fs/git' && req.method === 'GET') {
-    return sendJson(res, 200, await gitDirStatus(abs));
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden oder ausserhalb von FS_ROOT' });
+    return sendJson(res, 200, await gitDirStatus(real));
   }
 
   // Datei herunterladen (als Attachment).
   if (route === '/api/fs/download' && req.method === 'GET') {
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Nicht gefunden oder ausserhalb von FS_ROOT' });
     let st;
-    try { st = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
+    try { st = await fs.promises.stat(real); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
     if (st.isDirectory()) return sendJson(res, 400, { error: 'Ist ein Verzeichnis' });
     const base = path.basename(abs);
     res.writeHead(200, {
@@ -887,7 +932,7 @@ async function handleFs(req, res, route) {
       'Content-Disposition':
         `attachment; filename="${base.replace(/[\r\n"]/g, '')}"; filename*=UTF-8''${encodeURIComponent(base)}`,
     });
-    const stream = fs.createReadStream(abs);
+    const stream = fs.createReadStream(real);
     stream.on('error', () => { try { res.destroy(); } catch {} });
     stream.pipe(res);
     return;
@@ -897,10 +942,12 @@ async function handleFs(req, res, route) {
   // octet-stream + nosniff (kein HTML-Sniffing). CSP-Sandbox entschaerft zudem
   // ein direkt aufgerufenes SVG (kein Skript-Ausfuehren).
   if (route === '/api/fs/raw' && req.method === 'GET') {
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Nicht gefunden oder ausserhalb von FS_ROOT' });
     let st;
-    try { st = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
+    try { st = await fs.promises.stat(real); } catch { return sendJson(res, 404, { error: 'Nicht gefunden' }); }
     if (st.isDirectory()) return sendJson(res, 400, { error: 'Ist ein Verzeichnis' });
-    const ext = path.extname(abs).toLowerCase();
+    const ext = path.extname(real).toLowerCase();
     res.writeHead(200, {
       'Content-Type': IMG_MIME[ext] || 'application/octet-stream',
       'Content-Length': st.size,
@@ -908,7 +955,7 @@ async function handleFs(req, res, route) {
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': 'sandbox',
     });
-    const stream = fs.createReadStream(abs);
+    const stream = fs.createReadStream(real);
     stream.on('error', () => { try { res.destroy(); } catch {} });
     stream.pipe(res);
     return;
@@ -920,18 +967,55 @@ async function handleFs(req, res, route) {
     if (!name || name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
       return sendJson(res, 400, { error: 'Ungueltiger Dateiname' });
     }
+    if (Number(req.headers['content-length'] || 0) > FS_UPLOAD_MAX_BYTES) {
+      return sendJson(res, 413, { error: 'Datei zu gross' });
+    }
+    const realDir = await safeExistingPath(abs);
+    if (!realDir) return sendJson(res, 404, { error: 'Zielverzeichnis fehlt oder liegt ausserhalb von FS_ROOT' });
     let dirStat;
-    try { dirStat = await fs.promises.stat(abs); } catch { return sendJson(res, 404, { error: 'Zielverzeichnis fehlt' }); }
+    try { dirStat = await fs.promises.stat(realDir); } catch { return sendJson(res, 404, { error: 'Zielverzeichnis fehlt' }); }
     if (!dirStat.isDirectory()) return sendJson(res, 400, { error: 'Kein Verzeichnis' });
-    const dest = safePath(path.posix.join(String(rel).replace(/\\/g, '/'), name));
-    if (!dest) return sendJson(res, 400, { error: 'Ungueltiger Pfad' });
+    const dest = path.join(realDir, name);
+    if (!isPathInside(FS_ROOT_REAL, dest)) return sendJson(res, 400, { error: 'Ungueltiger Pfad' });
 
-    const out = fs.createWriteStream(dest);
+    // Atomarer Ersatz soll bei bearbeiteten Skripten das Executable-Bit erhalten;
+    // Sonderbits werden bewusst nicht uebernommen. Bestehende Symlinks werden
+    // abgewiesen, damit ein Speichern ihre Bedeutung nicht ueberraschend aendert.
+    let destMode = 0o600;
+    try {
+      const old = await fs.promises.lstat(dest);
+      if (old.isSymbolicLink()) return sendJson(res, 409, { error: 'Symlink-Ziele werden nicht ueberschrieben' });
+      if (old.isFile() && !old.isSymbolicLink()) destMode = old.mode & 0o777;
+    } catch {}
+    const temp = path.join(realDir, `.term-upload-${crypto.randomBytes(12).toString('hex')}`);
+    let fd;
+    try { fd = await openUploadFile(temp, destMode); }
+    catch { return sendJson(res, 400, { error: 'Zieldatei ist nicht sicher schreibbar' }); }
+    const out = fs.createWriteStream(temp, { fd, autoClose: true });
+    let total = 0;
     let done = false;
-    const fail = (code, m) => { if (done) return; done = true; try { out.destroy(); } catch {} sendJson(res, code, { error: m }); };
+    const fail = (code, m) => {
+      if (done) return; done = true;
+      try { out.destroy(); } catch {}
+      fs.promises.unlink(temp).catch(() => {});
+      sendJson(res, code, { error: m });
+    };
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > FS_UPLOAD_MAX_BYTES) { req.unpipe(out); req.resume(); fail(413, 'Datei zu gross'); }
+    });
     req.on('error', () => fail(400, 'Uebertragung abgebrochen'));
     out.on('error', () => fail(500, 'Schreibfehler'));
-    out.on('finish', () => { if (!done) { done = true; sendJson(res, 200, { ok: true, name }); } });
+    out.on('finish', async () => {
+      if (done) return;
+      try {
+        await fs.promises.rename(temp, dest); // ersetzt einen Symlink selbst, folgt ihm nicht
+        done = true;
+        sendJson(res, 200, { ok: true, name });
+      } catch {
+        fail(500, 'Datei konnte nicht atomar gespeichert werden');
+      }
+    });
     req.pipe(out);
     return;
   }
@@ -965,7 +1049,8 @@ async function pruneClips() {
     if (!n.startsWith('clip-')) return;
     const fp = path.join(CLIP_DIR, n);
     try {
-      const st = await fs.promises.stat(fp);
+      const st = await fs.promises.lstat(fp);
+      if (!st.isFile()) return;
       if (now - st.mtimeMs > CLIP_TTL_MS) await fs.promises.unlink(fp);
     } catch {}
   }));
@@ -980,12 +1065,17 @@ async function handleClip(req, res) {
     return sendJson(res, 413, { error: 'Bild zu gross' });
   }
 
-  try { await fs.promises.mkdir(CLIP_DIR, { recursive: true }); }
+  try {
+    await fs.promises.mkdir(CLIP_DIR, { recursive: true, mode: 0o700 });
+    const st = await fs.promises.lstat(CLIP_DIR);
+    if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('unsafe clip dir');
+    await fs.promises.chmod(CLIP_DIR, 0o700);
+  }
   catch { return sendJson(res, 500, { error: 'Clip-Verzeichnis nicht anlegbar' }); }
 
-  const name = `clip-${clipStamp()}.${ext}`;
+  const name = `clip-${clipStamp()}-${crypto.randomBytes(5).toString('hex')}.${ext}`;
   const dest = path.join(CLIP_DIR, name);
-  const out = fs.createWriteStream(dest);
+  const out = fs.createWriteStream(dest, { flags: 'wx', mode: 0o600 });
   let total = 0, done = false;
   const fail = (code, m) => {
     if (done) return; done = true;
@@ -996,7 +1086,7 @@ async function handleClip(req, res) {
   req.on('data', (chunk) => {
     total += chunk.length;
     // Laufende Groessenkontrolle (Content-Length ist nur ein Hinweis).
-    if (total > CLIP_MAX_BYTES) { try { req.destroy(); } catch {} fail(413, 'Bild zu gross'); }
+    if (total > CLIP_MAX_BYTES) { req.unpipe(out); req.resume(); fail(413, 'Bild zu gross'); }
   });
   req.on('error', () => fail(400, 'Uebertragung abgebrochen'));
   out.on('error', () => fail(500, 'Schreibfehler'));
@@ -1286,8 +1376,33 @@ async function handleBugs(req, res) {
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
-const server = http.createServer(async (req, res) => {
+function csrfRequestAllowed(req) {
+  // Fehlender Origin bleibt fuer nicht-browserbasierte Clients erlaubt, aber
+  // nur mit dem explizit zuvor gelesenen Token. Browser senden bei fetch den Origin.
+  return validCsrfRequest(req.headers, CSRF_TOKEN, ALLOWED_ORIGINS);
+}
+
+function setSecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; "
+    + "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; "
+    + "font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'");
+}
+
+async function handleRequest(req, res) {
   const url = (req.url || '/').split('?')[0];
+
+  if (url === '/api/csrf' && req.method === 'GET') {
+    return sendJson(res, 200, { token: CSRF_TOKEN });
+  }
+
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method || '') && !csrfRequestAllowed(req)) {
+    return sendJson(res, 403, { error: 'CSRF-Pruefung fehlgeschlagen' });
+  }
 
   // Build-Stamp des laufenden Backends (fuer die Version-Skew-Erkennung im Frontend).
   if (url === '/api/version') {
@@ -1399,21 +1514,38 @@ const server = http.createServer(async (req, res) => {
   }
 
   serveStatic(req, res);
+}
+
+const server = http.createServer((req, res) => {
+  setSecurityHeaders(res);
+  handleRequest(req, res).catch((err) => {
+    console.error('HTTP request failed:', err);
+    if (!res.headersSent) sendJson(res, 500, { error: 'Interner Serverfehler' });
+    else { try { res.destroy(); } catch {} }
+  });
 });
+server.headersTimeout = 15_000;
+server.requestTimeout = 120_000;
 
 // ---------------------------------------------------------------------------
 // WebSocket -> PTY
 // ---------------------------------------------------------------------------
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
 
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/ws') {
     socket.destroy();
     return;
   }
-  const origin = req.headers.origin;
-  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+  if (wss.clients.size >= WS_MAX_CONNECTIONS) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  const origin = canonicalOrigin(req.headers.origin);
+  if ((!origin && process.env.TERM_ALLOW_ORIGINLESS_WS !== '1')
+      || (origin && !ALLOWED_ORIGINS.has(origin))) {
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
     return;
@@ -1429,6 +1561,7 @@ wss.on('connection', (ws) => {
   let term = null;          // aktives PTY
   let session = null;       // tmux-Session-Name (nur im session-Modus)
   let disposables = [];     // onData/onExit-Listener des aktiven PTY
+  let startSeq = 0;         // verwirft ueberholte asynchrone start-Nachrichten
 
   const baseEnv = {
     ...process.env,
@@ -1448,10 +1581,11 @@ wss.on('connection', (ws) => {
   }
 
   function spawnPty(mode, cols, rows) {
+    const size = terminalSize(cols, rows);
     const opts = {
       name: 'xterm-256color',
-      cols: cols || 80,
-      rows: rows || 24,
+      cols: size.cols,
+      rows: size.rows,
       cwd: HOME,
       env: baseEnv,
     };
@@ -1475,7 +1609,7 @@ wss.on('connection', (ws) => {
     send(ws, { t: 'ready', mode });
   }
 
-  ws.on('message', async (data, isBinary) => {
+  async function handleWsMessage(data, isBinary) {
     // Binaer-Frames waeren PTY-Input; wir nutzen ausschliesslich JSON-Control.
     if (isBinary) {
       if (term) term.write(data.toString('utf8'));
@@ -1491,13 +1625,16 @@ wss.on('connection', (ws) => {
 
     switch (msg.t) {
       case 'start': {
+        const seq = ++startSeq;
         disposeTerm();
         session = null;
         if (msg.mode === 'session') {
           if (!(await sessionExists(msg.session))) {
+            if (seq !== startSeq) return;
             send(ws, { t: 'error', m: `Session '${msg.session}' nicht gefunden.` });
             return;
           }
+          if (seq !== startSeq) return;
           session = msg.session;
           // Hinweis zur Fenstergroesse bei mehreren Clients: tmux-Default ist
           // bereits 'window-size latest' (neuester Client gewinnt), daher keine
@@ -1509,15 +1646,26 @@ wss.on('connection', (ws) => {
       }
 
       case 'input':
-        if (term && typeof msg.d === 'string') term.write(msg.d);
-        break;
-
-      case 'resize':
-        if (term && msg.cols > 0 && msg.rows > 0) {
-          try { term.resize(msg.cols, msg.rows); } catch {}
+        if (term && typeof msg.d === 'string' && Buffer.byteLength(msg.d, 'utf8') <= WS_MAX_PAYLOAD) {
+          term.write(msg.d);
         }
         break;
+
+      case 'resize': {
+        if (term) {
+          const size = terminalSize(msg.cols, msg.rows);
+          try { term.resize(size.cols, size.rows); } catch {}
+        }
+        break;
+      }
     }
+  }
+
+  ws.on('message', (data, isBinary) => {
+    handleWsMessage(data, isBinary).catch((err) => {
+      console.error('WebSocket message failed:', err);
+      send(ws, { t: 'error', m: 'Terminal-Anfrage fehlgeschlagen.' });
+    });
   });
 
   ws.on('close', () => {

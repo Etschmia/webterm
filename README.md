@@ -54,7 +54,8 @@ Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → N
                                                                             └─ GET /api/sessions (tmux)
 ```
 - `server.js` — HTTP-Static + WebSocket→PTY + REST `/api/sessions`. Bindet nur `127.0.0.1:7681`,
-  prüft den WS-`Origin`.
+  prüft WS-Origins und schützt schreibende HTTP-Endpunkte per Origin + CSRF-Token.
+  Weitere APIs vermitteln Datei-Explorer/Editor, Clipboard-Bilder, Self-Update und GitHub-Issues.
 - `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
 - `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
 - `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check, `git-status.sh` für die
@@ -156,7 +157,11 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   Client gewinnt). Stört das eine parallel laufende Session, global in `~/.tmux.conf` auf
   `set -g window-size largest` (bzw. `manual`) umstellen.
 - **Sicherheit**: Voller Shell-Zugriff als der Service-User. Schutz = TLS + Basic Auth (Caddy) +
-  localhost-Bindung. Credentials geheim halten.
+  localhost-Bindung. Der Server verweigert Nicht-Loopback-Bindungen, solange nicht ausdrücklich
+  `TERM_ALLOW_NON_LOOPBACK=1` gesetzt ist. Der Installer bietet zusätzlich eine IP-Allowlist an;
+  für öffentliche Erreichbarkeit wird darüber hinaus VPN/mTLS/Identity-Aware Proxy empfohlen.
+  Credentials geheim halten. Schreibende Browser-Requests benötigen einen pro Prozess erzeugten
+  CSRF-Token. Uploadlimits: Dateien 100 MiB, Clipboard-Bilder 25 MiB.
 - **claude-auto-retry ist seit Claude Code 2.1.234 nur noch Ergänzung**: Usage-Limits wartet
   die CLI selbst aus („Continue automatically at usage limit", `/config`, ab Werk an) — das war
   der Hauptzweck des Pakets, deshalb fragt `install.sh` es jetzt mit Default **nein**. Was das
