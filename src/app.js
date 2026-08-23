@@ -574,6 +574,9 @@ function switchTo(mode, name) {
   else connect();
   // Nach Layoutwechsel/Reset neu einpassen.
   scheduleFit();
+  // Mobil: Sessions-Schublade zu, Titel in der Kopfleiste nachziehen; den Fokus
+  // dort nicht erzwingen (wuerde die Bildschirmtastatur hochklappen).
+  if (isMobile()) { mobileCloseDrawers(); mobileSyncTitle(); return; }
   requestAnimationFrame(() => term.focus());
 }
 
@@ -1619,6 +1622,8 @@ function fxFmtSize(n) {
 function fxCollapse(collapsed) {
   appEl.classList.toggle('fx-collapsed', collapsed);
   fxReopenBtn.hidden = !collapsed;
+  // Mobil ist der Explorer eine Schublade: "aufgeklappt" == Schublade offen.
+  if (isMobile()) { appEl.classList.toggle('fx-open', !collapsed); mobileSyncBackdrop(); }
   // Beim Aufklappen sofort das aktuelle Terminal-CWD einholen (im eingeklappten
   // Zustand folgt der Explorer nicht mit); fxLoad rendert derweil den Ist-Stand.
   if (!collapsed) { fxLoad(fxPath); fxFollowCwd(true); }
@@ -2825,6 +2830,125 @@ explorerGrip?.addEventListener('pointerdown', (e) => beginColResize('explorer', 
 sidebarGrip?.addEventListener('dblclick', () => resetCol('sidebar'));
 explorerGrip?.addEventListener('dblclick', () => resetCol('explorer'));
 
+// ---------------------------------------------------------------- Mobil-Ansicht
+// Ab 760px Breite (siehe styles.css): Sidebar/Explorer als Schubladen, Kopfleiste
+// oben, Eingabe-/Tastenleiste unten. Kernproblem auf dem iPhone ist die
+// Bildschirmtastatur: Safari verkleinert nicht das Layout, sondern nur den
+// visualViewport — ohne Nachfuehren laege die Eingabezeile des Terminals unter
+// der Tastatur. Daher die App-Hoehe an visualViewport.height binden.
+const MOBILE_MQ = window.matchMedia('(max-width: 760px)');
+function isMobile() { return MOBILE_MQ.matches; }
+const drawerBackdrop = document.getElementById('drawer-backdrop');
+const mbarTitle = document.getElementById('mbar-title');
+const mkeysEl = document.getElementById('mkeys');
+const mkeysText = document.getElementById('mkeys-text');
+const mkeysCtrl = document.getElementById('mkeys-ctrl');
+const mbarKeysBtn = document.getElementById('mbar-keys');
+
+function mobileSyncBackdrop() {
+  drawerBackdrop.hidden = !(appEl.classList.contains('nav-open') || appEl.classList.contains('fx-open'));
+}
+function mobileCloseDrawers() {
+  appEl.classList.remove('nav-open');
+  if (appEl.classList.contains('fx-open')) fxCollapse(true);
+  mobileSyncBackdrop();
+}
+function mobileSyncTitle() {
+  mbarTitle.textContent = state.active.mode === 'session' && state.active.name ? state.active.name : 'Standard';
+}
+document.getElementById('mbar-nav').addEventListener('click', () => {
+  const open = !appEl.classList.contains('nav-open');
+  if (appEl.classList.contains('fx-open')) fxCollapse(true);
+  appEl.classList.toggle('nav-open', open);
+  mobileSyncBackdrop();
+});
+document.getElementById('mbar-fx').addEventListener('click', () => {
+  appEl.classList.remove('nav-open');
+  fxCollapse(appEl.classList.contains('fx-open')); // toggelt fx-open mit
+});
+drawerBackdrop.addEventListener('click', mobileCloseDrawers);
+
+// Hoehe = sichtbarer Viewport (Tastatur abgezogen). iOS scrollt die Seite beim
+// Fokussieren gern nach oben weg -> zurueck auf 0 halten.
+function mobileApplyViewport() {
+  if (!isMobile() || !window.visualViewport) { appEl.style.removeProperty('--vvh'); return; }
+  appEl.style.setProperty('--vvh', Math.round(window.visualViewport.height) + 'px');
+  if (window.scrollY) window.scrollTo(0, 0);
+  scheduleFit();
+}
+window.visualViewport?.addEventListener('resize', mobileApplyViewport);
+window.visualViewport?.addEventListener('scroll', mobileApplyViewport);
+
+// Umschalten Desktop <-> Mobil (Rotation, Fenstergroesse): Zustand konsistent halten.
+function mobileApplyMode() {
+  term.options.fontSize = isMobile() ? 12 : 13.5;
+  if (!isMobile()) { appEl.classList.remove('nav-open', 'fx-open'); drawerBackdrop.hidden = true; }
+  else { fxCollapse(true); mobileSyncTitle(); }
+  mobileApplyViewport();
+  scheduleFit();
+}
+MOBILE_MQ.addEventListener('change', mobileApplyMode);
+
+// Eingabeleiste: sichtbares Textfeld statt des versteckten xterm-Textareas.
+// iOS-Diktat (Mikro der Tastatur) und Autokorrektur schreiben hier zuverlaessig
+// hinein; abgeschickt wird der fertige Text auf einmal, danach getrennt ein
+// Enter (so erkennt auch Claude Code das als normale Eingabe + Abschicken).
+const MKEYS = {
+  esc: '\u001b', tab: '\t', stab: '\u001b[Z', cc: '\u0003', enter: '\r',
+  up: '\u001b[A', down: '\u001b[B', left: '\u001b[D', right: '\u001b[C',
+};
+let ctrlArmed = false;
+function mobileSetCtrl(on) { ctrlArmed = on; mkeysCtrl.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+function mkeysGrow() {
+  mkeysText.style.height = 'auto';
+  mkeysText.style.height = Math.min(mkeysText.scrollHeight, 110) + 'px';
+  mkeysText.style.overflowY = mkeysText.scrollHeight > 110 ? 'auto' : 'hidden';
+}
+function mkeysSend() {
+  const text = mkeysText.value;
+  if (!text) { send({ t: 'input', d: '\r' }); return; } // leer: nur Enter (Prompts bestaetigen)
+  send({ t: 'input', d: text });
+  setTimeout(() => send({ t: 'input', d: '\r' }), 40);
+  mkeysText.value = '';
+  mkeysGrow();
+  mkeysText.focus(); // Tastatur offen lassen fuer den naechsten Prompt
+}
+mkeysText.addEventListener('input', mkeysGrow);
+mkeysText.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (ctrlArmed && e.key.length === 1) {
+    e.preventDefault();
+    const code = e.key.toUpperCase().charCodeAt(0);
+    if (code >= 64 && code <= 95) send({ t: 'input', d: String.fromCharCode(code & 31) });
+    mobileSetCtrl(false);
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mkeysSend(); }
+});
+document.getElementById('mkeys-send').addEventListener('click', mkeysSend);
+for (const b of mkeysEl.querySelectorAll('.mkeys-keys button')) {
+  // pointerdown abfangen: der Fokus bleibt im Textfeld, die Tastatur klappt nicht zu.
+  b.addEventListener('pointerdown', (e) => e.preventDefault());
+  b.addEventListener('click', () => {
+    if (b.dataset.mod === 'ctrl') { mobileSetCtrl(!ctrlArmed); return; }
+    let d = MKEYS[b.dataset.key];
+    if (!d) return;
+    send({ t: 'input', d });
+    if (ctrlArmed) mobileSetCtrl(false);
+  });
+}
+document.getElementById('mkeys-send').addEventListener('pointerdown', (e) => e.preventDefault());
+mbarKeysBtn.addEventListener('click', () => {
+  const hidden = appEl.classList.toggle('mkeys-hidden');
+  mbarKeysBtn.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  try { localStorage.setItem('term-mkeys', hidden ? '0' : '1'); } catch {}
+  scheduleFit();
+});
+if (localStorage.getItem('term-mkeys') === '0') {
+  appEl.classList.add('mkeys-hidden');
+  mbarKeysBtn.setAttribute('aria-pressed', 'false');
+}
+
 // ---------------------------------------------------------------- Init
 // Marke/Titel an den tatsaechlichen Host anpassen (portabel statt fest auf
 // eine Domain verdrahtet).
@@ -2864,6 +2988,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { up
 
 // Datei-Explorer initial: auf schmalen Viewports eingeklappt starten.
 fxCollapse(window.innerWidth < 900);
+mobileApplyMode();
 
 // Bugtracker: Badge/Liste initial laden (zeigt offene Eintraege am Kaefer-Icon).
 loadBugs();

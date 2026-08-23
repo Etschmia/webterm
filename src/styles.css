@@ -1601,3 +1601,150 @@ body.col-resizing, body.col-resizing * {
   opacity: 0.7;
 }
 .version-warn-close:hover { opacity: 1; background: oklch(0 0 0 / 0.12); }
+
+/* ================================================================ Mobil-Ansicht
+   Ab 760px Breite (iPhone, schmale Tablets) wird das Drei-Spalten-Grid zur
+   Ein-Spalten-Ansicht: Sidebar und Datei-Explorer werden Schubladen ueber dem
+   Terminal (.app.nav-open / .app.fx-open), oben eine Kopfleiste (.mbar), unten
+   die Eingabe-/Tastenleiste (.mkeys). Desktop sieht davon nichts.
+   Die Hoehe setzt app.js aus visualViewport (--vvh), damit die iOS-Tastatur das
+   Terminal verkleinert statt es zu ueberdecken. */
+.mbar, .mkeys, .drawer-backdrop { display: none; }
+
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: 1fr;
+    height: var(--vvh, 100dvh);
+  }
+  .app.fx-collapsed { grid-template-columns: 1fr; }
+
+  /* Schubladen */
+  .sidebar, .explorer {
+    position: fixed;
+    top: 0; bottom: 0;
+    z-index: 60;
+    width: min(86vw, 340px);
+    max-height: var(--vvh, 100dvh);
+    transition: transform .2s ease;
+    box-shadow: var(--shadow-soft);
+  }
+  .sidebar { left: 0; transform: translateX(-100%); }
+  .explorer { right: 0; transform: translateX(100%); }
+  .app.nav-open .sidebar { transform: none; }
+  .app.fx-open .explorer { transform: none; }
+  .app.fx-collapsed .explorer { display: flex; } /* Zustand kommt ueber fx-open */
+  .col-resizer, .fx-reopen { display: none !important; }
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: oklch(0 0 0 / 0.45);
+    backdrop-filter: blur(1px);
+  }
+  .drawer-backdrop[hidden] { display: none; }
+  /* Hover-verborgene Bedienknoepfe (Umbenennen/Beenden) ohne Maus immer zeigen. */
+  .entry-rename, .entry-kill { opacity: 1; }
+
+  /* Arbeitsspalte: Kopfleiste / Terminal / Tastenleiste untereinander. */
+  .work { display: flex; flex-direction: column; min-height: 0; }
+  #terminal { position: relative; inset: auto; flex: 1 1 auto; min-height: 0; padding: 6px 4px 4px 8px; }
+  .search-bar { top: 52px; right: 8px; }
+  .search-bar input { width: 140px; }
+  .conn-status { bottom: auto; top: 52px; right: 8px; }
+
+  .mbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    padding: 6px 6px;
+    padding-top: calc(6px + env(safe-area-inset-top));
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+  }
+  .mbar-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 38px; height: 36px;
+    color: var(--foreground);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .mbar-btn:active, .mbar-btn[aria-pressed="true"] { background: var(--hover); border-color: var(--border); }
+  .mbar-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .mkeys {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 0 0 auto;
+    padding: 6px 6px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+    background: var(--sidebar);
+    border-top: 1px solid var(--border);
+  }
+  .app.mkeys-hidden .mkeys { display: none; }
+  .mkeys-row { display: flex; gap: 5px; }
+  .mkeys-input textarea {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-height: 6.5em;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 16px; /* < 16px zoomt iOS beim Fokus die Seite */
+    line-height: 1.3;
+    color: var(--foreground);
+    background: var(--background);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    outline: none;
+    resize: none;
+    overflow-y: hidden;
+  }
+  .mkeys-input textarea:focus { border-color: var(--primary); }
+  .mkeys-send {
+    flex: 0 0 auto;
+    width: 44px;
+    color: var(--primary-foreground, #fff);
+    background: var(--primary);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .mkeys-keys { overflow-x: auto; scrollbar-width: none; }
+  .mkeys-keys::-webkit-scrollbar { display: none; }
+  .mkeys-keys button {
+    flex: 1 0 auto;
+    min-width: 40px;
+    height: 34px;
+    padding: 0 9px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--foreground);
+    background: var(--hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    -webkit-user-select: none; user-select: none;
+    touch-action: manipulation;
+  }
+  .mkeys-keys button:active { background: var(--primary); color: var(--primary-foreground, #fff); }
+  .mkeys-keys button[aria-pressed="true"] { border-color: var(--primary); color: var(--primary); }
+
+  /* Overlays/Editor an die kleine Breite anpassen. */
+  .help-overlay, .bug-overlay { padding: 10px; }
+  .help-card, .bug-card { max-height: calc(var(--vvh, 100dvh) - 20px); }
+}
