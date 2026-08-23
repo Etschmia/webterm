@@ -18,8 +18,8 @@ jobs:
           cache: npm
       # npm normalisiert die GitHub-Abhängigkeit im Lockfile auf SSH. mdlite ist
       # öffentlich; HTTPS hält CI unabhängig von deploy-spezifischen SSH-Keys.
-      - run: git config --global url.https://github.com/.insteadOf ssh://git@github.com/
-      - run: git config --global --add url.https://github.com/.insteadOf git@github.com:
+      - run: "git config --global url.https://github.com/.insteadOf ssh://git@github.com/"
+      - run: "git config --global --add url.https://github.com/.insteadOf git@github.com:"
       - run: npm ci
       - run: npm test
       - run: npm run build
