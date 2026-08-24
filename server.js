@@ -20,6 +20,10 @@ import pty from 'node-pty';
 import {
   canonicalOrigin, isLoopbackHost, isPathInside, terminalSize, validCsrfRequest,
 } from './lib/security.js';
+import {
+  telegramBoot, telegramCancelSetup, telegramRemove, telegramSetToken,
+  telegramStart, telegramStatus, telegramStop,
+} from './lib/telegram.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1373,6 +1377,44 @@ async function handleBugs(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Telegram-Bot (/api/telegram/*) — Sidebar-Zeile "Telegram"
+// ---------------------------------------------------------------------------
+// Die eigentliche Logik (Long-Polling, claude -p, Konfigurationsdatei) steckt
+// in lib/telegram.js; hier nur das HTTP-Geruest. Schreibende Routen laufen wie
+// alle anderen durch die CSRF-Pruefung in handleRequest.
+
+async function handleTelegram(req, res, route) {
+  if (route === '/api/telegram/status' && req.method === 'GET') {
+    return sendJson(res, 200, telegramStatus());
+  }
+  if (route === '/api/telegram/setup/token' && req.method === 'POST') {
+    const b = await readJsonBody(req);
+    const r = await telegramSetToken(b && b.token);
+    if (r.error) return sendJson(res, 400, r);
+    return sendJson(res, 200, telegramStatus());
+  }
+  if (route === '/api/telegram/setup/cancel' && req.method === 'POST') {
+    telegramCancelSetup();
+    return sendJson(res, 200, telegramStatus());
+  }
+  if (route === '/api/telegram/start' && req.method === 'POST') {
+    const r = telegramStart();
+    if (r.error) return sendJson(res, 400, r);
+    return sendJson(res, 200, telegramStatus());
+  }
+  if (route === '/api/telegram/stop' && req.method === 'POST') {
+    const r = telegramStop();
+    if (r.error) return sendJson(res, 400, r);
+    return sendJson(res, 200, telegramStatus());
+  }
+  if (route === '/api/telegram' && req.method === 'DELETE') {
+    telegramRemove();
+    return sendJson(res, 200, telegramStatus());
+  }
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -1502,6 +1544,10 @@ async function handleRequest(req, res) {
 
   if (url.startsWith('/api/update/')) {
     return handleUpdate(req, res, url);
+  }
+
+  if (url === '/api/telegram' || url.startsWith('/api/telegram/')) {
+    return handleTelegram(req, res, url);
   }
 
   if (url === '/api/clip') {
@@ -1676,3 +1722,6 @@ wss.on('connection', (ws) => {
 server.listen(PORT, HOST, () => {
   console.log(`term-web listening on http://${HOST}:${PORT}`);
 });
+
+// Konfigurierter Telegram-Bot laeuft nach einem Neustart von selbst wieder an.
+telegramBoot();

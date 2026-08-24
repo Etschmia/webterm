@@ -68,6 +68,14 @@
         <ul class="links" id="links"></ul>
       </section>
 
+      <button class="tg-row" id="tg-row" title="Telegram-Bot – Status wird geladen …">
+        <span class="theme-label">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2.5 1.8 7.3l3.9 1.5L12 4.2 7 9.7l.4 3.8 2-2.6 3.2 2.3L14 2.5z"/></svg>
+          <span id="tg-row-label">Telegram</span>
+        </span>
+        <span class="tg-state" id="tg-state" hidden></span>
+      </button>
+
       <div class="theme-row">
         <span class="theme-label" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5a3.8 3.8 0 0 0-3.8 3.8v2.4L3 10.8h10l-1.2-2.1V6.3A3.8 3.8 0 0 0 8 2.5z"/><path d="M6.6 13a1.5 1.5 0 0 0 2.8 0"/></svg>
@@ -322,6 +330,23 @@
         </section>
 
         <section>
+          <h3>Telegram-Bot</h3>
+          <p>Die Zeile <b>Telegram</b> unten in der Sidebar verbindet diese Installation mit
+          einem eigenen Telegram-Bot: Nachrichten an den Bot laufen als <b>Claude Code</b>
+          auf dem Server, die Antwort kommt in den Chat zurück — praktisch für unterwegs.
+          Das Icon zeigt den Status (grün = verbunden, gelb = eingerichtet, aber gestoppt
+          oder gestört); ist Claude Code nicht installiert, ist die Zeile ausgegraut.</p>
+          <p><b>Einrichten:</b> Klick auf die Zeile öffnet einen geführten Assistenten —
+          Bot bei <b>@BotFather</b> anlegen, Token eintragen, dann den Verknüpfungs-Link
+          antippen. Der Assistent merkt sich den Fortschritt, man kann ihn jederzeit
+          schließen und später weitermachen. Es ist genau <b>ein</b> Chat verknüpft (der,
+          der den Link benutzt hat); alle anderen weist der Bot ab. Im Chat:
+          <code>/new</code> beginnt ein frisches Gespräch, <code>/status</code> zeigt den
+          Zustand. „Löschen" entfernt nur die Einrichtung hier — den Bot selbst löscht man
+          bei BotFather mit <code>/deletebot</code>.</p>
+        </section>
+
+        <section>
           <h3>Spaltenbreite anpassen</h3>
           <p>Die Trennlinien von <b>Sidebar</b> (links) und <b>Datei-Explorer</b> (rechts)
           lassen sich mit der Maus ziehen — der Zeiger wird dort zum ↔. <b>Doppelklick</b>
@@ -372,6 +397,16 @@
       </form>
       <div class="bug-list" id="bug-list" aria-label="Bug-Liste"></div>
       <div class="bug-empty" id="bug-empty" hidden>Keine Einträge – alles ruhig. 🐞</div>
+    </div>
+  </div>
+
+  <div class="bug-overlay" id="tg-overlay" hidden>
+    <div class="bug-card tg-card" role="dialog" aria-modal="true" aria-label="Telegram-Bot">
+      <div class="bug-head">
+        <span class="bug-head-title">Telegram-Bot</span>
+        <button class="bug-close" id="tg-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
+      </div>
+      <div class="tg-body" id="tg-body"><!-- Inhalt rendert app.js je nach Status --></div>
     </div>
   </div>
 

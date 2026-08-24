@@ -2761,6 +2761,299 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !bugOverlay.hidden) { e.stopPropagation(); closeBugs(); }
 }, true); // Capture: vor dem Copy-Mode-Esc-Handler
 
+// ---------------------------------------------------------------- Telegram-Bot
+// Sidebar-Zeile "Telegram" (ueber den Schaltern): Status-Icon mit Hover-Text,
+// Klick oeffnet ein Overlay — je nach Zustand die Verwaltung (Bot-Name, Link,
+// Stoppen/Starten/Loeschen) oder den Einrichtungs-Assistenten. Der Assistent
+// ist Anleitung und Einrichtung zugleich: erledigte Schritte sind abgehakt,
+// der naechste ist aktiv; der Fortschritt lebt serverseitig
+// (~/.term-telegram/config.json), Schliessen verliert also nichts.
+const tgRow = document.getElementById('tg-row');
+const tgRowLabel = document.getElementById('tg-row-label');
+const tgStateEl = document.getElementById('tg-state');
+const tgOverlay = document.getElementById('tg-overlay');
+const tgBody = document.getElementById('tg-body');
+let tgStatus = null;      // letzter Stand von /api/telegram/status (null = noch keiner)
+let tgBusy = false;       // laufende Mutation — Doppelklicks abfangen
+
+function tgRenderRow() {
+  const s = tgStatus;
+  tgRow.classList.remove('disabled');
+  tgStateEl.classList.remove('ok', 'warn', 'err');
+  tgRowLabel.textContent = 'Telegram';
+  if (!s) {
+    tgStateEl.hidden = true;
+    tgRow.title = 'Telegram-Bot – Status wird geladen …';
+    return;
+  }
+  // Ohne Claude Code ist das Feature nicht einrichtbar: Zeile ausgegraut.
+  // (Eine BESTEHENDE Einrichtung bleibt bedienbar, etwa um sie zu loeschen.)
+  if (!s.claude && !s.configured && !s.setup) {
+    tgRow.classList.add('disabled');
+    tgRowLabel.textContent = 'Telegram (claude code nicht installiert)';
+    tgStateEl.hidden = true;
+    tgRow.title = 'Telegram-Bot nicht verfügbar: Auf diesem Server ist Claude Code nicht '
+      + 'installiert — der Bot leitet Nachrichten an Claude Code weiter.';
+    return;
+  }
+  tgStateEl.hidden = false;
+  if (s.setup) {
+    tgStateEl.classList.add('warn');
+    tgStateEl.textContent = 'Einrichtung …';
+    tgRow.title = 'Telegram-Bot: Einrichtung begonnen, aber noch nicht abgeschlossen — Klick setzt genau dort fort.';
+  } else if (!s.configured) {
+    tgStateEl.textContent = 'nicht eingerichtet';
+    tgRow.title = 'Telegram-Bot ist noch nicht eingerichtet — Klick startet den Einrichtungs-Assistenten.';
+  } else if (!s.enabled) {
+    tgStateEl.classList.add('warn');
+    tgStateEl.textContent = 'gestoppt';
+    tgRow.title = `Telegram-Bot @${s.botUsername} ist eingerichtet, aber gestoppt — Klick zum Verwalten.`;
+  } else if (s.connected) {
+    tgStateEl.classList.add('ok');
+    tgStateEl.textContent = 'verbunden';
+    tgRow.title = `Telegram-Bot @${s.botUsername} ist verbunden — Nachrichten an den Bot beantwortet Claude Code.`;
+  } else {
+    tgStateEl.classList.add('err');
+    tgStateEl.textContent = 'nicht verbunden';
+    tgRow.title = `Telegram-Bot @${s.botUsername}: eingerichtet, aber nicht verbunden`
+      + (s.lastError ? ` — ${s.lastError}` : ' — Verbindung wird aufgebaut …');
+  }
+}
+
+async function tgRefresh() {
+  try {
+    const r = await fetch(`${BASE}api/telegram/status`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    tgStatus = await r.json();
+  } catch {
+    tgStatus = null;
+  }
+  tgRenderRow();
+  if (!tgOverlay.hidden) tgRenderBody();
+}
+
+// Schnelleres Nachfassen, solange das Overlay offen ist (der "Warte auf
+// Verknuepfung"-Schritt lebt vom Polling); sonst reicht der langsame Takt.
+let tgFastTimer = null;
+function tgFastPoll(on) {
+  if (on && !tgFastTimer) tgFastTimer = setInterval(tgRefresh, 2500);
+  if (!on && tgFastTimer) { clearInterval(tgFastTimer); tgFastTimer = null; }
+}
+
+function tgEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function tgButton(label, cls, onClick) {
+  const b = tgEl('button', cls, label);
+  b.type = 'button';
+  b.addEventListener('click', async () => {
+    if (tgBusy) return;
+    tgBusy = true;
+    b.disabled = true;
+    try { await onClick(); } finally { tgBusy = false; b.disabled = false; }
+  });
+  return b;
+}
+
+async function tgPost(pathRel, body) {
+  const r = await protectedFetch(`${BASE}api/telegram/${pathRel}`, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Anfrage fehlgeschlagen');
+  tgStatus = data;
+  tgRenderRow();
+  tgRenderBody();
+}
+
+// Assistent: drei Schritte, erledigt = Haken, aktiv = Pfeil, offen = Kreis.
+function tgWizardSteps(s) {
+  const tokenDone = !!(s.setup || s.configured);
+  const steps = [
+    { label: 'Claude Code auf dem Server', done: s.claude, active: !s.claude },
+    { label: 'Bot bei @BotFather anlegen und Token eintragen', done: tokenDone, active: s.claude && !tokenDone },
+    { label: 'Deinen Telegram-Chat verknüpfen', done: s.configured, active: !!s.setup },
+  ];
+  const list = tgEl('div', 'tg-steps');
+  for (const st of steps) {
+    const row = tgEl('div', 'tg-step' + (st.done ? ' done' : st.active ? ' active' : ''));
+    row.append(tgEl('span', 'tg-step-mark', st.done ? '✓' : st.active ? '▸' : '○'), tgEl('span', null, st.label));
+    list.append(row);
+  }
+  return list;
+}
+
+function tgRenderWizard(s) {
+  tgBody.append(tgEl('div', 'tg-intro',
+    'Der Bot verbindet diese Installation mit Telegram: Nachrichten an den Bot beantwortet '
+    + 'Claude Code auf dem Server. Die Einrichtung führt dich Schritt für Schritt — du kannst '
+    + 'jederzeit schließen und später genau hier weitermachen.'));
+  tgBody.append(tgWizardSteps(s));
+
+  const pane = tgEl('div', 'tg-pane');
+  if (!s.claude) {
+    pane.append(tgEl('div', 'tg-pane-h', 'Voraussetzung fehlt'),
+      tgEl('p', 'tg-p', 'Auf diesem Server wurde kein Claude Code gefunden. Ohne Claude Code kann der '
+        + 'Bot keine Antworten erzeugen — bitte zuerst Claude Code installieren.'));
+  } else if (!s.setup) {
+    pane.append(tgEl('div', 'tg-pane-h', 'Schritt 2 · Bot anlegen und Token eintragen'));
+    const ol = tgEl('ol', 'tg-ol');
+    const li1 = tgEl('li');
+    const bf = tgEl('a', 'tg-link', '@BotFather in Telegram öffnen');
+    bf.href = 'https://t.me/BotFather';
+    bf.target = '_blank';
+    bf.rel = 'noopener noreferrer';
+    li1.append(bf);
+    const li2 = tgEl('li');
+    li2.append(document.createTextNode('Dort '));
+    li2.append(tgEl('code', null, '/newbot'));
+    li2.append(document.createTextNode(' senden, einen Namen und einen Benutzernamen (endet auf „bot") wählen.'));
+    const li3 = tgEl('li', null, 'Den angezeigten HTTP-API-Token kopieren und hier einfügen:');
+    ol.append(li1, li2, li3);
+    pane.append(ol);
+    const form = tgEl('form', 'tg-token-form');
+    const input = tgEl('input', 'bug-input');
+    input.type = 'password';
+    input.placeholder = 'Bot-Token, z. B. 123456789:AAH…';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+    const submit = tgEl('button', 'bug-add', 'Token prüfen');
+    submit.type = 'submit';
+    const errEl = tgEl('div', 'tg-err');
+    errEl.hidden = true;
+    form.append(input, submit, errEl);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (tgBusy || !input.value.trim()) return;
+      tgBusy = true;
+      submit.disabled = true;
+      errEl.hidden = true;
+      try {
+        await tgPost('setup/token', { token: input.value.trim() });
+      } catch (err) {
+        errEl.textContent = String(err.message || err);
+        errEl.hidden = false;
+      } finally {
+        tgBusy = false;
+        submit.disabled = false;
+      }
+    });
+    pane.append(form);
+  } else {
+    pane.append(tgEl('div', 'tg-pane-h', `Schritt 3 · Chat mit @${s.setup.botUsername || '?'} verknüpfen`));
+    pane.append(tgEl('p', 'tg-p', 'Den Knopf antippen (öffnet Telegram) und im Chat auf „Start" tippen — '
+      + 'damit weiß der Bot, wem er gehört. Es wird genau dieser eine Chat verknüpft.'));
+    const link = tgEl('a', 'bug-add tg-biglink', 'Bot in Telegram öffnen & verknüpfen ↗');
+    link.href = `https://t.me/${s.setup.botUsername}?start=${s.setup.linkCode}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    pane.append(link);
+    const alt = tgEl('p', 'tg-p tg-dim');
+    alt.append(document.createTextNode('Alternativ im Chat mit dem Bot senden: '));
+    alt.append(tgEl('code', null, `/start ${s.setup.linkCode}`));
+    pane.append(alt);
+    pane.append(tgEl('div', 'tg-wait', '⏳ Warte auf die Verknüpfung … (aktualisiert sich von selbst)'));
+    if (s.lastError) pane.append(tgEl('div', 'tg-err', s.lastError));
+  }
+  tgBody.append(pane);
+
+  const foot = tgEl('div', 'tg-foot');
+  foot.append(tgEl('span', 'tg-dim', 'Schließen ist jederzeit ok — der Fortschritt bleibt erhalten.'));
+  if (s.setup) {
+    foot.append(tgButton('Einrichtung verwerfen', 'tg-danger', async () => {
+      if (!window.confirm('Die begonnene Einrichtung verwerfen?\nDer eingetragene Token wird hier gelöscht; der Bot bei Telegram bleibt bestehen.')) return;
+      await tgPost('setup/cancel').catch((e) => setStatus(String(e.message || e), true, 5000));
+    }));
+  }
+  tgBody.append(foot);
+}
+
+function tgRenderManage(s) {
+  const head = tgEl('div', 'tg-bot');
+  head.append(tgEl('span', 'tg-bot-name', s.botName || 'Bot'));
+  const link = tgEl('a', 'tg-link', `@${s.botUsername} ↗`);
+  link.href = `https://t.me/${s.botUsername}`;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.title = 'Chat mit dem Bot im Browser/Telegram öffnen';
+  head.append(link);
+  tgBody.append(head);
+
+  const st = tgEl('div', 'tg-statusline');
+  const dot = tgEl('span', 'tg-dot');
+  let text;
+  if (!s.enabled) { dot.classList.add('warn'); text = 'Gestoppt — der Bot nimmt keine Nachrichten an.'; }
+  else if (s.connected) { dot.classList.add('ok'); text = 'Verbunden — Nachrichten an den Bot beantwortet Claude Code.'; }
+  else { dot.classList.add('err'); text = 'Nicht verbunden' + (s.lastError ? `: ${s.lastError}` : ' — Verbindung wird aufgebaut …'); }
+  st.append(dot, tgEl('span', null, text));
+  tgBody.append(st);
+
+  if (s.chatTitle) tgBody.append(tgEl('p', 'tg-p tg-dim', `Verknüpfter Chat: ${s.chatTitle}`));
+  tgBody.append(tgEl('p', 'tg-p tg-dim', 'Im Chat: /new beginnt ein frisches Gespräch, /status zeigt den Zustand.'));
+
+  const row = tgEl('div', 'tg-actions');
+  if (s.enabled) {
+    row.append(tgButton('Stoppen', 'tg-secondary', () =>
+      tgPost('stop').catch((e) => setStatus(String(e.message || e), true, 5000))));
+  } else {
+    row.append(tgButton('Starten', 'bug-add', () =>
+      tgPost('start').catch((e) => setStatus(String(e.message || e), true, 5000))));
+  }
+  row.append(tgButton('Löschen', 'tg-danger', async () => {
+    if (!window.confirm('Telegram-Einrichtung dieser Installation löschen?\n(Token und Chat-Verknüpfung werden entfernt. '
+      + 'Der Bot selbst existiert bei Telegram weiter — endgültig löschen geht bei @BotFather mit /deletebot.)')) return;
+    try {
+      const r = await protectedFetch(`${BASE}api/telegram`, { method: 'DELETE' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      tgStatus = data;
+      tgRenderRow();
+      tgRenderBody();
+    } catch (e) {
+      setStatus(String(e.message || e), true, 5000);
+    }
+  }));
+  tgBody.append(row);
+}
+
+function tgRenderBody() {
+  tgBody.replaceChildren();
+  const s = tgStatus;
+  if (!s) {
+    tgBody.append(tgEl('div', 'tg-wait', 'Status wird geladen …'));
+    return;
+  }
+  if (s.configured) tgRenderManage(s);
+  else tgRenderWizard(s);
+  // Nur der Verknuepfungs-Schritt braucht das schnelle Nachfassen.
+  tgFastPoll(!tgOverlay.hidden && !!s.setup);
+}
+
+function tgOpen() {
+  if (tgRow.classList.contains('disabled')) return;
+  tgOverlay.hidden = false;
+  tgRenderBody();
+  tgRefresh();
+}
+function tgClose() {
+  tgOverlay.hidden = true;
+  tgFastPoll(false);
+}
+
+tgRow.addEventListener('click', tgOpen);
+document.getElementById('tg-close').addEventListener('click', tgClose);
+tgOverlay.addEventListener('click', (e) => { if (e.target === tgOverlay) tgClose(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !tgOverlay.hidden) { e.stopPropagation(); tgClose(); }
+}, true);
+
 // ------------------------------------------- Spaltenbreiten (Sidebar/Explorer)
 // Beide Randspalten sind per Maus ziehbar. Die Breiten leben als CSS-Custom-
 // Properties auf .app; der Ziehgriff (.col-resizer) ist nur eine transparente
@@ -2992,3 +3285,8 @@ mobileApplyMode();
 
 // Bugtracker: Badge/Liste initial laden (zeigt offene Eintraege am Kaefer-Icon).
 loadBugs();
+
+// Telegram-Zeile: Status initial und danach im ruhigen Takt (das Overlay
+// beschleunigt bei Bedarf selbst auf 2,5 s waehrend der Verknuepfung).
+tgRefresh();
+setInterval(tgRefresh, 15000);

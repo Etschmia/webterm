@@ -93,6 +93,25 @@ mit Admin-Recht hart löschen, ein normaler Collaborator nicht — deshalb kein 
   Trenner `\n\n---\n`, da es keinen Login in der App gibt); das Frontend blendet ihn in der
   Kompaktliste aus, GitHub zeigt ihn voll.
 
+## Telegram-Bot: Brücke zu lokalem Claude Code (`lib/telegram.js`)
+
+Die Sidebar-Zeile „Telegram" (`/api/telegram/*`) verbindet die Installation mit einem eigenen
+Telegram-Bot: Nachrichten an den Bot laufen als `claude -p --output-format json` in
+`~/.term-telegram/work`, Folge-Nachrichten per `--resume` (Session-ID aus der JSON-Antwort);
+die Antwort geht zurück in den Chat. Verbindung per **Long-Polling** (getUpdates) im
+Serverprozess — kein Webhook, keine öffentliche Erreichbarkeit nötig.
+
+- **Konfiguration pro Installation** in `~/.term-telegram/config.json` (0600): Token,
+  Bot-Identität, verknüpfter Chat, `enabled`, angefangener Setup-Schritt. Der
+  Einrichtungs-Assistent im Frontend liest seinen Fortschritt von dort — Schließen und
+  später weitermachen funktioniert deshalb browserübergreifend.
+- **Genau ein Chat** ist verknüpft (wer beim Einrichten den `/start <linkCode>`-Deep-Link
+  benutzt); alle anderen Absender werden abgewiesen. Kein `--dangerously-skip-permissions`.
+- **Voraussetzung** ist ein lokal auffindbares `claude`-Binary (Auflösung wie beim gh-CLI:
+  `CLAUDE_BIN` → `~/.local/bin` → übliche Pfade → PATH); fehlt es, ist die Zeile ausgegraut.
+- „Löschen" entfernt nur die hiesige Einrichtung — den Bot selbst löscht man bei
+  @BotFather (`/deletebot`), das kann die Bot-API nicht.
+
 ## Sicherheit: `server.js` authentifiziert nicht selbst
 
 Dahinter liegt eine **volle Shell** unter dem Service-User. Der Schutz liegt vollständig beim
