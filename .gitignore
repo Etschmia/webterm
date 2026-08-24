@@ -24,3 +24,6 @@ vendor/
 # (scoped git-Config + Manifest-Backups; werden im Normallauf wieder entfernt).
 .deploy-gitconfig
 *.deploybak
+
+# Reste von bun-Laeufen — Runtime ist bewusst node (siehe CLAUDE.md)
+bun.lock
