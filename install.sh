@@ -10,8 +10,11 @@
 #      Seit Claude Code 2.1.234 wartet die CLI Usage-Limits selbst aus, siehe unten.
 #   4. Sorgt fuer "set -g mouse on" in ~/.tmux.conf und rollt die git-Statuszeile
 #      aus (deploy/git-status.sh -> ~/.tmux/, status-right in ~/.tmux.conf).
-#   5. Hilft optional beim Erstellen einer Caddy-Datei (Subdomain oder Unterpfad),
-#      inkl. sofortiger bcrypt-Hash-Erzeugung fuer Basic Auth.
+#   5. Hilft optional beim Erstellen einer Caddy-Datei (Subdomain oder Unterpfad)
+#      und fragt dabei den Zugangsschutz ab: HTTP Basic Auth (bcrypt-Hash wird
+#      sofort erzeugt), Forward-Auth an einen externen 2FA/SSO-Dienst oder gar
+#      keinen Block (Schutz liegt woanders). Nachtraeglich aenderbar per
+#      deploy/setup-auth bzw. dem Zahnrad "Zugangsschutz" in der Sidebar.
 #   6. Generiert eine systemd-Unit und bietet die Aktivierung an.
 #
 # Das Skript ist idempotent: mehrfaches Ausfuehren ist gefahrlos.
@@ -29,70 +32,22 @@ ENV_FILE="$SCRIPT_DIR/.env"
 DEPLOY_DIR="$SCRIPT_DIR/deploy"
 DEFAULT_PORT="7681"
 
-if [ -t 1 ]; then
-  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
-  C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_CYAN=$'\033[36m'
-else
-  C_RESET=''; C_BOLD=''; C_DIM=''
-  C_GREEN=''; C_YELLOW=''; C_RED=''; C_CYAN=''
-fi
-
-info() { printf '%s %s\n' "${C_CYAN}•${C_RESET}" "$*"; }
-ok()   { printf '%s %s\n' "${C_GREEN}✓${C_RESET}" "$*"; }
-warn() { printf '%s %s\n' "${C_YELLOW}!${C_RESET}" "$*" >&2; }
-err()  { printf '%s %s\n' "${C_RED}✗${C_RESET}" "$*" >&2; }
-step() { printf '\n%s\n' "${C_BOLD}== $* ==${C_RESET}"; }
-note() { printf '%s\n' "${C_DIM}$*${C_RESET}"; }
-
-INTERACTIVE=1
-[ -t 0 ] || INTERACTIVE=0
-
-# --------------------------------------------------------------------------
-# Eingabe-Helfer (lesen/schreiben ueber /dev/tty, damit sie auch bei
-# umgeleitetem stdout/stderr funktionieren)
-# --------------------------------------------------------------------------
-ask_yes_no() {
-  # $1 = Frage, $2 = Default ("y"|"n")
-  local q="$1" def="${2:-n}" ans hint
-  if [ "$def" = "y" ]; then hint="[J/n]"; else hint="[j/N]"; fi
-  if [ "$INTERACTIVE" -eq 0 ]; then
-    [ "$def" = "y" ]
-    return
+for _lib in lib-ask.sh lib-caddy-auth.sh; do
+  if [ ! -r "$DEPLOY_DIR/$_lib" ]; then
+    printf 'Fehlt: %s — bitte das Repository vollstaendig auschecken.\n' "$DEPLOY_DIR/$_lib" >&2
+    exit 1
   fi
-  while true; do
-    printf '%s %s ' "$q" "$hint" > /dev/tty
-    read -r ans < /dev/tty || ans=""
-    ans="${ans:-$def}"
-    case "${ans,,}" in
-      j|ja|y|yes) return 0 ;;
-      n|nein|no)  return 1 ;;
-      *) printf 'Bitte j oder n eingeben.\n' > /dev/tty ;;
-    esac
-  done
-}
+done
 
-ask_value() {
-  # $1 = Prompt, $2 = Default (optional). Ergebnis -> stdout.
-  local q="$1" def="${2:-}" ans
-  if [ -n "$def" ]; then printf '%s [%s]: ' "$q" "$def" > /dev/tty
-  else printf '%s: ' "$q" > /dev/tty; fi
-  read -r ans < /dev/tty || ans=""
-  printf '%s' "${ans:-$def}"
-}
+# Ausgabe-/Eingabe-Helfer (Farben, info/ok/warn/err/step/note, ask_yes_no,
+# ask_value, ask_password, INTERACTIVE) — geteilt mit deploy/setup-auth.
+# shellcheck source=deploy/lib-ask.sh
+. "$DEPLOY_DIR/lib-ask.sh"
 
-ask_password() {
-  # Liest ein Passwort zweimal ohne Echo und vergleicht. Ergebnis -> stdout.
-  local p1 p2
-  while true; do
-    printf 'Passwort: ' > /dev/tty
-    read -rs p1 < /dev/tty || p1=""; printf '\n' > /dev/tty
-    printf 'Passwort (Wiederholung): ' > /dev/tty
-    read -rs p2 < /dev/tty || p2=""; printf '\n' > /dev/tty
-    if [ -z "$p1" ]; then printf 'Leer — bitte erneut.\n' > /dev/tty; continue; fi
-    if [ "$p1" != "$p2" ]; then printf 'Stimmt nicht ueberein — bitte erneut.\n' > /dev/tty; continue; fi
-    printf '%s' "$p1"; return 0
-  done
-}
+# Zugangsschutz-Dialog und Caddy-Bloecke (Basic Auth / Forward-Auth / keiner) —
+# geteilt mit deploy/setup-auth und dem Panel "Zugangsschutz" in der Sidebar.
+# shellcheck source=deploy/lib-caddy-auth.sh
+. "$DEPLOY_DIR/lib-caddy-auth.sh"
 
 # --------------------------------------------------------------------------
 # .env-Helfer
@@ -189,32 +144,6 @@ show_port_owner() {
   local p="$1"
   if command -v ss >/dev/null 2>&1; then
     ss -ltnpH 2>/dev/null | awk '{print $4"  "$6}' | grep -E "[:.]${p}\b" || true
-  fi
-}
-
-caddy_hash() {
-  # Passwort nur ueber stdin uebergeben: --plaintext wuerde es waehrend des
-  # Hashens fuer andere lokale Nutzer in der Prozessliste sichtbar machen.
-  local pw="$1" out
-  out="$(printf '%s\n%s\n' "$pw" "$pw" | caddy hash-password 2>/dev/null)" \
-    && { printf '%s' "$out"; return 0; }
-  return 1
-}
-
-caddy_basicauth_directive() {
-  # Der Direktiven-Name fuer HTTP Basic Auth haengt von der Caddy-Version ab:
-  #   Caddy <  2.8.0  ->  'basicauth'   (alte Schreibweise)
-  #   Caddy >= 2.8.0  ->  'basic_auth'  (ab 2.8.0; 'basicauth' ist dort entfernt)
-  # Es gibt KEINEN Namen, der auf beiden Versionen funktioniert. Laesst sich die
-  # Version nicht ermitteln (caddy fehlt o. ae.), nehmen wir die neuere Schreibweise.
-  local ver
-  ver="$(caddy version 2>/dev/null | head -n1 | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's/^v//')"
-  if [ -z "$ver" ]; then printf 'basic_auth'; return 0; fi
-  # Ist die kleinere von {2.8.0, $ver} genau 2.8.0, dann gilt $ver >= 2.8.0.
-  if [ "$(printf '%s\n' "2.8.0" "$ver" | sort -V | head -n1)" = "2.8.0" ]; then
-    printf 'basic_auth'
-  else
-    printf 'basicauth'
   fi
 }
 
@@ -512,46 +441,14 @@ step "5/6  Caddy-Konfiguration"
 HAVE_CADDY=0
 command -v caddy >/dev/null 2>&1 && HAVE_CADDY=1
 
-# Basic-Auth-Direktive passend zur installierten Caddy-Version waehlen.
+# Basic-Auth-Direktive passend zur installierten Caddy-Version waehlen
+# (die Meldung dazu gibt der Dialog erst aus, wenn Basic Auth gewaehlt wurde).
 CADDY_BASICAUTH="$(caddy_basicauth_directive)"
-if [ "$HAVE_CADDY" -eq 1 ]; then
-  note "Caddy gefunden ($(caddy version 2>/dev/null | head -n1)) — verwende Direktive '$CADDY_BASICAUTH'."
-else
-  note "Caddy nicht gefunden — verwende '$CADDY_BASICAUTH' (passt fuer Caddy >= 2.8)."
-  note "Auf Caddy < 2.8 die Direktive im Snippet in 'basicauth' (ohne Unterstrich) umbenennen."
-fi
+[ "$HAVE_CADDY" -eq 1 ] && info "Caddy gefunden: $(caddy version 2>/dev/null | head -n1)"
 
-write_caddy_credentials_note() {
-  note "Hinweis: Das Passwort wird NICHT gespeichert. Es wird sofort per"
-  note "'caddy hash-password' in einen bcrypt-Hash umgewandelt; nur dieser Hash"
-  note "landet in der .caddy-Datei. Notiere dir Loginname + Passwort gut!"
-}
-
-prompt_credentials() {
-  # Setzt globale CADDY_USER und CADDY_HASH.
-  CADDY_USER="$(ask_value 'Loginname')"
-  while ! printf '%s' "$CADDY_USER" | grep -qE '^[A-Za-z0-9._-]+$'; do
-    warn "Loginname darf nur Buchstaben, Ziffern, Punkt, _ und - enthalten."
-    CADDY_USER="$(ask_value 'Loginname')"
-  done
-  if [ "$HAVE_CADDY" -eq 1 ]; then
-    write_caddy_credentials_note
-    local pw; pw="$(ask_password)"
-    if CADDY_HASH="$(caddy_hash "$pw")"; then
-      ok "bcrypt-Hash erzeugt."
-    else
-      err "'caddy hash-password' ist fehlgeschlagen — setze Platzhalter."
-      CADDY_HASH="CHANGEME_BCRYPT_HASH"
-    fi
-    unset pw
-  else
-    warn "caddy-Binary nicht gefunden — ich kann jetzt keinen Hash erzeugen."
-    note "Es wird ein Platzhalter eingsetzt. Erzeuge den Hash spaeter mit:"
-    note "    caddy hash-password"
-    note "und trage ihn in die Datei ein."
-    CADDY_HASH="CHANGEME_BCRYPT_HASH"
-  fi
-}
+# Vorauswahl im Zugangsschutz-Dialog (1 = Basic Auth). Nachtraeglich aendern:
+# deploy/setup-auth bzw. das Zahnrad "Zugangsschutz" in der Sidebar.
+AUTH_DEFAULT_SEL="1"
 
 prompt_ip_allowlist() {
   # Optionaler zusaetzlicher Schutz fuer eine Anwendung mit voller Shell. Die
@@ -583,7 +480,7 @@ if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
     done
     warn "DNS: Lege einen A-/AAAA-Record fuer '$HOST_NAME' auf diesen Server an,"
     note "    bevor du Caddy neu laedst (sonst kann kein TLS-Zertifikat ausgestellt werden)."
-    prompt_credentials
+    auth_prompt "$AUTH_DEFAULT_SEL"
     prompt_ip_allowlist
     PUBLIC_ORIGIN="https://$HOST_NAME"
     CADDY_OUT="$DEPLOY_DIR/${HOST_NAME}.local.caddy"
@@ -591,11 +488,7 @@ if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
 # term-web — generiert von install.sh
 # Echte Zugangsdaten — NICHT ins Repo committen (per .gitignore ausgeschlossen).
 $HOST_NAME {
-    # HTTP Basic Auth (Hash via 'caddy hash-password')
-    ${CADDY_BASICAUTH} {
-        $CADDY_USER $CADDY_HASH
-    }
-
+$(auth_block '    ')
 $(if [ -n "$CADDY_ALLOWED_IPS" ]; then cat <<EOF_IP
     @term_denied not remote_ip $CADDY_ALLOWED_IPS
     respond @term_denied "Forbidden" 403
@@ -603,7 +496,8 @@ EOF_IP
 fi)
 
     # Backend bindet nur localhost; Caddy reicht den WebSocket-Upgrade
-    # automatisch durch, Basic Auth deckt auch den WS-Handshake ab.
+    # automatisch durch — der oben gewaehlte Zugangsschutz deckt den
+    # WS-Handshake mit ab (er ist ein normaler HTTP-Request).
     reverse_proxy 127.0.0.1:$PORT {
         header_up X-Real-IP {remote_host}
     }
@@ -629,6 +523,7 @@ fi)
 }
 EOF
     ok "Caddy-Datei geschrieben: $CADDY_OUT"
+    ok "Zugangsschutz: $(auth_mode_label)"
     printf '%s\n' "Naechste Schritte:"
     note "    sudo mkdir -p /var/log/caddy"
     note "    sudo touch /var/log/caddy/${HOST_NAME}.access.log && sudo chown caddy:caddy /var/log/caddy/${HOST_NAME}.access.log"
@@ -666,7 +561,7 @@ EOF
       note "du fuegst es manuell in den passenden Site-Block ein."
     fi
 
-    prompt_credentials
+    auth_prompt "$AUTH_DEFAULT_SEL"
     prompt_ip_allowlist
     CADDY_OUT="$DEPLOY_DIR/${HOST_NAME}${URL_PATH//\//_}.path.local.caddy"
     cat > "$CADDY_OUT" <<EOF
@@ -688,9 +583,7 @@ fi)
 
     # Pfad-Praefix abschneiden und ans term-web-Backend weiterreichen.
     handle_path ${URL_PATH}/* {
-        ${CADDY_BASICAUTH} {
-            $CADDY_USER $CADDY_HASH
-        }
+$(auth_block '        ')
         reverse_proxy 127.0.0.1:$PORT {
             header_up X-Real-IP {remote_host}
         }
@@ -706,6 +599,7 @@ fi)
     }
 EOF
     ok "Caddy-Snippet geschrieben: $CADDY_OUT"
+    ok "Zugangsschutz: $(auth_mode_label)"
     printf '%s\n' "Naechste Schritte:"
     note "    Snippet in den '$HOST_NAME { … }'-Block deiner Caddy-Konfiguration einfuegen"
     note "    sudo systemctl reload caddy"

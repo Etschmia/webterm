@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+#
+# deploy/setup-auth — Zugangsschutz einer BESTEHENDEN Installation aendern.
+#
+# install.sh fragt den Zugangsschutz bei der Erstinstallation ab. Wer schon
+# laeuft (typisch: Basic Auth) und nachtraeglich 2FA davorsetzen will, ruft
+# dieses Skript auf — es ist genau derselbe Dialog, aber ohne Build, ohne
+# systemd und ohne .env-Aenderungen:
+#
+#   deploy/setup-auth
+#
+# Erzeugt wird ein fertiger Caddy-Block (bzw. eine komplette Site-Datei) unter
+# deploy/*.local.caddy (gitignored) plus die genaue Anleitung, was in der
+# aktiven Caddy-Konfiguration zu ersetzen ist. Das Skript fasst /etc/caddy
+# NICHT selbst an: dort liegen fremde Sites, das Einspielen bleibt ein
+# bewusster Schritt mit sudo. Optional bietet es an, die erzeugte Datei per
+# 'caddy validate' bzw. 'caddy fmt' gegenzulesen.
+#
+# Nicht-interaktiv (nutzt das Panel "Zugangsschutz" in der Sidebar ueber
+# /api/authguard/snippet; Ausgabe geht nur nach stdout, es wird nichts
+# geschrieben):
+#
+#   deploy/setup-auth --print --mode basic   [--indent N] [--user NAME --hash HASH]
+#   deploy/setup-auth --print --mode forward [--indent N] \
+#       --upstream 127.0.0.1:9091 --portal https://auth.example.com \
+#       [--uri '/api/verify?rd=%PORTAL%']
+#   deploy/setup-auth --print --mode none    [--indent N]
+#
+# Exit-Codes: 0 ok · 2 ungueltige Eingabe
+
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPLOY_DIR="$SCRIPT_DIR"
+ENV_FILE="$REPO_DIR/.env"
+
+# shellcheck source=deploy/lib-ask.sh
+. "$DEPLOY_DIR/lib-ask.sh"
+# shellcheck source=deploy/lib-caddy-auth.sh
+. "$DEPLOY_DIR/lib-caddy-auth.sh"
+
+HAVE_CADDY=0
+command -v caddy >/dev/null 2>&1 && HAVE_CADDY=1
+CADDY_BASICAUTH="$(caddy_basicauth_directive)"
+
+# --------------------------------------------------------------------------
+# --print: nur den Block ausgeben (Aufrufer: /api/authguard/snippet)
+# --------------------------------------------------------------------------
+if [ "${1:-}" = "--print" ]; then
+  shift
+  AUTH_MODE="basic"; INDENT_N=4
+  AUTH_FWD_UPSTREAM=""; AUTH_FWD_PORTAL=""; AUTH_FWD_URI=""
+  CADDY_USER="LOGINNAME"; CADDY_HASH="CHANGEME_BCRYPT_HASH"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode)     AUTH_MODE="${2:-}"; shift 2 ;;
+      --indent)   INDENT_N="${2:-4}"; shift 2 ;;
+      --upstream) AUTH_FWD_UPSTREAM="${2:-}"; shift 2 ;;
+      --portal)   AUTH_FWD_PORTAL="${2:-}"; shift 2 ;;
+      --uri)      AUTH_FWD_URI="${2:-}"; shift 2 ;;
+      --user)     CADDY_USER="${2:-}"; shift 2 ;;
+      --hash)     CADDY_HASH="${2:-}"; shift 2 ;;
+      *) printf 'Unbekannte Option: %s\n' "$1" >&2; exit 2 ;;
+    esac
+  done
+  case "$AUTH_MODE" in basic|forward|none) : ;; *) printf 'Ungueltiger --mode\n' >&2; exit 2 ;; esac
+  printf '%s' "$INDENT_N" | grep -qE '^([0-9]|1[0-6])$' || { printf 'Ungueltiger --indent\n' >&2; exit 2; }
+  if [ "$AUTH_MODE" = "forward" ]; then
+    [ -n "$AUTH_FWD_URI" ] || AUTH_FWD_URI='/api/verify?rd=%PORTAL%'
+    auth_valid_upstream "$AUTH_FWD_UPSTREAM" || { printf 'Ungueltiger --upstream\n' >&2; exit 2; }
+    auth_valid_portal   "$AUTH_FWD_PORTAL"   || { printf 'Ungueltiger --portal\n' >&2; exit 2; }
+    auth_valid_uri      "$AUTH_FWD_URI"      || { printf 'Ungueltiger --uri\n' >&2; exit 2; }
+  fi
+  if [ "$AUTH_MODE" = "basic" ]; then
+    printf '%s' "$CADDY_USER" | grep -qE '^[A-Za-z0-9._-]+$' || { printf 'Ungueltiger --user\n' >&2; exit 2; }
+    printf '%s' "$CADDY_HASH" | grep -qE '^[A-Za-z0-9./$_-]+$' || { printf 'Ungueltiger --hash\n' >&2; exit 2; }
+  fi
+  auth_block "$(printf "%${INDENT_N}s" '')"
+  exit 0
+fi
+
+# --------------------------------------------------------------------------
+# Interaktiver Lauf
+# --------------------------------------------------------------------------
+step "Zugangsschutz aendern"
+
+# Oeffentlichen Origin und Port aus der .env holen — daraus ergibt sich, ob die
+# Installation unter einer eigenen Subdomain oder unter einem Unterpfad laeuft.
+get_env() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- || true
+}
+PUBLIC_ORIGIN="$(get_env PUBLIC_ORIGIN)"
+PORT="$(get_env PORT)"; PORT="${PORT:-7681}"
+
+if [ -z "$PUBLIC_ORIGIN" ]; then
+  warn "In $ENV_FILE steht kein PUBLIC_ORIGIN — diese Installation ist offenbar"
+  warn "noch nicht hinter einer Domain konfiguriert. Fuer die Ersteinrichtung"
+  warn "ist ./install.sh das richtige Skript."
+  HOST_NAME="$(ask_value 'Domain, unter der das Terminal erreichbar ist (z. B. term.example.com)')"
+else
+  HOST_NAME="${PUBLIC_ORIGIN#*://}"; HOST_NAME="${HOST_NAME%%/*}"
+  info "Installation laeuft unter: $PUBLIC_ORIGIN (Backend 127.0.0.1:$PORT)"
+fi
+
+URL_PATH=""
+if ask_yes_no "Laeuft das Terminal unter einem Unterpfad (z. B. /term)?" "n"; then
+  URL_PATH="$(ask_value 'Unterpfad' '/term')"
+  URL_PATH="/$(printf '%s' "$URL_PATH" | sed 's#^/*##; s#/*$##')"
+fi
+
+# Bestehende Caddy-Konfiguration suchen und den aktuellen Stand zeigen —
+# haeufig nur mit sudo lesbar, deshalb nur ein Hinweis, kein Abbruch.
+FOUND=""
+for f in /etc/caddy/Caddyfile /etc/caddy/sites/*.caddy /etc/caddy/conf.d/*.caddy /etc/caddy/*.caddy; do
+  [ -r "$f" ] || continue
+  if grep -qE "(^|[[:space:]])${HOST_NAME//./\\.}([[:space:]]|\{|,|:)" "$f" 2>/dev/null; then
+    FOUND="$f"; break
+  fi
+done
+if [ -n "$FOUND" ]; then
+  ok "Aktive Caddy-Konfiguration gefunden: $FOUND"
+  if grep -qE '^[[:space:]]*basic_?auth' "$FOUND" 2>/dev/null; then
+    info "Aktueller Zugangsschutz dort: HTTP Basic Auth"
+  elif grep -qE '^[[:space:]]*forward_auth' "$FOUND" 2>/dev/null; then
+    info "Aktueller Zugangsschutz dort: Forward-Auth (2FA/SSO)"
+  else
+    warn "In dieser Datei ist kein Auth-Block zu sehen."
+  fi
+else
+  note "Keine lesbare Caddy-Datei fuer '$HOST_NAME' gefunden (meist nur mit sudo"
+  note "lesbar). Das Snippet entsteht trotzdem — du fuegst es selbst ein."
+fi
+printf '\n'
+
+auth_prompt "2"
+
+# --------------------------------------------------------------------------
+# Ausgabe schreiben
+# --------------------------------------------------------------------------
+OUT="$DEPLOY_DIR/${HOST_NAME}.auth.local.caddy"
+{
+  printf '# term-web — Zugangsschutz-Block, erzeugt von deploy/setup-auth\n'
+  printf '# Ziel: %s%s   ·   Backend: 127.0.0.1:%s\n' "$HOST_NAME" "${URL_PATH:-}" "$PORT"
+  printf '# Enthaelt ggf. echte Zugangsdaten — NICHT committen (gitignored).\n'
+  printf '#\n'
+  if [ -n "$URL_PATH" ]; then
+    printf '# Einzufuegen INNERHALB des bestehenden "handle_path %s/* { … }"-Blocks,\n' "$URL_PATH"
+    printf '# als erste Direktive. Einen dort vorhandenen basic_auth-/forward_auth-Block\n'
+    printf '# ersetzen (nicht zusaetzlich stehen lassen — sonst zwei Anmeldungen).\n\n'
+    auth_block '        '
+  else
+    printf '# Einzufuegen INNERHALB des bestehenden "%s { … }"-Blocks, als erste\n' "$HOST_NAME"
+    printf '# Direktive. Einen dort vorhandenen basic_auth-/forward_auth-Block ersetzen\n'
+    printf '# (nicht zusaetzlich stehen lassen — sonst zwei Anmeldungen).\n\n'
+    auth_block '    '
+  fi
+} > "$OUT"
+chmod 600 "$OUT"
+
+printf '\n'
+ok "Neuer Zugangsschutz: $(auth_mode_label)"
+ok "Block geschrieben: $OUT"
+printf '\n'
+printf '%s\n' "Naechste Schritte:"
+if [ -n "$FOUND" ]; then
+  note "    sudo cp '$FOUND' '$FOUND.bak'          # Sicherung"
+  note "    sudo \${EDITOR:-nano} '$FOUND'          # alten Auth-Block durch den neuen ersetzen"
+else
+  note "    Block in den passenden Site-Block deiner Caddy-Konfiguration einsetzen"
+fi
+note "    sudo caddy validate --config /etc/caddy/Caddyfile   # Syntaxpruefung"
+note "    sudo systemctl reload caddy"
+printf '\n'
+
+if [ "$AUTH_MODE" = "forward" ]; then
+  info "Danach zu pruefen:"
+  note "  * Der Auth-Dienst muss laufen und unter $AUTH_FWD_UPSTREAM erreichbar sein."
+  note "  * Das Login-Portal ($AUTH_FWD_PORTAL) braucht eine eigene, gueltige"
+  note "    TLS-Site — sonst laeuft die Umleitung ins Leere."
+  note "  * Session-/Inactivity-Dauer im Auth-Dienst grosszuegig setzen: ein"
+  note "    Terminal steht tagelang offen, kurze Zeiten nerven bei jedem Reload."
+  note "  * Offene Terminalverbindungen ueberleben einen Session-Ablauf; erst der"
+  note "    naechste Seitenaufruf verlangt neu. Zum harten Abmelden: Tab schliessen."
+  note "  * Am Terminal selbst aendert sich nichts — server.js prueft weiterhin"
+  note "    keine Anmeldung, PUBLIC_ORIGIN bleibt unveraendert."
+fi
+if [ "$AUTH_MODE" = "none" ]; then
+  warn "Es gibt jetzt KEINEN Auth-Block mehr in diesem Block. Vergewissere dich,"
+  warn "dass der Zugang anderweitig beschraenkt ist (VPN, Zero-Trust, mTLS, IP-Allowlist)."
+fi

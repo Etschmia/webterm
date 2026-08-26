@@ -76,6 +76,14 @@
         <span class="tg-state" id="tg-state" hidden></span>
       </button>
 
+      <button class="tg-row" id="ag-row" title="Zugangsschutz – wird geprüft …">
+        <span class="theme-label">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5"/></svg>
+          <span id="ag-row-label">Zugangsschutz</span>
+        </span>
+        <span class="tg-state" id="ag-state" hidden></span>
+      </button>
+
       <div class="theme-row">
         <span class="theme-label" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5a3.8 3.8 0 0 0-3.8 3.8v2.4L3 10.8h10l-1.2-2.1V6.3A3.8 3.8 0 0 0 8 2.5z"/><path d="M6.6 13a1.5 1.5 0 0 0 2.8 0"/></svg>
@@ -347,6 +355,26 @@
         </section>
 
         <section>
+          <h3>Zugangsschutz &amp; 2FA</h3>
+          <p>Das <b>Zahnrad</b> unten in der Sidebar zeigt, <b>womit</b> die Anfragen dieses
+          Browsers gerade abgesichert sind — erkannt an den Headern der eigenen Anfrage
+          (<code>Basic Auth</code>, <code>2FA/SSO</code> oder „ungeschützt?", wenn gar kein
+          Auth-Header ankommt). Das Terminal selbst prüft absichtlich <b>keine</b> Anmeldung:
+          dahinter liegt eine volle Shell, der Schutz gehört davor in den Reverse Proxy.</p>
+          <p><b>2FA nachrüsten:</b> Im Panel <b>2FA/SSO (forward_auth)</b> wählen, Auth-Dienst
+          und Portal-URL eintragen, <b>Caddy-Block erzeugen</b> — der Block ersetzt in der
+          Caddy-Konfiguration den bisherigen <code>basic_auth</code>-Block. Caddy fragt dann vor
+          jeder Anfrage einen externen Dienst (Authelia, oauth2-proxy, tinyauth, Pocket ID …)
+          und lässt erst nach dessen OK durch. <b>Welcher</b> zweite Faktor dort geprüft wird –
+          TOTP, Passkey, Unternehmens-IdP – ist allein Sache dieses Dienstes; am Terminal ändert
+          sich dafür nichts. <code>forward_auth</code> ist Caddy-Bordmittel, kein Plugin.</p>
+          <p>Das Panel <b>erzeugt</b> nur — es fasst <code>/etc/caddy</code> nicht an und startet
+          nichts neu. Das ist Absicht: ein Webterminal, das seinen eigenen Türsteher umbauen darf,
+          wäre genau die Lücke, die der Türsteher schließen soll. Geführt inklusive Suche nach der
+          aktiven Caddy-Datei: <code>deploy/setup-auth</code> im Terminal.</p>
+        </section>
+
+        <section>
           <h3>Spaltenbreite anpassen</h3>
           <p>Die Trennlinien von <b>Sidebar</b> (links) und <b>Datei-Explorer</b> (rechts)
           lassen sich mit der Maus ziehen — der Zeiger wird dort zum ↔. <b>Doppelklick</b>
@@ -407,6 +435,16 @@
         <button class="bug-close" id="tg-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
       </div>
       <div class="tg-body" id="tg-body"><!-- Inhalt rendert app.js je nach Status --></div>
+    </div>
+  </div>
+
+  <div class="bug-overlay" id="ag-overlay" hidden>
+    <div class="bug-card tg-card" role="dialog" aria-modal="true" aria-label="Zugangsschutz">
+      <div class="bug-head">
+        <span class="bug-head-title">Zugangsschutz</span>
+        <button class="bug-close" id="ag-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
+      </div>
+      <div class="tg-body" id="ag-body"><!-- Inhalt rendert app.js --></div>
     </div>
   </div>
 

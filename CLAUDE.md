@@ -70,6 +70,41 @@ PUBLIC_ORIGIN=https://terminal.example.com
 
 Mehrere Origins kommagetrennt. Es gibt bewusst keinen Domain-Default im Code.
 
+## Zugangsschutz sitzt in Caddy — eine Stelle, drei Betriebsarten
+
+`server.js` authentifiziert bewusst nicht selbst (s. u.). Der Zugangsschutz ist deshalb genau
+**ein Block** in der Caddy-Site, und das Projekt bleibt agnostisch gegenüber der Frage, ob und
+womit eine Installation 2FA macht. Betriebsarten: `basic_auth` (ein Faktor), `forward_auth` an
+einen externen Auth-Dienst (**2FA/SSO** — Authelia, oauth2-proxy, tinyauth, Pocket ID …) oder
+gar kein Block (Schutz extern per VPN/Zero-Trust/mTLS). `forward_auth` ist **Caddy-Bordmittel**,
+kein Plugin — das war der Grund, es dem Plugin `caddy-security` (eigenes Caddy-Binary nötig)
+vorzuziehen.
+
+Für 2FA ist am Terminal **nichts** anzupassen: `PUBLIC_ORIGIN` bleibt, der WS-Upgrade läuft
+durch denselben Hop.
+
+Erzeugt werden die Blöcke an genau **einer** Stelle: `deploy/lib-caddy-auth.sh`. Drei
+Konsumenten:
+
+- `install.sh` (Schritt 5, Erstinstallation) — sourct die Lib, Dialog per `auth_prompt`.
+- `deploy/setup-auth` — Nachrüsten einer laufenden Installation (derselbe Dialog, ohne Build
+  und ohne `.env`-Änderung); `--print` gibt nur den Block aus.
+- Panel „Zugangsschutz" (Zahnrad in der Sidebar, `/api/authguard/*`) — ruft für das Snippet
+  `deploy/setup-auth --print` auf (execFile ohne Shell, Werte doppelt validiert).
+
+Die Ausgabe-/Eingabe-Helfer (`note`, `ask_value`, …) liegen geteilt in `deploy/lib-ask.sh`;
+`install.sh` sourct sie, statt sie selbst zu definieren.
+
+⚠️ **Panel und Skript fassen `/etc/caddy` nicht an und laden Caddy nicht neu.** Das ist
+Absicht: dort liegen fremde Sites, und ein Webterminal, das seinen eigenen Türsteher umbauen
+darf, wäre genau die Lücke, die der Türsteher schließen soll. Diesen Riegel nicht
+wegoptimieren — auch nicht „nur ein Reload-Knopf".
+
+Der **Ist-Zustand** im Panel kommt nicht aus der Caddy-Datei (für den Service-User meist gar
+nicht lesbar), sondern aus den Headern der laufenden Anfrage: `Authorization: Basic` →
+Basic Auth, `Remote-User`/`X-Forwarded-User` (von `copy_headers`) → Forward-Auth, sonst
+„ungeschützt?". Diese Header sind reine **Anzeige** — es hängt keine Autorisierung daran.
+
 ## Bugtracker: GitHub Issues (kein lokaler Speicher)
 
 Das Käfer-Icon in der Sidebar (`/api/bugs` in `server.js`) hängt an den **GitHub-Issues des

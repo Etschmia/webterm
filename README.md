@@ -15,8 +15,10 @@ Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Bui
 richtet optional `claude-auto-retry` (Default **nein**, siehe Hinweise; inkl. täglichem
 Update-Check per Cron — `deploy/claude-auto-retry-update.sh`) sowie die tmux-Konfiguration (Maussteuerung +
 git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`) ein und hilft beim
-Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) inkl.
-bcrypt-Hash für Basic Auth. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
+Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) — dabei
+fragt er den **Zugangsschutz** ab: Basic Auth (bcrypt-Hash wird sofort erzeugt),
+`forward_auth` an einen externen 2FA/SSO-Dienst oder gar keinen Block (Schutz extern).
+Nachträglich änderbar per `deploy/setup-auth` bzw. dem Zahnrad in der Sidebar. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
 woraus `server.js` die erlaubten WS-Origins ableitet.
 
 ## Funktionen
@@ -45,6 +47,10 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
+- **Zugangsschutz** (Zahnrad unten in der Sidebar): zeigt, womit die eigenen Anfragen gerade
+  abgesichert sind (Basic Auth / 2FA-SSO / gar nicht — erkannt an den Headern der eigenen
+  Anfrage, nicht aus der Caddy-Datei) und erzeugt den passenden Caddy-Block, um **2FA
+  nachzurüsten**. Siehe „Zugangsschutz: Basic Auth, 2FA/SSO oder extern".
 
 ## Architektur
 ```
@@ -141,9 +147,11 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   setzt jede Sitzung danach automatisch wieder auf — claude per `claude --resume`,
   kimi per `kimi --continue`.
 - **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
-  `.caddy`-Datei mit bcrypt-Hash). Manuell: Hash via `caddy hash-password` erzeugen, in
-  einer `deploy/<domain>.caddy` als `basic_auth { <user> <hash> }` eintragen, nach
-  `/etc/caddy/sites/` kopieren, dann `sudo systemctl reload caddy`.
+  `.caddy`-Datei mit dem gewählten Zugangsschutz). Manuell mit Basic Auth: Hash via
+  `caddy hash-password` erzeugen, in einer `deploy/<domain>.caddy` als
+  `basic_auth { <user> <hash> }` eintragen, nach `/etc/caddy/sites/` kopieren, dann
+  `sudo systemctl reload caddy`. Für 2FA/SSO statt dessen `forward_auth` — siehe
+  „Zugangsschutz: Basic Auth, 2FA/SSO oder extern".
   - **Basic-Auth-Direktive ist versionsabhängig**: Caddy **≥ 2.8** verwendet `basic_auth`,
     Caddy **< 2.8** noch `basicauth` (ohne Unterstrich) — es gibt keinen Namen, der auf beiden
     läuft. `./install.sh` erkennt die installierte Version (`caddy version`) und schreibt die
@@ -152,12 +160,64 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   - Hinweis: Die Log-Datei muss vor dem ersten Reload existieren —
     `sudo touch /var/log/caddy/term.access.log && sudo chown caddy:caddy /var/log/caddy/term.access.log`.
 
+## Zugangsschutz: Basic Auth, 2FA/SSO oder extern
+
+`server.js` authentifiziert **bewusst nicht selbst** — dahinter liegt eine volle Shell, der
+Schutz gehört vor den Reverse-Proxy-Hop. Damit ist der Zugangsschutz genau **eine Stelle** in
+der Caddy-Konfiguration, und das Projekt bleibt agnostisch gegenüber der Frage, welcher zweite
+Faktor dort hängt. `install.sh` fragt in Schritt 5 danach; nachträglich ändert man ihn mit
+`deploy/setup-auth` oder über das **Zahnrad „Zugangsschutz"** in der Sidebar.
+
+Drei Betriebsarten:
+
+| | Was passiert | Wofür |
+|---|---|---|
+| **`basic_auth`** | Login/Passwort (bcrypt-Hash) in der Caddy-Datei | schnell, aber ein Faktor |
+| **`forward_auth`** | Caddy fragt vor **jeder** Anfrage einen externen Auth-Dienst; 2xx = durchlassen, 401/302 = Umleitung auf dessen Login-Portal | **2FA/SSO** |
+| **kein Block** | Schutz liegt woanders | VPN/Tailscale, Zero-Trust-Proxy, mTLS-Client-Zertifikate |
+
+**`forward_auth` ist eine native Caddy-Direktive** — kein Plugin, kein selbst gebautes
+Caddy-Binary. Als Dienst kommt in Frage, was diese Schnittstelle bedient, z. B. **Authelia**
+(TOTP, WebAuthn/Passkey, Duo), **oauth2-proxy** (delegiert an die Unternehmens-IdP — Entra ID,
+Google Workspace, Keycloak; MFA-Policy und Offboarding bleiben dort), **tinyauth** oder
+**Pocket ID**. Für dieses Repo sind das alles derselbe Block:
+
+```caddyfile
+term.example.com {
+    forward_auth 127.0.0.1:9091 {
+        uri /api/verify?rd=https://auth.example.com
+        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+    }
+    reverse_proxy 127.0.0.1:7681 { header_up X-Real-IP {remote_host} }
+    # header/encode/log wie bisher
+}
+```
+
+Zwei Punkte, die speziell für ein *Terminal* zählen:
+
+- **WebSocket**: `/ws` läuft durch denselben Hop — der Upgrade ist ein normaler HTTP-Request
+  mit demselben Cookie. Eine **bereits offene** Verbindung endet aber nicht, wenn die Session
+  abläuft; erst der nächste Reload verlangt neu.
+- **Session-Dauer großzügig setzen**: ein Terminal steht tagelang offen. Die Default-Stunde
+  mancher Auth-Dienste heißt sonst „nach jedem Laptop-Zuklappen neu 2FA".
+
+`PUBLIC_ORIGIN` und alles Übrige bleiben unverändert; am Terminal selbst ist für 2FA nichts
+anzupassen. Das Portal gehört am besten auf eine eigene Subdomain **derselben** Domain
+(`auth.example.com`), sonst greift das Session-Cookie nicht.
+
+**Nachrüsten**: `deploy/setup-auth` führt durch denselben Dialog wie `install.sh`, sucht die
+aktive Caddy-Datei, zeigt den erkannten Ist-Zustand und schreibt den neuen Block als
+gitignorte Datei nach `deploy/<domain>.auth.local.caddy` — plus die Schritte zum Einspielen.
+Weder das Skript noch das Panel fassen `/etc/caddy` selbst an oder laden Caddy neu: dort liegen
+fremde Sites, und ein Webterminal, das seinen eigenen Türsteher umbauen darf, wäre genau die
+Lücke, die der Türsteher schließen soll.
+
 ## Hinweise
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester
   Client gewinnt). Stört das eine parallel laufende Session, global in `~/.tmux.conf` auf
   `set -g window-size largest` (bzw. `manual`) umstellen.
-- **Sicherheit**: Voller Shell-Zugriff als der Service-User. Schutz = TLS + Basic Auth (Caddy) +
-  localhost-Bindung. Der Server verweigert Nicht-Loopback-Bindungen, solange nicht ausdrücklich
+- **Sicherheit**: Voller Shell-Zugriff als der Service-User. Schutz = TLS + Zugangsschutz in
+  Caddy (Basic Auth **oder** `forward_auth` mit 2FA/SSO, siehe oben) + localhost-Bindung. Der Server verweigert Nicht-Loopback-Bindungen, solange nicht ausdrücklich
   `TERM_ALLOW_NON_LOOPBACK=1` gesetzt ist. Der Installer bietet zusätzlich eine IP-Allowlist an;
   für öffentliche Erreichbarkeit wird darüber hinaus VPN/mTLS/Identity-Aware Proxy empfohlen.
   Credentials geheim halten. Schreibende Browser-Requests benötigen einen pro Prozess erzeugten

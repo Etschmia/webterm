@@ -1415,6 +1415,114 @@ async function handleTelegram(req, res, route) {
 }
 
 // ---------------------------------------------------------------------------
+// Zugangsschutz (/api/authguard/*) — Zahnrad "Zugangsschutz" in der Sidebar
+// ---------------------------------------------------------------------------
+// Das Panel ist Erklaerung + Snippet-Generator, KEIN Schalter: es aendert
+// weder /etc/caddy noch startet es etwas neu. Das ist Absicht — dort liegen
+// fremde Sites, und ein Webterminal, das seinen eigenen Tuersteher umbauen
+// darf, waere genau die Luecke, die der Tuersteher schliessen soll. Erzeugt
+// wird derselbe Block wie bei der Erstinstallation; das Einspielen bleibt ein
+// bewusster Schritt mit sudo (die Anleitung dazu zeigt das Panel).
+//
+// Erkennung des Ist-Zustands: NICHT aus der Caddy-Datei (die ist fuer den
+// Service-User meist gar nicht lesbar), sondern aus den Headern genau dieser
+// Anfrage — Caddy reicht bei Basic Auth den Authorization-Header durch, bei
+// forward_auth die per copy_headers gesetzten Remote-*-Header.
+
+const AUTH_SETUP_SCRIPT = path.join(__dirname, 'deploy', 'setup-auth');
+
+function authGuardDetect(req) {
+  const h = req.headers || {};
+  const fwdUser = h['remote-user'] || h['x-forwarded-user'] || h['x-forwarded-preferred-username'] || '';
+  if (fwdUser) return { detected: 'forward', user: String(fwdUser).slice(0, 120) };
+  const auth = String(h.authorization || '');
+  if (/^basic /i.test(auth)) {
+    let user = '';
+    try { user = Buffer.from(auth.slice(6), 'base64').toString('utf8').split(':')[0] || ''; } catch {}
+    return { detected: 'basic', user: user.slice(0, 120) };
+  }
+  return { detected: 'unknown', user: '' };
+}
+
+function authGuardStatus(req) {
+  const origin = (process.env.PUBLIC_ORIGIN || '').split(',')[0].trim();
+  let host = '', urlPath = '';
+  if (origin) {
+    try { const u = new URL(origin); host = u.host; } catch {}
+  }
+  // Unterpfad-Betrieb: das Frontend liegt dann nicht unter '/'. Caddy schneidet
+  // das Praefix per handle_path ab, der Server sieht es also nicht — deshalb
+  // meldet das Frontend seinen BASE-Pfad mit (Query ?base=/term/).
+  try { urlPath = new URL(req.url, 'http://localhost').searchParams.get('base') || ''; } catch {}
+  return {
+    ...authGuardDetect(req),
+    publicOrigin: origin,
+    host,
+    basePath: urlPath,
+    port: PORT,
+    scriptAvailable: fs.existsSync(AUTH_SETUP_SCRIPT),
+    scriptPath: path.relative(__dirname, AUTH_SETUP_SCRIPT),
+    repoDir: __dirname,
+  };
+}
+
+// Snippet-Erzeugung delegiert an deploy/setup-auth --print: die Bloecke haben
+// genau EINE Quelle (deploy/lib-caddy-auth.sh), die auch install.sh benutzt.
+// execFile ohne Shell + Whitelist der Argumente -> keine Injection; die
+// eigentliche Wertepruefung macht das Skript noch einmal selbst.
+function authGuardSnippet(body) {
+  const mode = String(body && body.mode || '');
+  if (!['basic', 'forward', 'none'].includes(mode)) {
+    return Promise.resolve({ error: 'Ungueltiger Modus' });
+  }
+  const indent = body && body.indent === 8 ? '8' : '4';
+  const args = ['--print', '--mode', mode, '--indent', indent];
+  if (mode === 'forward') {
+    const upstream = String(body.upstream || '');
+    const portal = String(body.portal || '');
+    const uri = String(body.uri || '');
+    if (!/^([A-Za-z0-9._-]+:\d{1,5}|unix\/\/[A-Za-z0-9._/-]+)$/.test(upstream)) {
+      return Promise.resolve({ error: 'Adresse des Auth-Dienstes: bitte host:port angeben.' });
+    }
+    if (!/^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~/-]*)?$/.test(portal)) {
+      return Promise.resolve({ error: 'Portal-URL: bitte eine vollstaendige URL angeben.' });
+    }
+    if (uri && !/^\/[A-Za-z0-9._~/%=&?+-]*$/.test(uri)) {
+      return Promise.resolve({ error: 'Verify-Endpunkt: bitte einen Pfad wie /api/verify angeben.' });
+    }
+    args.push('--upstream', upstream, '--portal', portal);
+    if (uri) args.push('--uri', uri);
+  }
+  return new Promise((resolve) => {
+    execFile(AUTH_SETUP_SCRIPT, args, { cwd: __dirname, timeout: 10000, maxBuffer: 256 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const detail = (stderr || err.message || '').trim();
+          resolve({ error: err.code === 'ENOENT'
+            ? 'deploy/setup-auth nicht gefunden — Repository unvollstaendig?'
+            : `Snippet-Erzeugung fehlgeschlagen: ${detail}` });
+        } else {
+          resolve({ snippet: stdout });
+        }
+      });
+  });
+}
+
+async function handleAuthGuard(req, res, route) {
+  if (route === '/api/authguard/status' && req.method === 'GET') {
+    return sendJson(res, 200, authGuardStatus(req));
+  }
+  if (route === '/api/authguard/snippet' && req.method === 'POST') {
+    const b = await readJsonBody(req, 8 * 1024);
+    if (!b) return sendJson(res, 400, { error: 'Ungueltiger Request-Body' });
+    const r = await authGuardSnippet(b);
+    if (r.error) return sendJson(res, 400, r);
+    return sendJson(res, 200, r);
+  }
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-Server
 // ---------------------------------------------------------------------------
 
@@ -1548,6 +1656,10 @@ async function handleRequest(req, res) {
 
   if (url === '/api/telegram' || url.startsWith('/api/telegram/')) {
     return handleTelegram(req, res, url);
+  }
+
+  if (url.startsWith('/api/authguard/')) {
+    return handleAuthGuard(req, res, url);
   }
 
   if (url === '/api/clip') {

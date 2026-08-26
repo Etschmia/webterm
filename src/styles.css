@@ -1874,3 +1874,54 @@ body.col-resizing, body.col-resizing * {
   .help-overlay, .bug-overlay { padding: 10px; }
   .help-card, .bug-card { max-height: calc(var(--vvh, 100dvh) - 20px); }
 }
+
+/* Zugangsschutz-Panel (Zahnrad in der Sidebar) — nutzt sonst die tg-*-Styles */
+.ag-modes { display: flex; gap: 6px; margin: 12px 0 10px; flex-wrap: wrap; }
+.ag-mode {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--hover);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.ag-mode:hover { background: var(--hover-strong); color: var(--foreground); }
+.ag-mode.active {
+  color: var(--foreground);
+  border-color: color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+}
+.ag-field { display: block; margin: 10px 0; }
+.ag-field-label {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  margin-bottom: 4px;
+}
+.ag-select { appearance: none; cursor: pointer; }
+.ag-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.ag-check input { margin-top: 2px; }
+.ag-snippet {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+}
+.ag-out .tg-actions { margin-top: 10px; }

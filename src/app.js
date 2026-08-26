@@ -3054,6 +3054,311 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !tgOverlay.hidden) { e.stopPropagation(); tgClose(); }
 }, true);
 
+// ------------------------------------------------------------- Zugangsschutz
+// Sidebar-Zeile "Zugangsschutz" (Zahnrad): zeigt, WOMIT die Anfragen dieses
+// Browsers gerade abgesichert sind, erklaert die Alternativen und erzeugt den
+// passenden Caddy-Block — inklusive Forward-Auth, dem Weg zu 2FA/SSO.
+//
+// Bewusst nur Generator, kein Schalter: das Panel fasst /etc/caddy nicht an.
+// Dort liegen fremde Sites, und ein Webterminal, das seinen eigenen Tuersteher
+// umbauen darf, waere genau die Luecke, die der Tuersteher schliessen soll.
+// Das Einspielen bleibt ein bewusster Schritt mit sudo — gefuehrt geht das
+// per deploy/setup-auth im Terminal.
+//
+// Der Ist-Zustand kommt NICHT aus der Caddy-Datei (fuer den Service-User meist
+// unlesbar), sondern aus den Headern der eigenen Anfrage: Basic Auth reicht
+// Authorization durch, forward_auth setzt per copy_headers die Remote-*-Header.
+const agRow = document.getElementById('ag-row');
+const agStateEl = document.getElementById('ag-state');
+const agOverlay = document.getElementById('ag-overlay');
+const agBody = document.getElementById('ag-body');
+let agStatus = null;
+let agForm = { mode: 'forward', preset: 'authelia', upstream: '127.0.0.1:9091', portal: '', uri: '', subpath: false };
+let agSnippet = '';
+let agError = '';
+
+const AG_PRESETS = {
+  authelia:       { label: 'Authelia', upstream: '127.0.0.1:9091', uri: '/api/verify?rd=%PORTAL%',
+                    hint: 'TOTP, WebAuthn/Passkey, Duo; Nutzer aus Datei oder LDAP.' },
+  'oauth2-proxy': { label: 'oauth2-proxy', upstream: '127.0.0.1:4180', uri: '/oauth2/auth',
+                    hint: 'Delegiert an eure IdP (Entra ID, Google, Keycloak …) — 2FA-Policy und '
+                        + 'Offboarding bleiben dort. Der Callback-Pfad /oauth2/* muss ebenfalls erreichbar sein.' },
+  tinyauth:       { label: 'tinyauth', upstream: '127.0.0.1:3000', uri: '/api/auth/caddy',
+                    hint: 'Sehr kleiner Dienst mit TOTP — wenig Betriebsaufwand.' },
+  custom:         { label: 'etwas anderes', upstream: '127.0.0.1:9091', uri: '/api/verify?rd=%PORTAL%',
+                    hint: 'Adressen und Verify-Endpunkt selbst eintragen.' },
+};
+
+function agRenderRow() {
+  const s = agStatus;
+  agStateEl.classList.remove('ok', 'warn', 'err');
+  if (!s) {
+    agStateEl.hidden = true;
+    agRow.title = 'Zugangsschutz – wird geprüft …';
+    return;
+  }
+  if (s.detected === 'unavailable') {
+    agStateEl.hidden = true;
+    agRow.title = 'Zugangsschutz: Das laufende Backend kennt diese Auskunft noch nicht — '
+      + 'nach einem Neustart des Dienstes (deploy/term-restart) steht sie zur Verfügung.';
+    return;
+  }
+  agStateEl.hidden = false;
+  if (s.detected === 'forward') {
+    agStateEl.textContent = '2FA/SSO';
+    agStateEl.classList.add('ok');
+    agRow.title = `Zugangsschutz: Forward-Auth aktiv${s.user ? ` (angemeldet als ${s.user})` : ''} — `
+      + 'ein externer Auth-Dienst prüft jede Anfrage. Klick zeigt Details.';
+  } else if (s.detected === 'basic') {
+    agStateEl.textContent = 'Basic Auth';
+    agStateEl.classList.add('warn');
+    agRow.title = `Zugangsschutz: HTTP Basic Auth${s.user ? ` (als ${s.user})` : ''} — ein Faktor. `
+      + 'Klick erzeugt den Caddy-Block für 2FA/SSO.';
+  } else {
+    agStateEl.textContent = 'ungeschützt?';
+    agStateEl.classList.add('err');
+    agRow.title = 'Kein Auth-Header an dieser Anfrage erkennbar. Entweder ist der Zugang '
+      + 'außerhalb geregelt (VPN/Zero-Trust/mTLS) — oder gar nicht. Klick zeigt Details.';
+  }
+}
+
+async function agRefresh() {
+  try {
+    const r = await fetch(`${BASE}api/authguard/status?base=${encodeURIComponent(BASE)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('Status nicht verfügbar');
+    agStatus = await r.json();
+    if (agStatus.basePath && agStatus.basePath !== '/') agForm.subpath = true;
+  } catch {
+    // Kein /api/authguard im Backend = altes server.js (Frontend neu gebaut,
+    // Dienst noch nicht neu gestartet). Bewusst NICHT als "ungeschuetzt"
+    // anzeigen — das waere eine Falschaussage ueber den Zugangsschutz.
+    agStatus = { detected: 'unavailable', user: '' };
+  }
+  agRenderRow();
+  if (!agOverlay.hidden) agRenderBody();
+}
+
+function agField(label, value, placeholder, onInput) {
+  const wrap = tgEl('label', 'ag-field');
+  wrap.append(tgEl('span', 'ag-field-label', label));
+  const inp = tgEl('input', 'bug-input');
+  inp.type = 'text';
+  inp.value = value || '';
+  inp.placeholder = placeholder || '';
+  inp.spellcheck = false;
+  inp.addEventListener('input', () => onInput(inp.value.trim()));
+  wrap.append(inp);
+  return wrap;
+}
+
+function agStatusLine(s) {
+  const line = tgEl('div', 'tg-statusline');
+  const dot = tgEl('span', 'tg-dot');
+  let text;
+  if (s.detected === 'forward') {
+    dot.classList.add('ok');
+    text = `Forward-Auth ist aktiv${s.user ? ` — angemeldet als ${s.user}` : ''}. `
+      + 'Ein externer Auth-Dienst prüft jede Anfrage, bevor Caddy sie durchlässt.';
+  } else if (s.detected === 'basic') {
+    dot.classList.add('warn');
+    text = `HTTP Basic Auth ist aktiv${s.user ? ` — angemeldet als ${s.user}` : ''}. `
+      + 'Ein Faktor: Wer Name und Passwort hat, hat eine Shell auf diesem Server.';
+  } else {
+    dot.classList.add('err');
+    text = 'An dieser Anfrage ist kein Auth-Header zu sehen. Das ist richtig, wenn der '
+      + 'Zugang außerhalb geregelt ist (VPN/Tailscale, Zero-Trust-Proxy, mTLS-Zertifikate) '
+      + '— sonst steht hier eine volle Shell offen im Netz.';
+  }
+  line.append(dot, tgEl('span', null, text));
+  return line;
+}
+
+function agModeSwitch() {
+  const row = tgEl('div', 'ag-modes');
+  const modes = [
+    ['forward', '2FA / SSO (forward_auth)'],
+    ['basic', 'Basic Auth'],
+    ['none', 'kein Block'],
+  ];
+  for (const [val, label] of modes) {
+    const b = tgEl('button', 'ag-mode' + (agForm.mode === val ? ' active' : ''), label);
+    b.type = 'button';
+    b.addEventListener('click', () => { agForm.mode = val; agSnippet = ''; agError = ''; agRenderBody(); });
+    row.append(b);
+  }
+  return row;
+}
+
+function agRenderForward(pane) {
+  pane.append(tgEl('p', 'tg-p',
+    'Caddy fragt vor jeder Anfrage einen kleinen Auth-Dienst: antwortet der mit OK, geht die '
+    + 'Anfrage durch, sonst landet der Besucher auf dessen Login-Seite. Welcher zweite Faktor '
+    + 'dort geprüft wird — TOTP, Passkey, eure Unternehmens-IdP —, ist allein Sache dieses '
+    + 'Dienstes; am Terminal ändert sich nichts. forward_auth ist eine native Caddy-Direktive, '
+    + 'ein Plugin oder ein eigenes Caddy-Binary braucht es dafür nicht.'));
+
+  const sel = tgEl('select', 'bug-input ag-select');
+  for (const [key, p] of Object.entries(AG_PRESETS)) {
+    const o = tgEl('option', null, p.label);
+    o.value = key;
+    if (agForm.preset === key) o.selected = true;
+    sel.append(o);
+  }
+  sel.addEventListener('change', () => {
+    agForm.preset = sel.value;
+    agForm.upstream = AG_PRESETS[sel.value].upstream;
+    agForm.uri = '';
+    agSnippet = '';
+    agRenderBody();
+  });
+  const selWrap = tgEl('label', 'ag-field');
+  selWrap.append(tgEl('span', 'ag-field-label', 'Auth-Dienst (nur Vorbelegung — austauschbar)'));
+  selWrap.append(sel);
+  pane.append(selWrap);
+  pane.append(tgEl('p', 'tg-p tg-dim', AG_PRESETS[agForm.preset].hint));
+
+  pane.append(agField('Adresse des Dienstes (host:port, nur lokal nötig)',
+    agForm.upstream, '127.0.0.1:9091', (v) => { agForm.upstream = v; }));
+  pane.append(agField('URL des Login-Portals',
+    agForm.portal, 'https://auth.example.com', (v) => { agForm.portal = v; }));
+  if (agForm.preset === 'custom') {
+    pane.append(agField('Verify-Endpunkt (Pfad; %PORTAL% wird ersetzt)',
+      agForm.uri, '/api/verify?rd=%PORTAL%', (v) => { agForm.uri = v; }));
+  }
+  pane.append(tgEl('p', 'tg-p tg-dim',
+    'Tipp: Das Portal am besten als eigene Subdomain derselben Domain (auth.example.com) — '
+    + 'sonst greift das Session-Cookie nicht. Und die Session-Dauer großzügig setzen: ein '
+    + 'Terminal steht tagelang offen, kurze Zeiten heißen ständig neu anmelden.'));
+}
+
+function agRenderBody() {
+  agBody.replaceChildren();
+  const s = agStatus;
+  if (!s) { agBody.append(tgEl('div', 'tg-wait', 'Status wird geladen …')); return; }
+
+  if (s.detected === 'unavailable') {
+    agBody.append(tgEl('p', 'tg-p',
+      'Das laufende Backend kennt die Auskunft über den Zugangsschutz noch nicht — das '
+      + 'Frontend ist neuer als der Dienst. Nach einem Neustart (im Terminal: '
+      + 'deploy/term-restart) zeigt dieses Panel den Ist-Zustand und erzeugt Caddy-Blöcke.'));
+    agBody.append(tgEl('p', 'tg-p tg-dim',
+      'Unabhängig davon führt deploy/setup-auth im Terminal durch dieselbe Einrichtung.'));
+    return;
+  }
+  agBody.append(agStatusLine(s));
+  agBody.append(tgEl('p', 'tg-p tg-dim',
+    'Das Terminal selbst prüft absichtlich keine Anmeldung — dahinter liegt eine volle Shell, '
+    + 'der Schutz gehört davor in den Reverse Proxy. Hier entsteht der passende Caddy-Block; '
+    + 'eingespielt wird er von Hand mit sudo.'));
+
+  agBody.append(agModeSwitch());
+  const pane = tgEl('div', 'tg-pane');
+  if (agForm.mode === 'forward') {
+    agRenderForward(pane);
+  } else if (agForm.mode === 'basic') {
+    pane.append(tgEl('p', 'tg-p',
+      'Login und Passwort direkt in der Caddy-Datei, das Passwort nur als bcrypt-Hash. '
+      + 'Schnell, aber ein Faktor. Den Hash erzeugt hier bewusst niemand — das Passwort soll '
+      + 'nicht durch diese Weboberfläche wandern. Der Block unten enthält deshalb Platzhalter; '
+      + 'den echten Hash liefert im Terminal:'));
+    const hashLine = tgEl('p', 'tg-p');
+    hashLine.append(tgEl('code', null, 'caddy hash-password'));
+    pane.append(hashLine);
+  } else {
+    pane.append(tgEl('p', 'tg-p',
+      'Kein Auth-Block in Caddy — sinnvoll, wenn der Zugang eine Ebene tiefer beschränkt ist: '
+      + 'VPN/Tailscale, ein Zero-Trust-Proxy oder mTLS-Client-Zertifikate (letztere sind '
+      + 'Caddy-Bordmittel und gelten als Besitzfaktor). Ohne so etwas steht das Terminal offen.'));
+  }
+
+  const sub = tgEl('label', 'ag-check');
+  const cb = tgEl('input');
+  cb.type = 'checkbox';
+  cb.checked = agForm.subpath;
+  cb.addEventListener('change', () => { agForm.subpath = cb.checked; agSnippet = ''; agRenderBody(); });
+  sub.append(cb, tgEl('span', null, 'läuft unter einem Unterpfad (Block gehört in handle_path → tiefer eingerückt)'));
+  pane.append(sub);
+
+  const actions = tgEl('div', 'tg-actions');
+  actions.append(tgButton('Caddy-Block erzeugen', 'bug-add', async () => {
+    agError = ''; agSnippet = '';
+    const body = { mode: agForm.mode, indent: agForm.subpath ? 8 : 4 };
+    if (agForm.mode === 'forward') {
+      body.upstream = agForm.upstream;
+      body.portal = agForm.portal;
+      const uri = agForm.preset === 'custom' ? agForm.uri : AG_PRESETS[agForm.preset].uri;
+      if (uri) body.uri = uri;
+    }
+    try {
+      const r = await protectedFetch(`${BASE}api/authguard/snippet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) agError = data.error || 'Erzeugung fehlgeschlagen.';
+      else agSnippet = data.snippet || '';
+    } catch (e) {
+      agError = String(e.message || e);
+    }
+    agRenderBody();
+  }));
+  pane.append(actions);
+  if (agError) pane.append(tgEl('div', 'tg-err', agError));
+  agBody.append(pane);
+
+  if (agSnippet) {
+    const out = tgEl('div', 'tg-pane ag-out');
+    out.append(tgEl('div', 'tg-pane-h', 'Caddy-Block'));
+    out.append(tgEl('p', 'tg-p tg-dim',
+      s.host
+        ? `Einfügen im Site-Block „${s.host}" — als erste Direktive, anstelle eines dort `
+          + 'vorhandenen basic_auth-/forward_auth-Blocks (nicht zusätzlich, sonst zwei Anmeldungen).'
+        : 'Einfügen als erste Direktive des Site-Blocks, anstelle eines dort vorhandenen '
+          + 'basic_auth-/forward_auth-Blocks.'));
+    out.append(tgEl('pre', 'ag-snippet', agSnippet.replace(/\s+$/, '')));
+    const row = tgEl('div', 'tg-actions');
+    row.append(tgButton('Kopieren', 'tg-secondary', async () => {
+      try {
+        await navigator.clipboard.writeText(agSnippet);
+        setStatus('Caddy-Block in die Zwischenablage kopiert', false, 2500);
+      } catch {
+        setStatus('Kopieren nicht möglich — Block markieren und kopieren', true, 4000);
+      }
+    }));
+    out.append(row);
+    out.append(tgEl('p', 'tg-p tg-dim',
+      'Danach: Datei sichern, Block ersetzen, dann sudo caddy validate --config '
+      + '/etc/caddy/Caddyfile und sudo systemctl reload caddy.'));
+    agBody.append(out);
+  }
+
+  const foot = tgEl('div', 'tg-foot');
+  foot.append(tgEl('span', 'tg-dim',
+    'Geführt im Terminal — findet die aktive Caddy-Datei und schreibt den Block als Datei:'));
+  const cmd = tgEl('code', null, 'deploy/setup-auth');
+  const cmdWrap = tgEl('span', null);
+  cmdWrap.append(cmd);
+  foot.append(cmdWrap);
+  agBody.append(foot);
+}
+
+function agOpen() {
+  agOverlay.hidden = false;
+  agRenderBody();
+  agRefresh();
+}
+function agClose() { agOverlay.hidden = true; }
+
+agRow.addEventListener('click', agOpen);
+document.getElementById('ag-close').addEventListener('click', agClose);
+agOverlay.addEventListener('click', (e) => { if (e.target === agOverlay) agClose(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !agOverlay.hidden) { e.stopPropagation(); agClose(); }
+}, true);
+
+agRefresh();
+
 // ------------------------------------------- Spaltenbreiten (Sidebar/Explorer)
 // Beide Randspalten sind per Maus ziehbar. Die Breiten leben als CSS-Custom-
 // Properties auf .app; der Ziehgriff (.col-resizer) ist nur eine transparente
