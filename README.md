@@ -135,6 +135,14 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
     sie **nicht** beim Booten — der Service ist dann kein Dauerdienst. `install.sh` versucht
     das automatisch; prüfen mit `loginctl show-user <user> | grep Linger` (soll `yes`
     zeigen). Betrifft nur die User-Unit; die System-Unit läuft ohne Lingering.
+  - **Reihenfolge:** `install.sh` aktiviert Lingering **vor** der Unit-Installation und
+    prüft danach, ob der User-Bus erreichbar ist. Grund: ohne Lingering existiert
+    `/run/user/<uid>` nur, solange eine echte PAM-Sitzung des Nutzers läuft — in einer
+    `su -`-Shell also nicht, und `systemctl --user` scheitert dann mit *„Failed to connect
+    to user scope bus via local transport: No such file or directory"*. Ist der Bus auch
+    danach nicht erreichbar, nennt der Installer die beiden Auswege: direkt als dieser
+    Nutzer anmelden (`ssh <user>@<host>` bzw. `sudo machinectl shell <user>@`) und die drei
+    Befehle nachholen — oder die System-Unit wählen.
   - Migration von einer bestehenden System-Unit: erst `sudo systemctl disable --now
     <service>` (einmalig, Admin), dann `install.sh` mit Option User-Unit — parallel geht
     nicht, beide würden denselben Port binden.

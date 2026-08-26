@@ -49,6 +49,11 @@ done
 # shellcheck source=deploy/lib-caddy-auth.sh
 . "$DEPLOY_DIR/lib-caddy-auth.sh"
 
+# Servicenamen-Ermittlung und die Reparatur des systemd-User-Bus
+# (term_user_bus_repair) — geteilt mit deploy/update und deploy/term-restart.
+# shellcheck source=deploy/lib-service.sh
+[ -r "$DEPLOY_DIR/lib-service.sh" ] && . "$DEPLOY_DIR/lib-service.sh"
+
 # --------------------------------------------------------------------------
 # .env-Helfer
 # --------------------------------------------------------------------------
@@ -656,11 +661,8 @@ else
   if [ "$UNIT_MODE" = "2" ]; then
     # ---- User-Unit: laeuft ohnehin als dieser Nutzer, daher kein User=;
     # default.target ist das multi-user.target des User-Managers.
-    # PTY-/SSH-Umgebungen setzen XDG_RUNTIME_DIR nicht immer — ohne das
-    # erreicht `systemctl --user` den User-Manager nicht.
-    if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
-      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    fi
+    # Der User-Manager wird weiter unten scharf gemacht (Lingering + Bus-Probe),
+    # BEVOR 'systemctl --user' zum Einsatz kommt.
     UNIT_OUT="$DEPLOY_DIR/${SERVICE_NAME}.local.service"
     cat > "$UNIT_OUT" <<EOF
 [Unit]
@@ -685,7 +687,54 @@ WantedBy=default.target
 EOF
     ok "systemd-User-Unit geschrieben: $UNIT_OUT"
 
-    if ask_yes_no "User-Unit jetzt installieren und starten (ohne sudo)?" "y"; then
+    # ---- Lingering ZUERST -----------------------------------------------
+    # Reihenfolge ist hier entscheidend (Vorfall 26.08.2026): Ohne Lingering
+    # existiert /run/user/<uid> nur, solange eine echte PAM-Sitzung dieses
+    # Nutzers laeuft. In einer 'su -'- oder sonst sitzungslosen Shell gibt es
+    # das Verzeichnis nicht — 'systemctl --user' scheitert dann mit
+    # "Failed to connect to user scope bus via local transport: No such file
+    # or directory". Lingering startet den User-Manager dauerhaft und legt das
+    # Verzeichnis an; deshalb wird es VOR der Installation gesetzt (frueher
+    # lief es danach, und die Installation scheiterte genau einmal unnoetig).
+    if loginctl show-user "$CUR_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+      ok "Lingering ist aktiv — der Service laeuft auch ohne offene Sitzung weiter."
+    elif loginctl enable-linger "$CUR_USER" 2>/dev/null || loginctl enable-linger 2>/dev/null; then
+      ok "Lingering aktiviert (loginctl enable-linger) — Service ueberlebt den Logout."
+    else
+      warn "Lingering konnte nicht aktiviert werden — ohne Lingering stoppt der Service beim Logout!"
+      note "    Einmalig als Admin ausfuehren: sudo loginctl enable-linger $CUR_USER"
+    fi
+
+    # Der User-Manager braucht einen Moment, bis /run/user/<uid> steht.
+    USER_RUNTIME_DIR="/run/user/$(id -u)"
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+      [ -d "$USER_RUNTIME_DIR" ] && break
+      sleep 0.5
+    done
+
+    # Umgebung reparieren und User-Bus proben (dieselbe Logik wie in
+    # deploy/update und deploy/term-restart, siehe deploy/lib-service.sh).
+    USER_BUS_OK=0
+    if command -v term_user_bus_repair >/dev/null 2>&1 || declare -F term_user_bus_repair >/dev/null 2>&1; then
+      term_user_bus_repair && USER_BUS_OK=1
+    else
+      [ -d "$USER_RUNTIME_DIR" ] && export XDG_RUNTIME_DIR="$USER_RUNTIME_DIR"
+      systemctl --user show-environment >/dev/null 2>&1 && USER_BUS_OK=1
+    fi
+
+    if [ "$USER_BUS_OK" -eq 0 ]; then
+      err "Der systemd-User-Manager ist aus dieser Sitzung nicht erreichbar."
+      note "Typisch fuer Shells ohne eigene PAM-Sitzung (z. B. nach 'su - $CUR_USER')."
+      note "Die Unit-Datei ist geschrieben — es fehlt nur der Weg, sie zu aktivieren."
+      printf '%s\n' "Zwei Auswege:"
+      note "  a) Direkt als '$CUR_USER' anmelden (ssh $CUR_USER@<host>) und dort nachholen:"
+      note "       mkdir -p ~/.config/systemd/user"
+      note "       cp '$UNIT_OUT' ~/.config/systemd/user/${SERVICE_NAME}.service"
+      note "       systemctl --user daemon-reload && systemctl --user enable --now $SERVICE_NAME"
+      note "     (mit sudo-Rechten ginge auch: sudo machinectl shell $CUR_USER@)"
+      note "  b) install.sh erneut ausfuehren und die System-Unit waehlen (Option 1) —"
+      note "     die braucht keinen User-Bus, dafuer sudo."
+    elif ask_yes_no "User-Unit jetzt installieren und starten (ohne sudo)?" "y"; then
       USER_UNIT_DIR="$HOME/.config/systemd/user"
       if mkdir -p "$USER_UNIT_DIR" \
          && cp "$UNIT_OUT" "$USER_UNIT_DIR/${SERVICE_NAME}.service" \
@@ -696,24 +745,12 @@ EOF
         note "    Logs:    journalctl --user -u $SERVICE_NAME -f"
       else
         err "Installation der User-Unit fehlgeschlagen."
+        note "Ausgabe pruefen mit: systemctl --user status $SERVICE_NAME"
       fi
     else
       printf '%s\n' "Manuelle Installation:"
       note "    mkdir -p ~/.config/systemd/user && cp '$UNIT_OUT' ~/.config/systemd/user/${SERVICE_NAME}.service"
       note "    systemctl --user daemon-reload && systemctl --user enable --now $SERVICE_NAME"
-    fi
-
-    # Ohne Lingering beendet systemd alle User-Units beim letzten Logout —
-    # der Service waere dann kein Dauerdienst. Aktive Sitzungen duerfen das
-    # per polkit meist fuer sich selbst setzen (set-self-linger), sonst muss
-    # einmalig ein Admin ran.
-    if loginctl show-user "$CUR_USER" 2>/dev/null | grep -q '^Linger=yes'; then
-      ok "Lingering ist aktiv — der Service laeuft auch ohne offene Sitzung weiter."
-    elif loginctl enable-linger 2>/dev/null; then
-      ok "Lingering aktiviert (loginctl enable-linger) — Service ueberlebt den Logout."
-    else
-      warn "Lingering konnte nicht aktiviert werden — ohne Lingering stoppt der Service beim Logout!"
-      note "    Einmalig als Admin ausfuehren: sudo loginctl enable-linger $CUR_USER"
     fi
     note "deploy/term-restart erkennt die User-Unit automatisch und kommt dann ohne sudo aus."
 
