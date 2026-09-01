@@ -1478,7 +1478,7 @@ function fxHidePreview() {
 // durchgereicht und von DOMPurify entschaerft (Skripte/Handler raus), also
 // gefahrlos einzublenden. Anders als beim Bild wird der Inhalt asynchron geladen
 // -> kurze Verweil-Verzoegerung, Abbruch bei weitergezogenem Cursor, Cache.
-const DOC_PREVIEW_RE = /\.(md|markdown|html?)$/i;
+const DOC_PREVIEW_RE = /\.(md|markdown|html?|txt)$/i;
 const FX_DOC_DELAY = 260;                 // erst nach kurzem Verweilen laden (kein Flackern beim Drueberwischen)
 const FX_DOC_MAX = 512 * 1024;            // groessere Dateien nicht fuer den fluechtigen Blick laden
 const fxDocEl = document.createElement('div');
@@ -1810,7 +1810,7 @@ function fxRenderList(entries) {
       : () => fxDownload(child, e.name);
     const isImg = e.type === 'file' && IMG_RE.test(e.name);
     const previewUrl = isImg ? `${BASE}api/fs/raw?path=${encodeURIComponent(child)}` : null;
-    // Markdown/HTML (aber keine Bilder wie .svg): schwebende Doc-Vorschau via mdlite.
+    // Markdown/HTML/Text (aber keine Bilder wie .svg): schwebende Doc-Vorschau via mdlite.
     const docPreview = (!isImg && e.type === 'file' && DOC_PREVIEW_RE.test(e.name))
       ? { rel: child, name: e.name, size: e.size }
       : null;
