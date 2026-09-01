@@ -391,43 +391,173 @@ copyOverlay.append(copyText);
 const copyHint = document.createElement('div');
 copyHint.className = 'copy-hint';
 copyHint.hidden = true;
-copyHint.textContent = 'Markieren + Strg-C kopiert · Esc beendet';
+copyHint.textContent = 'Markieren + Strg-C kopiert · Mausrad blättert · Esc beendet';
 
 workEl.append(copyOverlay, copyHint);
 
 // Sichtbaren Terminalinhalt (inkl. vorhandenem Scrollback) als Text einsammeln.
-function snapshotTerminal() {
+// trim=false liefert das Bild unveraendert — noetig fuer das Anstueckeln beim
+// Hochscrollen (s. copyMergeAbove), weil dort beide Seiten exakt gleich
+// aufbereitet sein muessen.
+function snapshotTerminal(trim = true) {
   const buf = term.buffer.active;
   const lines = [];
   for (let i = 0; i < buf.length; i++) {
     const line = buf.getLine(i);
     lines.push(line ? line.translateToString(true) : '');
   }
-  // Leerzeilen am Rand kappen (haeufig leerer Scrollback ueber/unter dem Bild).
-  while (lines.length && lines[0] === '') lines.shift();
-  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  if (trim) {
+    // Leerzeilen am Rand kappen (haeufig leerer Scrollback ueber/unter dem Bild).
+    while (lines.length && lines[0] === '') lines.shift();
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  }
   return lines.join('\n');
 }
 
-function enterCopyMode() {
+// Scrollback der Session aus tmux nachladen. snapshotTerminal() allein reicht
+// nicht: tmux laeuft im Alternate-Screen, dort hat xterm.js keinen Scrollback —
+// term.buffer.active ist genau der sichtbare Bildschirm. Das Overlay waere
+// damit nie hoeher als das Fenster, das Mausrad haette nichts zu scrollen und
+// man koennte nur markieren, was gerade zu sehen ist. Der Server holt die
+// History per 'tmux capture-pane'.
+async function fetchScrollback() {
+  const session = state.active.mode === 'session' ? (state.active.name || '') : '';
+  try {
+    const r = await fetch(`${BASE}api/capture?session=${encodeURIComponent(session)}`,
+      { cache: 'no-store' });
+    if (!r.ok) return '';
+    const data = await r.json();
+    return typeof data.text === 'string' ? data.text : '';
+  } catch { return ''; }  // altes Backend/kein tmux -> Schnappschuss bleibt stehen
+}
+
+let copyLoadSeq = 0;   // verwirft Antworten eines schon beendeten Copy-Modes
+// Overlay zeigt nur EINEN Bildschirm (TUI im Alternate-Screen: Claude, vim,
+// tmux-Copy-Mode) -> es gibt nichts zu scrollen, und tmux hat fuer solche Panes
+// auch keine History. Dann wird das Mausrad an die Anwendung weitergereicht und
+// das Overlay waechst nach oben (s. copyPullUp).
+let copyGrow = false;
+let copyWheelUps = 0;  // an die Anwendung geschickte Rad-Schritte (Rueckfahrt beim Verlassen)
+
+async function enterCopyMode() {
   if (copyMode) return;
   copyMode = true;
+  copyGrow = false;
+  copyWheelUps = 0;
+  copyPullPending = 0;
   copyText.textContent = snapshotTerminal();
   copyOverlay.hidden = false;
   copyHint.hidden = false;
   copyOverlay.scrollTop = copyOverlay.scrollHeight; // unten (juengste Ausgabe) zeigen
   copyOverlay.focus();
+  // Sichtbares Bild steht sofort; die History kommt asynchron nach.
+  const seq = ++copyLoadSeq;
+  const text = await fetchScrollback();
+  if (!copyMode || seq !== copyLoadSeq) return;
+  // Mehr als ein Bildschirm zurueck? Dann ist es echte tmux-History; sonst
+  // laeuft im Pane eine TUI im Alternate-Screen (keine History vorhanden) und
+  // das Rad muss weitergereicht werden.
+  copyGrow = !(text && text.split('\n').length > term.rows + 2);
+  // Hat der Nutzer inzwischen zu markieren begonnen, den Text nicht mehr
+  // austauschen — das wuerde die Auswahl verwerfen.
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && copyOverlay.contains(sel.anchorNode)) return;
+  copyText.textContent = copyGrow ? snapshotTerminal(false) : text;
+  copyOverlay.scrollTop = copyOverlay.scrollHeight;
 }
 
 function exitCopyMode() {
   if (!copyMode) return;
   copyMode = false;
+  copyLoadSeq++;
+  copyPullPending = 0;
+  // Weitergereichte Rad-Schritte zuruecknehmen, damit die Anwendung so
+  // dasteht wie vor dem Markieren.
+  if (copyWheelUps > 0) sendWheel(false, copyWheelUps);
+  copyWheelUps = 0;
+  copyGrow = false;
   copyOverlay.hidden = true;
   copyHint.hidden = true;
   copyText.textContent = '';
   renderSidebar(); // Toggle-Zustand spiegeln (z. B. bei Esc/Sessionwechsel)
   term.focus();
 }
+
+// --- Mausrad im Copy-Mode: am oberen Rand mehr Vergangenheit nachholen -------
+// Ein Rad-Ereignis als SGR-Mausmeldung (CSI < 64/65 ; col ; row M) an die PTY —
+// also genau das, was xterm ohne Overlay schicken wuerde. Was daraus wird,
+// entscheidet wie sonst auch tmux (Copy-Mode, Weiterreichen an die Anwendung).
+function sendWheel(up, times = 1) {
+  if (!(term.modes && term.modes.mouseTrackingMode !== 'none')) {
+    // tmux/Anwendung wollen keine Mausmeldungen: xterm wuerde im
+    // Alternate-Screen Cursortasten schicken — das tun wir dann auch.
+    const key = term.modes && term.modes.applicationCursorMode
+      ? (up ? '\x1bOA' : '\x1bOB')
+      : (up ? '\x1b[A' : '\x1b[B');
+    send({ t: 'input', d: key.repeat(times * 3) });
+    return;
+  }
+  const btn = up ? 64 : 65;
+  // Zellkoordinate unter dem Zeiger ist fuer das Rad zweitrangig; die Mitte des
+  // Panes ist immer eine gueltige Position innerhalb der Pane-Grenzen.
+  const col = Math.max(1, Math.round(term.cols / 2));
+  const row = Math.max(1, Math.round(term.rows / 2));
+  send({ t: 'input', d: `\x1b[<${btn};${col};${row}M`.repeat(times) });
+}
+
+// Groesstmoegliche Ueberlappung suchen: das Ende des neuen Bildes ist der
+// Anfang dessen, was schon im Overlay steht. Zurueck kommt nur der Teil, der
+// oben fehlt. Ohne Ueberlappung (Redraw, Statuszeile) das ganze Bild.
+function copyMergeAbove(current, screen) {
+  const cur = current.split('\n');
+  const neu = screen.split('\n');
+  for (let k = Math.min(neu.length, cur.length); k > 0; k--) {
+    let hit = true;
+    for (let i = 0; i < k; i++) {
+      if (neu[neu.length - k + i] !== cur[i]) { hit = false; break; }
+    }
+    if (hit) return neu.slice(0, neu.length - k);
+  }
+  return neu;
+}
+
+let copyPullPending = 0;
+let copyPullBusy = false;
+
+// Rad-Schritte an die Anwendung schicken, kurz auf deren Neuzeichnen warten und
+// das dabei sichtbar gewordene Stueck oben ans Overlay setzen. Die Ansicht
+// bleibt dabei stehen (scrollTop um die gewachsene Hoehe nachziehen), damit die
+// laufende Auswahl nicht wegspringt.
+async function copyPullUp(steps) {
+  copyPullPending += steps;
+  if (copyPullBusy) return;
+  copyPullBusy = true;
+  try {
+    while (copyPullPending > 0 && copyMode && copyGrow) {
+      const n = Math.min(copyPullPending, 5);
+      copyPullPending -= n;
+      sendWheel(true, n);
+      copyWheelUps += n;
+      await new Promise((r) => setTimeout(r, 120));
+      if (!copyMode || !copyGrow) return;
+      const added = copyMergeAbove(copyText.textContent, snapshotTerminal(false));
+      if (!added.length) continue;
+      const before = copyOverlay.scrollHeight;
+      copyText.textContent = added.join('\n') + '\n' + copyText.textContent;
+      copyOverlay.scrollTop += copyOverlay.scrollHeight - before;
+    }
+  } finally {
+    copyPullBusy = false;
+  }
+}
+
+copyOverlay.addEventListener('wheel', (e) => {
+  if (!copyMode || !copyGrow) return;   // echte History -> nativ scrollen
+  if (e.deltaY >= 0) return;            // nach unten: im Overlay nativ
+  if (copyOverlay.scrollTop > 0) return; // erst am oberen Rand nachholen
+  e.preventDefault();
+  copyPullUp(1);
+}, { passive: false });
 
 // Esc beendet den Copy-Mode — fokusunabhaengig, solange er aktiv ist.
 document.addEventListener('keydown', (e) => {

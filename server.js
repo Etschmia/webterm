@@ -88,6 +88,8 @@ const FS_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;  // harte Obergrenze pro Datei
 const WS_MAX_PAYLOAD = 1024 * 1024;              // Terminalinput/Control pro Frame
 const WS_MAX_CONNECTIONS = 32;                   // Schutz gegen PTY-Prozessflut
 const CLIP_TTL_MS = 7 * 24 * 60 * 60 * 1000;    // Aufbewahrung: 7 Tage
+const CAPTURE_LINES_DEFAULT = 5000;              // Scrollback-Zeilen fuer /api/capture
+const CAPTURE_LINES_MAX = 50000;                 // harte Obergrenze pro Abruf
 const CLIP_EXT = {                               // erlaubte Bildtypen -> Endung
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
   'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp',
@@ -1576,6 +1578,36 @@ async function handleRequest(req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ sessions, host: os.hostname() }));
     return;
+  }
+
+  // Scrollback der aktiven Pane einer Session als Klartext — Quelle fuer das
+  // "Markieren & Kopieren"-Overlay. xterm.js allein reicht dafuer nicht: tmux
+  // schaltet das Terminal in den Alternate-Screen, dort ist term.buffer.active
+  // genau EIN Bildschirm ohne History. Das Overlay haette also nichts zu
+  // scrollen — man kann nur markieren, was gerade sichtbar ist. Ohne 'session'
+  // die Standard-Session.
+  if (url === '/api/capture' && req.method === 'GET') {
+    const q = new URL(req.url, 'http://localhost').searchParams;
+    const target = q.get('session') || STANDARD_SESSION;
+    if (!(await sessionExists(target))) {
+      return sendJson(res, 404, { error: `Session '${target}' nicht gefunden` });
+    }
+    const want = parseInt(q.get('lines') || '', 10);
+    const lines = Math.min(Math.max(Number.isFinite(want) ? want : CAPTURE_LINES_DEFAULT, 1),
+      CAPTURE_LINES_MAX);
+    // Ziel ist die aktive Pane der Session: '=<name>:' — das '=' erzwingt den
+    // exakten Namens-Match (tmux' Praefix-Matching koennte sonst eine fremde
+    // Session treffen), der Doppelpunkt macht daraus ein Session-Ziel (ohne ihn
+    // sucht capture-pane einen Pane namens '=<name>' und scheitert).
+    // '-S -<n>' = n Zeilen History vor dem sichtbaren Bild; ist die History
+    // kuerzer, klemmt tmux an deren Anfang.
+    const r = await tmux(['capture-pane', '-p', '-S', `-${lines}`, '-t', `=${target}:`]);
+    if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
+    // Leerzeilen an den Raendern kappen (kurze History -> fuehrende Leerzeilen).
+    const rows = r.out.split('\n');
+    while (rows.length && rows[0].trim() === '') rows.shift();
+    while (rows.length && rows[rows.length - 1].trim() === '') rows.pop();
+    return sendJson(res, 200, { text: rows.join('\n'), lines: rows.length });
   }
 
   // Session umbenennen (Inline-Edit in der Sidebar): tmux rename-session plus
