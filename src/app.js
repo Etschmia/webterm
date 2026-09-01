@@ -137,6 +137,17 @@ searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
 // Strg+F im Terminal abfangen (statt Browser-Suche); F3/Shift+F3 blaettern.
 term.attachCustomKeyEventHandler((e) => {
   if (e.type !== 'keydown') return true;
+  // Shift+Enter: Zeilenumbruch statt Absenden (Claude Code & Co.). xterm.js
+  // schickt sonst dasselbe \r wie Enter. \x1b\r (Meta+Enter) ist genau die
+  // Sequenz, die Claude Codes /terminal-setup auch Desktop-Terminals
+  // beibringt, und laeuft unveraendert durch tmux — anders als CSI-u
+  // (\x1b[13;2u), das zusaetzlich extended-keys-Unterstuetzung der inneren
+  // Anwendung braeuchte.
+  if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    e.preventDefault();
+    send({ t: 'input', d: '\x1b\r' });
+    return false;
+  }
   if (e.ctrlKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
     e.preventDefault();
     openSearch();
@@ -603,6 +614,29 @@ function restoreActive() {
 term.parser.registerOscHandler(5522, (data) => {
   const name = String(data || '').trim();
   if (name) refreshSessions().then(() => switchTo('session', name));
+  return true;
+});
+
+// OSC 52: Anwendungen (tmux mit set-clipboard, Claude Codes /copy, vim …)
+// schreiben in die "Terminal-Zwischenablage" — hier heisst das: in die des
+// Browsers. xterm.js bringt dafuer keinen Handler mit. Payload ist
+// '<selection>;<base64>'; die Abfrage-Form ('?') wird bewusst nicht
+// beantwortet (die Browser-Zwischenablage laese sich eh nicht still aus).
+// Der Schreibzugriff braucht ein fokussiertes Dokument — im Hintergrund-Tab
+// schlaegt er leise fehl, mehr ist ohne Nutzer-Geste nicht zu holen.
+term.parser.registerOscHandler(52, (data) => {
+  const s = String(data || '');
+  const sep = s.indexOf(';');
+  if (sep < 0) return true;
+  const payload = s.slice(sep + 1);
+  if (!payload || payload === '?') return true;
+  try {
+    const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+    const text = new TextDecoder().decode(bytes);
+    if (text && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  } catch {}
   return true;
 });
 
@@ -1167,6 +1201,26 @@ function agentBlocked(s) {
   const name = agentName(s);
   agentAnnounce(s, `${name} wartet auf Freigabe ⏸`, `${name} wartet auf Freigabe`, 'term-blocked-');
 }
+
+// OSC 9: Desktop-Notifications aus dem Terminal selbst (z. B. Claude Code mit
+// preferredNotifChannel iterm2). Erreicht uns nur, wenn tmux die Sequenz
+// durchlaesst (allow-passthrough, siehe deploy/lib-tmux-conf.sh) — dann aber
+// sofort statt erst beim naechsten Sidebar-Poll. Die Unterform '9;4;…'
+// (Progress-Anzeige) ist keine Meldung und wird verworfen.
+term.parser.registerOscHandler(9, (data) => {
+  const text = String(data || '').trim();
+  if (!text || /^4(;|$)/.test(text)) return true;
+  if (!document.hidden) {
+    setStatus(text, false, 6000);
+    return true;
+  }
+  setDoneBadge(true);
+  if (notifyEnabled && 'Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification('webterm', { body: text, tag: 'term-osc9' });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
+  return true;
+});
 
 // ---------------------------------------------------------------- Hilfe-Panel
 const helpOverlay = document.getElementById('help-overlay');

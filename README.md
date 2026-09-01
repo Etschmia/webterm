@@ -14,7 +14,9 @@ Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
 Der interaktive Installer prüft den Port, baut das Projekt (`npm install` + Build),
 richtet optional `claude-auto-retry` (Default **nein**, siehe Hinweise; inkl. täglichem
 Update-Check per Cron — `deploy/claude-auto-retry-update.sh`) sowie die tmux-Konfiguration (Maussteuerung +
-git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`) ein und hilft beim
+git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`; ab tmux 3.3 zusätzlich
+`allow-passthrough`, `extended-keys`, Truecolor und OSC-52-Clipboard —
+`deploy/lib-tmux-conf.sh`, rollt auch `deploy/update` nach) ein und hilft beim
 Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) — dabei
 fragt er den **Zugangsschutz** ab: Basic Auth (bcrypt-Hash wird sofort erzeugt),
 `forward_auth` an einen externen 2FA/SSO-Dienst oder gar keinen Block (Schutz extern).
@@ -26,6 +28,11 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
 - **tmux-Sessions**: alle laufenden Sessions werden in der Sidebar gelistet; Klick hängt das
   Arbeitsfenster live an die Session. Der aktive Session-Eintrag zeigt einen **Copy-Mode-Toggle**
   (tmux `copy-mode` an/aus).
+- **Shift+Enter** fügt in Claude Code & Co. einen Zeilenumbruch ein statt abzusenden
+  (das Frontend schickt `ESC CR` — dieselbe Sequenz, die `claude /terminal-setup`
+  Desktop-Terminals beibringt). Außerdem werden **OSC 9**-Notifications (Statuszeile,
+  bei Hintergrund-Tab Badge + Desktop-Benachrichtigung) und **OSC 52** (Schreiben in
+  die Browser-Zwischenablage, z. B. tmux `set-clipboard`) unterstützt.
 - **Sprechende Session-Labels**: Als Label wird – wenn vorhanden – der tmux `pane_title`
   angezeigt (führende Status-Glyphe wie `⠂`/`✳` entfernt), sonst der Session-Name. Hintergrund:
   Claude Code setzt den Terminal-/Pane-Titel automatisch; gibst du `claude` per `-n <name>` einen

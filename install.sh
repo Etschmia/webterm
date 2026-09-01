@@ -418,8 +418,20 @@ EOF
   TMUX_CHANGED=1
 fi
 
-if [ "$TMUX_CHANGED" -eq 1 ] && [ "$HAVE_TMUX" -eq 1 ] && tmux info >/dev/null 2>&1; then
+# list-sessions statt `tmux info`: info braucht einen attached Client und
+# schlaegt von aussen (z. B. SSH) fehl, obwohl der Server laeuft.
+if [ "$TMUX_CHANGED" -eq 1 ] && [ "$HAVE_TMUX" -eq 1 ] && tmux list-sessions >/dev/null 2>&1; then
   tmux source-file "$TMUX_CONF" >/dev/null 2>&1 && info "Laufende tmux-Server neu geladen." || true
+fi
+
+# 4c) Claude-Code-taugliche Optionen (allow-passthrough, extended-keys, RGB,
+#     Clipboard) — geteilte Logik mit deploy/update Phase 3c, damit auch
+#     Bestandsinstallationen sie beim Stand-Update bekommen.
+. "$DEPLOY_DIR/lib-tmux-conf.sh"
+if tmux_conf_ensure_claude "$TMUX_CONF"; then
+  ok "Claude-Code-Optionen (allow-passthrough, extended-keys, RGB, clipboard) zu ~/.tmux.conf hinzugefuegt."
+elif [ "$HAVE_TMUX" -eq 1 ]; then
+  ok "Claude-Code-Optionen sind bereits gesetzt (oder tmux < 3.3 — dann uebersprungen)."
 fi
 
 # claude/codex/grok/kimi aus der Standard-Sitzung (selbst eine tmux-Session) heraus

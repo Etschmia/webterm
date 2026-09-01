@@ -36,6 +36,10 @@
 #   install.sh-Stand), und laesst untaetige bash-Panes die ~/.bashrc neu
 #   einlesen, damit Wrapper-Aenderungen auch offene Shells erreichen.
 #
+# tmux-Konfiguration: Phase 3c ergaenzt fehlende Claude-Code-Optionen
+#   (allow-passthrough, extended-keys, RGB, clipboard) in der ~/.tmux.conf —
+#   geteilte Logik mit install.sh (deploy/lib-tmux-conf.sh), idempotent.
+#
 # Aufruf:
 #   deploy/update              git pull + build + ggf. Restart
 #   deploy/update --no-pull    ohne git pull (man hat selbst schon gepullt)
@@ -370,6 +374,16 @@ if command -v tmux >/dev/null 2>&1 && tmux list-panes -a >/dev/null 2>&1; then
   done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}	#{pane_current_command}	#{pane_in_mode}' 2>/dev/null)
   [ "$RELOADED" -gt 0 ] && log "~/.bashrc in $RELOADED bash-Pane(s) neu eingelesen — Session-Wrapper dort aktuell."
   [ -n "$BUSY" ] && log "Pane(s) beschaeftigt, nicht neu eingelesen:$BUSY — dort spaeter '. ~/.bashrc' ausfuehren."
+fi
+
+# ---- Phase 3c: tmux-Konfiguration (Claude-Code-Optionen) --------------------
+# Gleiche geteilte Logik wie install.sh Schritt 4c — so bekommen auch
+# Bestandsinstallationen allow-passthrough, extended-keys, Truecolor und
+# OSC-52-Clipboard beim Stand-Update in die ~/.tmux.conf (idempotent,
+# nur tmux >= 3.3); laufende tmux-Server werden gleich neu geladen.
+. "$SCRIPT_DIR/deploy/lib-tmux-conf.sh"
+if tmux_conf_ensure_claude; then
+  log "tmux-Optionen (allow-passthrough, extended-keys, RGB, clipboard) zu ~/.tmux.conf hinzugefuegt."
 fi
 
 # ---- Phase 4: handeln ------------------------------------------------------
