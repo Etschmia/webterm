@@ -187,12 +187,31 @@ zeigen das Modell je nach Breite/Zustand gar nicht), sondern aus dem Sitzungszus
 Tools: `~/.claude/sessions/<pid>.json` → `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl`
 (dort je Assistant-Record `message.model` + `effort`), codex aus dem letzten `turn_context`
 des Rollouts, grok aus `summary.json`, kimi aus dem Wire-Log (+ `[thinking].effort` der
-`config.toml`).
+`config.toml`), muse aus `~/.local/share/muse/runtime/muse/sessions/<id>.json`
+(`process_generation_hint: "pid=…"`) → `…/muse/sessions/<Y>/<M>/<D>/<id>/session.jsonl`.
 
-Wichtig für Änderungen daran: **nur Claude führt eine PID-Registry** — die anderen drei
-werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
+Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — die anderen
+drei werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
 Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt dann bewusst
 nichts an. Diesen Riegel nicht wegoptimieren.
+
+Zwei muse-Eigenheiten, die man leicht falsch macht:
+
+- **Modell steht am ANFANG des Logs, nicht am Ende.** muse schreibt es nur beim Start
+  (`run.model.configured`) bzw. bei `/model` — `tailLines()` allein findet in einer
+  gewachsenen `session.jsonl` gar nichts, deshalb zusätzlich `headLines()`. Records sind
+  teils in „retained frames" gebündelt und stecken dort als **String** in
+  `children[].record_json`.
+- **Den Effort schreibt muse nirgends weg** (weder Log noch `~/.config/muse/settings.json`;
+  `/effort` ändert ihn nur im Prozess). Er kommt als einzige Ausnahme von der Pane-Regel aus
+  der muse-Statuszeile `"<modell> · <effort> · <pfad>"` — und wird nur übernommen, wenn die
+  dort genannte Modell-ID exakt der aus dem Log entspricht. Damit liefert eine
+  abgeschnittene, gescrollte oder fremde Zeile nichts statt etwas Falschem.
+
+Erkannt wird muse über den Prozessnamen mit **Präfix** `muse-bin-`: der Launcher
+`~/.local/bin/muse` ist ein Shell-Skript, das das versionierte Binary exec't
+(`comm` = `muse-bin-1.0.3-R2198.1`, von Linux auf 15 Zeichen gekürzt). Ein
+Gleichheitsvergleich wie bei den anderen Tools greift nie.
 
 ## claude-auto-retry: seit Claude Code 2.1.234 nur noch Ergänzung
 

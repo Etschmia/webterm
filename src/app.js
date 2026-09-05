@@ -793,17 +793,22 @@ function isGenericClaudeTitle(clean) {
   return /^claude code$/i.test(clean);
 }
 
-// Welcher Agent laeuft in der Session ('claude'|'kimi'|null)? Primaer das
-// aktuelle agent-Feld; der Rueckfall aufs alte claude-Flag ueberbrueckt den
-// Version-Skew kurz nach einem Deploy (neues Frontend, altes Backend).
+// Welcher Agent laeuft in der Session ('claude'|'kimi'|'codex'|'grok'|'muse'|
+// null)? Primaer das aktuelle agent-Feld; der Rueckfall aufs alte claude-Flag
+// ueberbrueckt den Version-Skew kurz nach einem Deploy (neues Frontend, altes
+// Backend).
 function agentOf(s) {
   if (s.agent !== undefined) return s.agent;
   return s.claude ? 'claude' : null;
 }
 
 // Anzeigename des Agenten fuer Labels, Tooltips und Benachrichtigungen.
+// Unbekannt (auch: altes Backend ohne agent-Feld) faellt auf "Claude" zurueck.
+const AGENT_NAMES = {
+  claude: 'Claude', kimi: 'Kimi', codex: 'Codex', grok: 'Grok', muse: 'Muse',
+};
 function agentName(s) {
-  return agentOf(s) === 'kimi' ? 'Kimi' : 'Claude';
+  return AGENT_NAMES[agentOf(s)] || 'Claude';
 }
 
 function sessionLabel(s) {
@@ -817,6 +822,13 @@ function sessionLabel(s) {
     const dir = sessionDir(s);
     if (agentOf(s) === 'claude') return dir ? `${dir} — Claude` : 'Claude';
     return dir || s.name;
+  }
+  // muse setzt als pane_title den Namen des Arbeitsverzeichnisses. Ohne
+  // Zusatz stuende in der Sidebar nur "depot3" — nicht zu unterscheiden von
+  // einer gewoehnlichen Shell in demselben Ordner.
+  if (agentOf(s) === 'muse') {
+    const dir = sessionDir(s);
+    if (dir && clean === dir) return `${dir} — Muse`;
   }
   const cmd = (s.command || '').toLowerCase();
   // Hostname-Default: gegen den vollen und den kurzen (bis zum ersten Punkt)

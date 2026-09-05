@@ -126,7 +126,19 @@ function tmux(args) {
 }
 
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
-const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok'];
+const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse'];
+
+// comm -> Agent-Name. Normalerweise identisch; muse ist die Ausnahme: der
+// Launcher ~/.local/bin/muse ist ein Shell-Skript, das das VERSIONIERTE Binary
+// exec't — comm heisst dann 'muse-bin-1.0.3-R2198.1' (und wird von Linux auf
+// 15 Zeichen gekuerzt: 'muse-bin-1.0.3-'). Ein Gleichheitsvergleich findet die
+// Session deshalb nie; nach jedem muse-Update waere es ausserdem ein anderer
+// Name.
+function agentFromComm(comm) {
+  if (AGENT_COMMANDS.includes(comm)) return comm;
+  if (comm.startsWith('muse-bin-')) return 'muse';
+  return null;
+}
 
 // tmux-Sessions, in deren Pane-Prozess-Subtree gerade ein Agent laeuft.
 // pane_current_command taugt dafuer nicht: hinter dem claude-auto-retry-Wrapper
@@ -149,13 +161,13 @@ async function agentSessions() {
     });
   });
   const parent = new Map();
-  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'
+  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'|'muse'
   for (const line of ps.split('\n')) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
     parent.set(m[1], m[2]);
-    const comm = m[3].trim();
-    if (AGENT_COMMANDS.includes(comm)) agentPids.set(m[1], comm);
+    const agent = agentFromComm(m[3].trim());
+    if (agent) agentPids.set(m[1], agent);
   }
   const found = new Map();
   for (const [pid, agent] of agentPids) {
@@ -192,11 +204,18 @@ async function agentSessions() {
 //   kimi    ~/.kimi-code/sessions/wd_<dir>_<hash>/session_*/agents/main/
 //           wire.jsonl -> `model`; einen Effort kennt die Sitzung nicht, der
 //           steht global in ~/.kimi-code/config.toml ([thinking].effort)
+//   muse    ~/.local/share/muse/runtime/muse/sessions/<sessionId>.json
+//           -> `process_generation_hint: "pid=<pid>"` (PID-Registry!), dann
+//           ~/.local/share/muse/sessions/<Y>/<M>/<D>/<sessionId>/session.jsonl
+//           -> Modell aus dem juengsten `runtime.model_reconfigure.completed`
+//           bzw. `run.model.configured`. Den EFFORT schreibt muse nirgends
+//           mit; er kommt als einzige Ausnahme aus der Pane-Statuszeile
+//           (s. museEffortFromPane).
 //
-// Nur claude fuehrt eine PID-Registry; die anderen drei sind ausschliesslich
-// ueber das Arbeitsverzeichnis des Prozesses zuzuordnen — daher der
-// Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche Tools im selben
-// Verzeichnis => lieber nichts anzeigen als das Falsche).
+// claude und muse fuehren eine PID-Registry; die anderen drei sind
+// ausschliesslich ueber das Arbeitsverzeichnis des Prozesses zuzuordnen —
+// daher der Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche Tools im
+// selben Verzeichnis => lieber nichts anzeigen als das Falsche).
 
 function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -246,6 +265,29 @@ function headLine(file, bytes = 64 * 1024) {
   }
 }
 
+// Die ersten <bytes> einer Datei als Zeilen, NEUESTE ZUERST. Gegenstueck zu
+// tailLines fuer Logs, die den gesuchten Wert am ANFANG fuehren (muse schreibt
+// das Modell nur beim Start bzw. bei /model, nicht je Turn — im Schwanz einer
+// gewachsenen Datei steht es also nicht mehr). Die letzte — womoeglich
+// angeschnittene — Zeile faellt weg.
+function headLines(file, bytes = 256 * 1024) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
+    const lines = buf.toString('utf8').split('\n');
+    if (len < size) lines.pop();
+    return lines.reverse();
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch { /* egal */ } }
+  }
+}
+
 // Ergebnis-Cache. Die Sidebar pollt alle 4 s, die Quelldateien aendern sich nur
 // bei echter Agent-Aktivitaet — ohne Cache wuerde jeder Poll dieselben Dateien
 // neu parsen. Schluessel = Quelle, Gueltigkeit = deren mtime+size.
@@ -273,7 +315,16 @@ function modelLabel(id) {
   if (/^gpt-/i.test(raw)) return `GPT-${raw.slice(4)}`;
   if ((m = /^grok-(.+)$/.exec(raw))) return `Grok ${m[1]}`;
   if (/^k\d/i.test(raw)) return raw.toUpperCase();          // kimi: k3, k3-256k
+  // muse-spark-1.3-contributor -> "Spark 1.3" (das Suffix ist die Zugangsstufe)
+  if ((m = /^muse-([a-z]+)-(\d+(?:\.\d+)*)/.exec(raw))) {
+    return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}`;
+  }
   return raw;
+}
+
+// Regex-Metazeichen in einem Literal entschaerfen (Modell-IDs enthalten '.').
+function escapeRe(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Arbeitsverzeichnis eines Prozesses (Linux). Auf Systemen ohne /proc bleibt
@@ -425,11 +476,134 @@ function kimiModelInfo(cwd) {
   return model ? { model, effort: kimiEffort() } : null;
 }
 
+// --- muse (Meta "Muse Code") ------------------------------------------------
+// Besonderheit gegenueber den anderen Tools: der Sitzungslog liegt nicht flach
+// im Tool-Verzeichnis, sondern unter <sessions>/<Y>/<M>/<D>/<sessionId>/ — die
+// Zuordnung PID -> sessionId liefert aber eine echte Registry, das Raten ueber
+// das Arbeitsverzeichnis entfaellt also (wie bei claude).
+
+// Sitzungsordner zu einer muse-Session-ID. Datumsebenen sind lexikografisch
+// sortierbar; gesucht wird von hinten (neueste zuerst) und nur ein Stat pro
+// Tagesordner. Der Pfad einer Session aendert sich nie -> Treffer wird dauerhaft
+// gemerkt; die Suche laeuft hoechstens ueber MUSE_DIR_PROBE_LIMIT Tage, damit ein
+// verwaister Registry-Eintrag nicht bei jedem Poll den ganzen Baum abklappert.
+const MUSE_DIR_PROBE_LIMIT = 120;
+const museDirCache = new Map(); // sessionId -> Verzeichnis
+function museSessionDir(sessionId) {
+  const hit = museDirCache.get(sessionId);
+  if (hit) return hit;
+  const root = path.join(HOME, '.local', 'share', 'muse', 'sessions');
+  // Nur die numerischen Datumsebenen: neben <Y>/<M>/<D> liegen im selben Baum
+  // interne Ordner wie '.msp-view-v1', die dieselbe Session-ID enthalten.
+  const desc = (dir) => {
+    try { return fs.readdirSync(dir).filter((e) => /^\d+$/.test(e)).sort().reverse(); }
+    catch { return []; }
+  };
+  let probes = 0;
+  for (const y of desc(root)) {
+    for (const mo of desc(path.join(root, y))) {
+      for (const d of desc(path.join(root, y, mo))) {
+        if (++probes > MUSE_DIR_PROBE_LIMIT) return '';
+        const dir = path.join(root, y, mo, d, sessionId);
+        if (fs.existsSync(dir)) { museDirCache.set(sessionId, dir); return dir; }
+      }
+    }
+  }
+  return '';
+}
+
+// Modell aus dem Sitzungslog. Zwei Satzformen: entweder ein Record je Zeile,
+// oder ein "retained frame", der mehrere Records buendelt — deren JSON steckt
+// dann als STRING in children[].record_json. Beruecksichtigt werden nur die
+// Payload-Typen, die wirklich das Sitzungsmodell nennen (ein Subagent-Record
+// wuerde sonst das Modell der Hauptsitzung ueberschreiben).
+const MUSE_MODEL_PAYLOADS = new Set([
+  'runtime.model_reconfigure.completed',
+  'runtime.model_selection.initialized',
+  'run.model.configured',
+  'runtime.session.metadata',
+]);
+// Reihenfolge: erst der Schwanz (ein spaeteres /model gewinnt), dann der Kopf
+// (dort steht das Startmodell — und nur dort, solange nie gewechselt wurde).
+function museModelFromLog(file) {
+  return museModelFromLines(tailLines(file)) || museModelFromLines(headLines(file));
+}
+
+function museModelFromLines(lines) {
+  for (const line of lines) {
+    if (!line.includes('model_id')) continue;
+    let outer;
+    try { outer = JSON.parse(line); } catch { continue; }
+    const recs = [];
+    if (Array.isArray(outer.children)) {
+      for (const c of outer.children) {
+        try { recs.push(JSON.parse(c.record_json)); } catch { /* Teil-Record */ }
+      }
+    } else {
+      recs.push(outer);
+    }
+    recs.sort((a, b) => (Number(b.sequence) || 0) - (Number(a.sequence) || 0));
+    for (const r of recs) {
+      if (!MUSE_MODEL_PAYLOADS.has(r.payload_type)) continue;
+      const rec = (r.payload && r.payload.record) || null;
+      if (!rec) continue;
+      // Beim Reconfigure steht das neue Modell unter `effective`; direkt nach
+      // dem Start ist `model_id` noch leer ("") — dann weitersuchen.
+      const id = (rec.effective && rec.effective.model_id) || rec.model_id;
+      if (id) return String(id);
+    }
+  }
+  return '';
+}
+
+// muse schreibt den Effort NICHT in den Sitzungszustand (weder Log noch
+// settings.json; /effort aendert ihn nur im Prozess). Einzige verlaessliche
+// Quelle ist deshalb die Statuszeile des Panes, die muse dauerhaft anzeigt:
+//
+//     muse-spark-1.3-contributor · high · ~/depot3
+//
+// Uebernommen wird sie nur, wenn die dort stehende Modell-ID exakt der aus dem
+// Log entspricht. Damit ist die Ausnahme von der Regel "Quelle ist nie das
+// Pane" selbstpruefend: eine abgeschnittene (schmales Pane), gescrollte oder
+// zu einer anderen Session gehoerende Zeile liefert keinen Treffer, und dann
+// bleibt der Effort-Chip lieber leer.
+function museEffortFromPane(model, tail) {
+  if (!model || !tail) return '';
+  const re = new RegExp(`^\\s*${escapeRe(model)}\\s+\u00b7\\s+([a-z]+)\\s+\u00b7`, 'm');
+  const m = re.exec(tail);
+  return m ? m[1] : '';
+}
+
+function museModelInfo(pid, paneTail) {
+  // PID-Registry: ein JSON je lebender Session, darin process_generation_hint.
+  const regDir = path.join(HOME, '.local', 'share', 'muse', 'runtime', 'muse', 'sessions');
+  const sessionId = cachedBySig(`muse-pid:${pid}`, statSig(regDir), () => {
+    let files;
+    try { files = fs.readdirSync(regDir); } catch { return ''; }
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      const d = readJsonFile(path.join(regDir, f));
+      if (d && d.session_id && d.process_generation_hint === `pid=${pid}`) return d.session_id;
+    }
+    return '';
+  });
+  if (!sessionId) return null;
+  const dir = museSessionDir(sessionId);
+  if (!dir) return null;
+  const file = path.join(dir, 'session.jsonl');
+  const model = cachedBySig(`muse:${file}`, statSig(file), () => museModelFromLog(file));
+  // Der Effort haengt am Pane, nicht an einer Datei — bewusst ausserhalb des
+  // Datei-Caches, sonst bliebe eine /effort-Aenderung bis zum naechsten
+  // Schreibvorgang im Log unsichtbar.
+  return model ? { model, effort: museEffortFromPane(model, paneTail) } : null;
+}
+
 // Modell + Effort einer Agent-Session. Fehlerhafte/fehlende Quellen liefern
 // null — die Sidebar zeigt dann einfach keine Chips (nie ein Fragezeichen).
-function agentModelInfo(agent, pid, cwd) {
+function agentModelInfo(agent, pid, cwd, paneTail) {
   try {
     if (agent === 'claude') return claudeModelInfo(pid);
+    if (agent === 'muse') return museModelInfo(pid, paneTail);
     if (!cwd) return null;
     if (agent === 'codex') return codexModelInfo(cwd);
     if (agent === 'grok') return grokModelInfo(cwd);
@@ -446,13 +620,31 @@ function agentModelInfo(agent, pid, cwd) {
 // sichtbare untere Bildschirmrand des Panes gegen BEKANNTE Dialog-Muster
 // geprueft. Konservativ wie bei Herdr: 'blocked' nur bei erkanntem Prompt,
 // sonst 'idle'.
+//
+// Liefert { status, tail }: den eingelesenen Pane-Ausschnitt braucht der
+// Aufrufer bei muse noch einmal (Effort steht nur dort, s. museEffortFromPane)
+// — ein zweites capture-pane pro Poll waere reine Verschwendung.
 async function agentPaneStatus(name, title, agent) {
   // Braille-Spinner am Titelanfang = Claude arbeitet (gleiche Erkennung wie
   // die "Claude ist fertig"-Logik im Frontend). Bei kimi steht nichts im Titel.
-  if (agent === 'claude' && /^[⠀-⣿]/.test((title || '').trim())) return 'working';
+  if (agent === 'claude' && /^[⠀-⣿]/.test((title || '').trim())) {
+    return { status: 'working', tail: '' };
+  }
   const r = await tmux(['capture-pane', '-p', '-t', name]);
-  if (!r.ok) return 'idle';
+  if (!r.ok) return { status: 'idle', tail: '' };
   const tail = r.out.split('\n').slice(-25).join('\n');
+  return { status: agentStatusFromTail(tail, agent), tail };
+}
+
+function agentStatusFromTail(tail, agent) {
+  if (agent === 'muse') {
+    // Freigabe-Dialog: die Auswahl heisst immer "Allow once" / "Allow for this
+    // session" / "Reject" / "Always allow in this workspace".
+    if (/\bAllow (once|for this session)\b/.test(tail)) return 'blocked';
+    // Arbeitet: Fusszeile "Esc to interrupt" (neben "Working"/"Calling tools").
+    if (/\bEsc to interrupt\b/i.test(tail)) return 'working';
+    return 'idle';
+  }
   if (agent === 'kimi') {
     // Mondphasen-Spinner in der Statuszeile ("🌖 · Tip: …") = kimi arbeitet.
     if (/^\s*[\u{1F311}-\u{1F318}]/mu.test(tail)) return 'working';
@@ -503,7 +695,7 @@ async function listSessions() {
         command: command || '',
         path: path || '',
         // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi'|'codex'|
-        // 'grok')? Steuert das Sidebar-Label ("<Verzeichnis> — Claude"), das
+        // 'grok'|'muse')? Steuert das Sidebar-Label ("<Verzeichnis> — Claude"), das
         // nach dem Beenden wieder verschwindet.
         agent: (agents.get(name) || {}).agent || null,
         // PID des Agenten — nur intern (Modell-/Effort-Lookup), wird unten
@@ -532,7 +724,10 @@ async function listSessions() {
       };
     });
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
-    s.agentStatus = await agentPaneStatus(s.name, s.title, s.agent);
+    const st = await agentPaneStatus(s.name, s.title, s.agent);
+    s.agentStatus = st.status;
+    // Nur intern (muse-Effort), wird unten wieder entfernt.
+    s.paneTail = st.tail;
   }));
 
   // Modell/Effort nachtragen. Zuordnung ueber das Arbeitsverzeichnis des
@@ -541,16 +736,17 @@ async function listSessions() {
   for (const s of agentRows) s.agentCwd = procCwd(s.agentPid) || s.path || '';
   // Mehrdeutigkeits-Riegel: laufen ZWEI Prozesse desselben Tools im selben
   // Verzeichnis, laesst sich die Sitzungsdatei nicht mehr eindeutig zuordnen —
-  // dann lieber nichts anzeigen als das Falsche. claude ist ausgenommen, dort
-  // fuehrt die PID zur richtigen Datei.
+  // dann lieber nichts anzeigen als das Falsche. claude und muse sind
+  // ausgenommen, dort fuehrt die PID ueber eine Registry zur richtigen Datei.
+  const byPid = new Set(['claude', 'muse']);
   const perKey = new Map();
   for (const s of agentRows) {
     const key = `${s.agent}\u0000${s.agentCwd}`;
     perKey.set(key, (perKey.get(key) || 0) + 1);
   }
   for (const s of agentRows) {
-    const ambiguous = s.agent !== 'claude' && perKey.get(`${s.agent}\u0000${s.agentCwd}`) > 1;
-    const info = ambiguous ? null : agentModelInfo(s.agent, s.agentPid, s.agentCwd);
+    const ambiguous = !byPid.has(s.agent) && perKey.get(`${s.agent}\u0000${s.agentCwd}`) > 1;
+    const info = ambiguous ? null : agentModelInfo(s.agent, s.agentPid, s.agentCwd, s.paneTail);
     if (info) {
       s.model = info.model;
       s.modelLabel = modelLabel(info.model);
@@ -558,7 +754,7 @@ async function listSessions() {
       s.effortScope = s.effort ? (s.agent === 'kimi' ? 'global' : 'session') : '';
     }
   }
-  for (const s of sessions) { delete s.agentPid; delete s.agentCwd; }
+  for (const s of sessions) { delete s.agentPid; delete s.agentCwd; delete s.paneTail; }
   return sessions;
 }
 

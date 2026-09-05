@@ -7,12 +7,13 @@
 # darin laufenden Claude-/Kimi-Sitzung (auch fremder!). Genau das ist am 24.06.2026 passiert.
 #
 # Dieser Wrapper:
-#   1. snapshottet alle tmux-Panes, die gerade `claude` oder `kimi` laufen
+#   1. snapshottet alle tmux-Panes, die gerade `claude`, `kimi` oder `muse` laufen
 #      (Session-Name + cwd + Tool),
 #   2. führt den Restart aus einer ENTKOPPELTEN transienten systemd-Unit aus, die den
 #      cgroup-Abriss überlebt (KillMode=none, eigenes cgroup unter system.slice),
 #   3. setzt nach dem Restart jede Sitzung wieder auf — claude per
-#      `claude --resume <neueste-session-id>`, kimi per `kimi --continue`
+#      `claude --resume <neueste-session-id>`, kimi per `kimi --continue`,
+#      muse per `muse resume --last`
 #      (nimmt selbst die neueste Session im cwd) — die Konversationen kommen
 #      also mit voller Historie zurück.
 #
@@ -106,10 +107,12 @@ newest_session_id(){
   [ -n "$f" ] && printf '%s' "${f%.jsonl}"
 }
 
-# name<TAB>cwd<TAB>tool je tmux-Pane, in dessen Prozess-Subtree ein `claude`
-# oder `kimi` läuft. (Robust gegen den claude-auto-retry-Wrapper: dort meldet
-# pane_current_command 'bash'/'node'; verlässlich ist nur der Prozessname comm
-# irgendwo im Baum.)
+# name<TAB>cwd<TAB>tool je tmux-Pane, in dessen Prozess-Subtree ein `claude`,
+# `kimi` oder `muse` läuft. (Robust gegen den claude-auto-retry-Wrapper: dort
+# meldet pane_current_command 'bash'/'node'; verlässlich ist nur der Prozessname
+# comm irgendwo im Baum. muse exec't aus ~/.local/bin/muse heraus sein
+# versioniertes Binary — comm heißt dort 'muse-bin-<version>', deshalb ein
+# Präfix-Vergleich statt Gleichheit.)
 snapshot(){
   local panes
   panes=$(tmux list-panes -a -F '#{pane_pid}|#{session_name}|#{pane_current_path}' 2>/dev/null) || return 0
@@ -122,10 +125,13 @@ snapshot(){
     { ppid[$1]=$2; comm[$1]=$3 }
     END{
       for(pid in comm){
-        if(comm[pid]!="claude" && comm[pid]!="kimi") continue
+        tool=""
+        if(comm[pid]=="claude" || comm[pid]=="kimi") tool=comm[pid]
+        else if(index(comm[pid], "muse-bin-")==1 || comm[pid]=="muse") tool="muse"
+        if(tool=="") continue
         x=pid
         while(x!="" && x!=0 && (x in ppid)){
-          if(x in paneinfo){ found[x]=comm[pid]; break }
+          if(x in paneinfo){ found[x]=tool; break }
           x=ppid[x]
         }
       }
@@ -152,6 +158,10 @@ restore(){
       # kimi findet die neueste Session im cwd selbst — keine ID nötig.
       log "Restore '$name' ($cwd) -> kimi --continue"
       tmux send-keys -t "$name" "kimi --continue" Enter
+    elif [ "$tool" = "muse" ]; then
+      # muse ebenso: --last nimmt die neueste Session dieses Workspace.
+      log "Restore '$name' ($cwd) -> muse resume --last"
+      tmux send-keys -t "$name" "muse resume --last" Enter
     elif sid=$(newest_session_id "$cwd"); then
       log "Restore '$name' ($cwd) -> claude --resume $sid"
       tmux send-keys -t "$name" "claude --resume $sid" Enter

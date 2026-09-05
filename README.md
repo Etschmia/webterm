@@ -41,17 +41,21 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   (Titel leer, = laufendes Kommando oder `user@host`-Prompt) bleiben beim Session-Namen. Intern
   (Attach, Copy-Mode via `-t`) wird immer der echte Session-Name verwendet; der Tooltip zeigt
   beides.
-- **Modell & Effort je Agent-Session**: Läuft in einer Session `claude`, `codex`, `grok` oder
-  `kimi`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell** und dem
-  **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das nicht aus dem Pane — die TUIs zeigen
-  es dort nicht verlässlich —, sondern aus dem Sitzungszustand der Tools unter `$HOME`:
+- **Modell & Effort je Agent-Session**: Läuft in einer Session `claude`, `codex`, `grok`,
+  `kimi` oder `muse`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell**
+  und dem **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das nicht aus dem Pane — die TUIs
+  zeigen es dort nicht verlässlich —, sondern aus dem Sitzungszustand der Tools unter `$HOME`:
   `~/.claude/sessions/<pid>.json` → Transcript (Modell/Effort stehen dort **pro Turn**, ein
   `/model`-Wechsel ist also sofort sichtbar), bei codex der letzte `turn_context` des Rollouts,
   bei grok `summary.json`, bei kimi das Wire-Log (Effort dort nur global aus der `config.toml`;
-  der Tooltip sagt das dazu). Nur Claude führt eine PID-Registry — die übrigen drei werden über
+  der Tooltip sagt das dazu), bei muse die PID-Registry unter
+  `~/.local/share/muse/runtime/` → `session.jsonl` (dort steht das Modell am **Anfang**, nicht
+  am Ende). Claude und muse führen eine PID-Registry — die übrigen drei werden über
   das Arbeitsverzeichnis des Prozesses zugeordnet; laufen zwei gleiche Tools im **selben**
-  Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Ergebnisse sind auf
-  mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
+  Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Einzige Ausnahme von der
+  Pane-Regel: muse protokolliert seinen Effort nirgends, er wird aus dessen Statuszeile gelesen
+  — und nur übernommen, wenn die dort genannte Modell-ID zur protokollierten passt. Ergebnisse
+  sind auf mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
 - **Zugangsschutz** (Zahnrad unten in der Sidebar): zeigt, womit die eigenen Anfragen gerade
@@ -125,10 +129,10 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   Stamp mit `/api/version` und warnt bei Versatz sichtbar („Backend veraltet — Deploy
   unvollständig?"). So fällt ein *neues Frontend gegen altes Backend* (Restart vergessen)
   sofort auf, statt dass Feature-Aufrufe stumm ins Leere laufen.
-- **claude/codex/grok/kimi in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
+- **claude/codex/grok/kimi/muse in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
-  legt beim Aufruf von `claude`/`codex`/`grok`/`kimi` aus der Standard-Sitzung automatisch eine
+  legt beim Aufruf von `claude`/`codex`/`grok`/`kimi`/`muse` aus der Standard-Sitzung automatisch eine
   neue tmux-Session an (`<tool>-<verzeichnis>`) und wechselt dorthin; eine vorhandene
   `claude`-Funktion (claude-auto-retry) wird gesichert und weiter durchgereicht.
 - **Ohne sudo (User ohne Root-Rechte)**: die oben genannte **systemd-User-Unit**
@@ -160,7 +164,7 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   24.06.2026 passiert. `deploy/term-restart` snapshottet die aktiven Agent-Panes, startet
   aus einer **entkoppelten** transienten systemd-Unit neu (überlebt den cgroup-Abriss) und
   setzt jede Sitzung danach automatisch wieder auf — claude per `claude --resume`,
-  kimi per `kimi --continue`.
+  kimi per `kimi --continue`, muse per `muse resume --last`.
 - **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
   `.caddy`-Datei mit dem gewählten Zugangsschutz). Manuell mit Basic Auth: Hash via
   `caddy hash-password` erzeugen, in einer `deploy/<domain>.caddy` als

@@ -1,4 +1,4 @@
-# term-web — claude/codex/grok/kimi aus der Standard-Sitzung in eigene tmux-Sessions.
+# term-web — claude/codex/grok/kimi/muse aus der Standard-Sitzung in eigene tmux-Sessions.
 #
 # Wird aus ~/.bashrc gesourct (install.sh richtet die Zeile ein). Hintergrund:
 # Die Standard-Sitzung des Webterminals ist selbst eine tmux-Session
@@ -16,7 +16,7 @@
 # die Reihenfolge in der ~/.bashrc ist damit egal.
 _term_install_wrappers() {
   local t
-  for t in claude codex grok kimi; do
+  for t in claude codex grok kimi muse; do
     if declare -f "$t" >/dev/null 2>&1 \
        && [[ "$(declare -f "$t")" != *_term_tool_session* ]]; then
       eval "$(declare -f "$t" | sed "1s/^$t/_term_orig_$t/")"
@@ -69,12 +69,12 @@ _term_tool_session() {
 
 _term_install_wrappers
 
-# Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok()/kimi() (z. B. der
+# Ein spaeter in der ~/.bashrc definiertes claude()/codex()/grok()/kimi()/muse() (z. B. der
 # claude-auto-retry-Block, der hinter dieser Source-Zeile stehen kann) wuerde
 # die Wrapper wieder ueberschreiben — genau so lief claude einmal doch in der
 # Standard-Sitzung. Zweites Problem: Shells in tmux-Sessions laufen wochenlang
 # und behalten die beim Start gesourcte Version dieser Datei — neu aufgenommene
-# Tools (z. B. kimi) kaemen dort nie an, wenn der Pane beim deploy/update-Lauf
+# Tools (z. B. muse) kaemen dort nie an, wenn der Pane beim deploy/update-Lauf
 # gerade belegt ist. Deshalb laeuft vor JEDEM Prompt ein Hook, der
 # (1) nachtraeglich definierte Fremd-Funktionen einsammelt (als _term_orig_<tool>
 #     gesichert und vom Wrapper durchgereicht) und

@@ -434,7 +434,7 @@ elif [ "$HAVE_TMUX" -eq 1 ]; then
   ok "Claude-Code-Optionen sind bereits gesetzt (oder tmux < 3.3 — dann uebersprungen)."
 fi
 
-# claude/codex/grok/kimi aus der Standard-Sitzung (selbst eine tmux-Session) heraus
+# claude/codex/grok/kimi/muse aus der Standard-Sitzung (selbst eine tmux-Session) heraus
 # in eigene tmux-Sessions umlenken — sonst laufen sie IN der Standard-Sitzung
 # und tauchen nicht als eigene Session in der Sidebar auf.
 # Die Position in der ~/.bashrc ist egal: der Wrapper sammelt spaeter
@@ -445,7 +445,7 @@ BASHRC="$HOME/.bashrc"
 if grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
   ok "Standard-Session-Wrapper sind in ~/.bashrc bereits eingebunden."
 else
-  printf '\n# term-web: claude/codex/grok/kimi aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
+  printf '\n# term-web: claude/codex/grok/kimi/muse aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
     "$WRAP_SRC" "$WRAP_SRC" >> "$BASHRC"
   ok "Standard-Session-Wrapper in ~/.bashrc eingebunden."
   note "    Gilt fuer neue Shells — in offenen Sitzungen: source ~/.bashrc"

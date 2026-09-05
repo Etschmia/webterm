@@ -243,16 +243,19 @@
 
         <section>
           <h3>Modell &amp; Effort einer Agent-Session</h3>
-          <p>Läuft in einer Session <code>claude</code>, <code>codex</code>, <code>grok</code>
-          oder <code>kimi</code>, steht unter dem Namen eine kleine Zeile mit dem <b>aktuell
-          benutzten Modell</b> und dem <b>Effort</b> — etwa <b>Opus 5</b> · <b>medium</b>. Beim
-          Überfahren zeigt der Tooltip die vollständige Modell-ID und ob der Effort für <i>diese
-          Session</i> gilt oder eine globale Einstellung des Tools ist (so bei kimi).</p>
+          <p>Läuft in einer Session <code>claude</code>, <code>codex</code>, <code>grok</code>,
+          <code>kimi</code> oder <code>muse</code>, steht unter dem Namen eine kleine Zeile mit dem
+          <b>aktuell benutzten Modell</b> und dem <b>Effort</b> — etwa <b>Opus 5</b> ·
+          <b>medium</b>. Beim Überfahren zeigt der Tooltip die vollständige Modell-ID und ob der
+          Effort für <i>diese Session</i> gilt oder eine globale Einstellung des Tools ist (so bei
+          kimi).</p>
           <p>Die Angaben kommen aus dem Sitzungszustand des jeweiligen Tools, nicht vom
           Bildschirm — ein Wechsel per <code>/model</code> oder <code>/effort</code> ist deshalb
-          beim nächsten Antwortschritt zu sehen. Steht dort <b>nichts</b>, ließ sich die Session
-          nicht zweifelsfrei zuordnen (etwa wenn zwei gleiche Tools im selben Verzeichnis
-          laufen) — dann bleibt die Zeile lieber leer, statt womöglich das Falsche zu
+          beim nächsten Antwortschritt zu sehen. (Eine Ausnahme: <code>muse</code> schreibt seinen
+          Effort nirgends mit, er wird aus dessen Statuszeile gelesen — und nur übernommen, wenn
+          das dort genannte Modell zum protokollierten passt.) Steht dort <b>nichts</b>, ließ sich
+          die Session nicht zweifelsfrei zuordnen (etwa wenn zwei gleiche Tools im selben
+          Verzeichnis laufen) — dann bleibt die Zeile lieber leer, statt womöglich das Falsche zu
           behaupten.</p>
         </section>
 
@@ -268,7 +271,8 @@
           <h3>Sessions</h3>
           <p>Der Eintrag <b>Standard</b> ist eine persistente tmux-Sitzung — sie überlebt
           Seiten-Reload und Verbindungsabbruch. Startet man dort <code>claude</code>,
-          <code>codex</code>, <code>grok</code> oder <code>kimi</code>, bekommt das Tool automatisch eine
+          <code>codex</code>, <code>grok</code>, <code>kimi</code> oder <code>muse</code>, bekommt das
+          Tool automatisch eine
           <b>eigene tmux-Session</b> und die Ansicht wechselt dorthin — die Standard-Shell
           bleibt frei. Darunter erscheinen alle weiteren
           tmux-Sessions; Claude-/Kimi-Sessions zeigen den aktuellen Aufgabentitel.
