@@ -32,7 +32,7 @@ ENV_FILE="$SCRIPT_DIR/.env"
 DEPLOY_DIR="$SCRIPT_DIR/deploy"
 DEFAULT_PORT="7681"
 
-for _lib in lib-ask.sh lib-caddy-auth.sh lib-caddy-security.sh; do
+for _lib in lib-ask.sh lib-caddy-auth.sh lib-caddy-security.sh lib-ip-allowlist.sh; do
   if [ ! -r "$DEPLOY_DIR/$_lib" ]; then
     printf 'Fehlt: %s — bitte das Repository vollstaendig auschecken.\n' "$DEPLOY_DIR/$_lib" >&2
     exit 1
@@ -49,6 +49,7 @@ done
 # shellcheck source=deploy/lib-caddy-auth.sh
 . "$DEPLOY_DIR/lib-caddy-auth.sh"
 . "$DEPLOY_DIR/lib-caddy-security.sh"
+. "$DEPLOY_DIR/lib-ip-allowlist.sh"
 
 # Servicenamen-Ermittlung und die Reparatur des systemd-User-Bus
 # (term_user_bus_repair) — geteilt mit deploy/update und deploy/term-restart.
@@ -468,18 +469,6 @@ CADDY_BASICAUTH="$(caddy_basicauth_directive)"
 # deploy/setup-auth bzw. das Zahnrad "Zugangsschutz" in der Sidebar.
 AUTH_DEFAULT_SEL="1"
 
-prompt_ip_allowlist() {
-  # Optionaler zusaetzlicher Schutz fuer eine Anwendung mit voller Shell. Die
-  # Eingabe wird bewusst auf die Zeichenmenge von IPv4/IPv6/CIDR-Listen begrenzt.
-  CADDY_ALLOWED_IPS="$(ask_value 'Optionale IP-Allowlist (CIDRs, komma-separiert; leer = keine)' '')"
-  if [ -n "$CADDY_ALLOWED_IPS" ]; then
-    if ! printf '%s' "$CADDY_ALLOWED_IPS" | grep -qE '^[0-9A-Fa-f:.,/[:space:]]+$'; then
-      err "Ungueltige IP-Allowlist — nur IPv4/IPv6/CIDR, Komma und Leerzeichen erlaubt."
-      exit 2
-    fi
-    CADDY_ALLOWED_IPS="$(printf '%s' "$CADDY_ALLOWED_IPS" | tr ',' ' ')"
-  fi
-}
 
 if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
   PUBLIC_ORIGIN=""
@@ -507,11 +496,7 @@ if ask_yes_no "Beim Erstellen einer Caddy-Datei helfen?" "y"; then
 # Echte Zugangsdaten — NICHT ins Repo committen (per .gitignore ausgeschlossen).
 $HOST_NAME {
 $(auth_block '    ')
-$(if [ -n "$CADDY_ALLOWED_IPS" ]; then cat <<EOF_IP
-    @term_denied not remote_ip $CADDY_ALLOWED_IPS
-    respond @term_denied "Forbidden" 403
-EOF_IP
-fi)
+$(ip_allowlist_block '    ')
 
     # Backend bindet nur localhost; Caddy reicht den WebSocket-Upgrade
     # automatisch durch — der oben gewaehlte Zugangsschutz deckt den
@@ -579,14 +564,7 @@ EOF
 # Einzufuegen INNERHALB des bestehenden Site-Blocks:  $HOST_NAME { … }
 # Echte Zugangsdaten — NICHT committen (per .gitignore ausgeschlossen).
 
-$(if [ -n "$CADDY_ALLOWED_IPS" ]; then cat <<EOF_IP
-    @term_denied {
-        path $URL_PATH $URL_PATH/*
-        not remote_ip $CADDY_ALLOWED_IPS
-    }
-    respond @term_denied "Forbidden" 403
-EOF_IP
-fi)
+$(ip_allowlist_block '    ' "$URL_PATH")
 
     # Ohne abschliessenden Slash auf /-Form umleiten (relative Assets!)
     redir $URL_PATH ${URL_PATH}/

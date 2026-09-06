@@ -3,11 +3,12 @@
 # deploy/setup-auth — Zugangsschutz einer BESTEHENDEN Installation aendern.
 #
 # install.sh fragt den Zugangsschutz bei der Erstinstallation ab. Wer schon
-# laeuft (typisch: Basic Auth) und nachtraeglich 2FA davorsetzen will, ruft
-# dieses Skript auf — es ist genau derselbe Dialog, aber ohne Build, ohne
+# laeuft und optional Anmeldung oder IP-/VPN-Netze aendern will, ruft dieses
+# Skript auf. Beides bleibt standardmaessig unveraendert; ohne Build, ohne
 # systemd und ohne .env-Aenderungen:
 #
 #   deploy/setup-auth
+#   deploy/setup-auth --ip-only   # nur optionale Netzregeln
 #
 # Erzeugt wird ein fertiger Caddy-Block (bzw. eine komplette Site-Datei) unter
 # deploy/*.local.caddy (gitignored) plus die genaue Anleitung, was in der
@@ -40,6 +41,7 @@ ENV_FILE="$REPO_DIR/.env"
 . "$DEPLOY_DIR/lib-ask.sh"
 # shellcheck source=deploy/lib-caddy-auth.sh
 . "$DEPLOY_DIR/lib-caddy-auth.sh"
+. "$DEPLOY_DIR/lib-ip-allowlist.sh"
 
 HAVE_CADDY=0
 command -v caddy >/dev/null 2>&1 && HAVE_CADDY=1
@@ -81,6 +83,18 @@ if [ "${1:-}" = "--print" ]; then
   exit 0
 fi
 
+IP_ONLY=0
+case "${1:-}" in
+  '') ;;
+  --ip-only) IP_ONLY=1 ;;
+  --help|-h)
+    printf '%s\n' 'deploy/setup-auth              Anmeldung und optionale Netzregeln aendern' \
+      'deploy/setup-auth --ip-only    Nur IP-/VPN-Netze setzen, entfernen oder unveraendert lassen' \
+      'Erzeugt ein lokales Caddy-Snippet. Kein Build, kein Restart, kein automatisches Einspielen.'
+    exit 0 ;;
+  *) printf 'Unbekannte Option: %s\n' "$1" >&2; exit 2 ;;
+esac
+
 # --------------------------------------------------------------------------
 # Interaktiver Lauf
 # --------------------------------------------------------------------------
@@ -111,9 +125,13 @@ if ask_yes_no "Laeuft das Terminal unter einem Unterpfad (z. B. /term)?" "n"; th
   URL_PATH="/$(printf '%s' "$URL_PATH" | sed 's#^/*##; s#/*$##')"
 fi
 
+[[ "$HOST_NAME" =~ ^[A-Za-z0-9.-]+$ ]] || { err "Ungueltiger Hostname."; exit 2; }
+[[ "$URL_PATH" =~ ^(/[A-Za-z0-9._~-]+)*$ ]] || { err "Ungueltiger Unterpfad."; exit 2; }
+
 # Bestehende Caddy-Konfiguration suchen und den aktuellen Stand zeigen —
 # haeufig nur mit sudo lesbar, deshalb nur ein Hinweis, kein Abbruch.
 FOUND=""
+AUTH_DEFAULT_SEL=1
 for f in /etc/caddy/Caddyfile /etc/caddy/sites/*.caddy /etc/caddy/conf.d/*.caddy /etc/caddy/*.caddy; do
   [ -r "$f" ] || continue
   if grep -qE "(^|[[:space:]])${HOST_NAME//./\\.}([[:space:]]|\{|,|:)" "$f" 2>/dev/null; then
@@ -125,6 +143,7 @@ if [ -n "$FOUND" ]; then
   if grep -qE '^[[:space:]]*basic_?auth' "$FOUND" 2>/dev/null; then
     info "Aktueller Zugangsschutz dort: HTTP Basic Auth"
   elif grep -qE '^[[:space:]]*forward_auth' "$FOUND" 2>/dev/null; then
+    AUTH_DEFAULT_SEL=2
     info "Aktueller Zugangsschutz dort: Forward-Auth (2FA/SSO)"
   else
     warn "In dieser Datei ist kein Auth-Block zu sehen."
@@ -135,7 +154,15 @@ else
 fi
 printf '\n'
 
-auth_prompt "2"
+AUTH_MODE=keep
+if [ "$IP_ONLY" -eq 0 ] && ask_yes_no "Anmeldung (Basic Auth / 2FA-SSO / externer Schutz) aendern?" "n"; then
+  auth_prompt "$AUTH_DEFAULT_SEL"
+fi
+prompt_network_change
+if [ "$AUTH_MODE" = keep ] && [ "$NETWORK_ACTION" = keep ]; then
+  ok "Anmeldung und Netzregeln bleiben unveraendert."
+  exit 0
+fi
 
 # --------------------------------------------------------------------------
 # Ausgabe schreiben
@@ -146,7 +173,9 @@ OUT="$DEPLOY_DIR/${HOST_NAME}.auth.local.caddy"
   printf '# Ziel: %s%s   ·   Backend: 127.0.0.1:%s\n' "$HOST_NAME" "${URL_PATH:-}" "$PORT"
   printf '# Enthaelt ggf. echte Zugangsdaten — NICHT committen (gitignored).\n'
   printf '#\n'
-  if [ -n "$URL_PATH" ]; then
+  if [ "$AUTH_MODE" = keep ]; then
+    printf '# Bestehende Anmeldung unveraendert lassen.\n'
+  elif [ -n "$URL_PATH" ]; then
     printf '# Einzufuegen INNERHALB des bestehenden "handle_path %s/* { … }"-Blocks,\n' "$URL_PATH"
     printf '# als erste Direktive. Einen dort vorhandenen basic_auth-/forward_auth-Block\n'
     printf '# ersetzen (nicht zusaetzlich stehen lassen — sonst zwei Anmeldungen).\n\n'
@@ -157,17 +186,34 @@ OUT="$DEPLOY_DIR/${HOST_NAME}.auth.local.caddy"
     printf '# (nicht zusaetzlich stehen lassen — sonst zwei Anmeldungen).\n\n'
     auth_block '    '
   fi
+  printf '\n'
+  case "$NETWORK_ACTION" in
+    keep) printf '# Bestehende IP-/VPN-Netzregeln unveraendert lassen.\n' ;;
+    set)
+      printf '# NETZREGELN: im Site-Block "%s { ... }" einsetzen.\n' "$HOST_NAME"
+      printf '# Zum Terminal gehoerenden @term_denied-Matcher UND sein respond ersetzen, nicht doppeln.\n'
+      printf '# Bei Unterpfaden: ausserhalb von handle_path, damit der Originalpfad passt.\n'
+      ip_allowlist_block '    ' "$URL_PATH"
+      ;;
+    remove)
+      printf '# NETZREGELN ENTFERNEN: im Site-Block den zum Terminal gehoerenden\n'
+      printf '# @term_denied-Matcher UND dessen respond-Zeile entfernen.\n'
+      printf '# Andere Dienste, Anmeldung und externe Firewall-/VPN-Regeln unveraendert lassen.\n'
+      ;;
+  esac
 } > "$OUT"
 chmod 600 "$OUT"
 
 printf '\n'
-ok "Neuer Zugangsschutz: $(auth_mode_label)"
+if [ "$AUTH_MODE" = keep ]; then ok "Anmeldung bleibt unveraendert."
+else ok "Neuer Zugangsschutz: $(auth_mode_label)"; fi
+ok "Netzregeln: $NETWORK_ACTION (Details im Snippet)."
 ok "Block geschrieben: $OUT"
 printf '\n'
 printf '%s\n' "Naechste Schritte:"
 if [ -n "$FOUND" ]; then
   note "    sudo cp '$FOUND' '$FOUND.bak'          # Sicherung"
-  note "    sudo \${EDITOR:-nano} '$FOUND'          # alten Auth-Block durch den neuen ersetzen"
+  note "    sudo \${EDITOR:-nano} '$FOUND'          # nur die im Snippet genannten Bloecke aendern"
 else
   note "    Block in den passenden Site-Block deiner Caddy-Konfiguration einsetzen"
 fi

@@ -210,6 +210,34 @@
       <div class="help-body">
 
         <section>
+          <h3>Zugangsschutz wählen &amp; später nachrüsten</h3>
+          <p><b>Passend zu deiner Umgebung:</b> Basic Auth mit Benutzername und Passwort,
+          optional ein externer <b>2FA-/SSO-Dienst</b> oder Schutz außerhalb von Caddy,
+          etwa durch ein VPN. <b>Zusätzliche 2FA und IP-/VPN-Netzbeschränkungen sind freiwillig</b>
+          und unabhängig voneinander wählbar.</p>
+          <p><b>Bei der Installation</b> fragt <code>./install.sh</code> im Caddy-Schritt nach
+          der Anmeldemethode und einer optionalen Liste erlaubter IPv4-/IPv6-Adressen oder
+          CIDR-Netze, zum Beispiel deinem VPN-Netz. <b>Eine leere Liste bedeutet keine
+          zusätzliche Netzbeschränkung.</b> Die gewählte Anmeldung bleibt davon unberührt.</p>
+          <p><b>Auch bei älteren Installationen nachrüstbar:</b> Für die Anmeldung das
+          <b>Zahnrad „Zugangsschutz“</b> unten in der Sidebar öffnen oder im Projektverzeichnis
+          <code>deploy/setup-auth</code> ausführen. Dort können Anmeldung und Netzregeln
+          getrennt geändert oder unverändert gelassen werden. Nur IP-/VPN-Netze bearbeiten:
+          <code>deploy/setup-auth --ip-only</code>. Die Liste lässt sich setzen, ersetzen
+          oder entfernen; die bestehende Anmeldung bleibt dabei erhalten.</p>
+          <p>Die Helfer erzeugen ein lokales <b>Caddy-Snippet mit Einbauhinweisen</b>.
+          Die zuständige Administration sichert die vorhandene Konfiguration, übernimmt die
+          gewünschten Änderungen, prüft sie mit
+          <code>sudo caddy validate --config /etc/caddy/Caddyfile</code> und lädt Caddy mit
+          <code>sudo systemctl reload caddy</code> neu. <b>Keine Neuinstallation und kein
+          Terminal-Neustart nötig.</b> Ein 2FA-/SSO-Dienst muss separat bereitgestellt werden.</p>
+          <p>Für Netzregeln zählt die Quell-IP, die <b>Caddy tatsächlich sieht</b>:
+          Bei VPN-NAT oder vorgeschalteten Proxys kann das eine andere Adresse sein.
+          Die Sidebar erkennt die Anmeldemethode anhand der Anfrage-Header; externe
+          VPN-/Firewall-Regeln kann sie nicht zuverlässig anzeigen.</p>
+        </section>
+
+        <section>
           <h3>Screenshot in Claude Code einfügen</h3>
           <p>Bild unter Windows kopieren (z.&nbsp;B. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>),
           dann im Terminal <b>Rechtsklick&nbsp;→ Einfügen</b>. <kbd>Strg</kbd>+<kbd>V</kbd> klappt
@@ -359,25 +387,7 @@
           bei BotFather mit <code>/deletebot</code>.</p>
         </section>
 
-        <section>
-          <h3>Zugangsschutz &amp; 2FA</h3>
-          <p>Das <b>Zahnrad</b> unten in der Sidebar zeigt, <b>womit</b> die Anfragen dieses
-          Browsers gerade abgesichert sind — erkannt an den Headern der eigenen Anfrage
-          (<code>Basic Auth</code>, <code>2FA/SSO</code> oder „ungeschützt?", wenn gar kein
-          Auth-Header ankommt). Das Terminal selbst prüft absichtlich <b>keine</b> Anmeldung:
-          dahinter liegt eine volle Shell, der Schutz gehört davor in den Reverse Proxy.</p>
-          <p><b>2FA nachrüsten:</b> Im Panel <b>2FA/SSO (forward_auth)</b> wählen, Auth-Dienst
-          und Portal-URL eintragen, <b>Caddy-Block erzeugen</b> — der Block ersetzt in der
-          Caddy-Konfiguration den bisherigen <code>basic_auth</code>-Block. Caddy fragt dann vor
-          jeder Anfrage einen externen Dienst (Authelia, oauth2-proxy, tinyauth, Pocket ID …)
-          und lässt erst nach dessen OK durch. <b>Welcher</b> zweite Faktor dort geprüft wird –
-          TOTP, Passkey, Unternehmens-IdP – ist allein Sache dieses Dienstes; am Terminal ändert
-          sich dafür nichts. <code>forward_auth</code> ist Caddy-Bordmittel, kein Plugin.</p>
-          <p>Das Panel <b>erzeugt</b> nur — es fasst <code>/etc/caddy</code> nicht an und startet
-          nichts neu. Das ist Absicht: ein Webterminal, das seinen eigenen Türsteher umbauen darf,
-          wäre genau die Lücke, die der Türsteher schließen soll. Geführt inklusive Suche nach der
-          aktiven Caddy-Datei: <code>deploy/setup-auth</code> im Terminal.</p>
-        </section>
+
 
         <section>
           <h3>Spaltenbreite anpassen</h3>

@@ -20,7 +20,10 @@ git-Statuszeile, `deploy/git-status.sh` → `~/.tmux/`; ab tmux 3.3 zusätzlich
 Erzeugen einer Caddy-Konfiguration (dedizierte Subdomain **oder** Unterpfad) — dabei
 fragt er den **Zugangsschutz** ab: Basic Auth (bcrypt-Hash wird sofort erzeugt),
 `forward_auth` an einen externen 2FA/SSO-Dienst oder gar keinen Block (Schutz extern).
-Nachträglich änderbar per `deploy/setup-auth` bzw. dem Zahnrad in der Sidebar. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
+Zusätzlich fragt er nach einer **freiwilligen** IP-/VPN-Allowlist (IPv4/IPv6/CIDR;
+leer bedeutet keine zusätzliche Netzbeschränkung). 2FA und Netzregeln sind unabhängig
+wählbar. Nachträglich änderbar per `deploy/setup-auth`; nur Netzregeln per
+`deploy/setup-auth --ip-only`, die Anmeldung auch über das Zahnrad in der Sidebar. Domain/Unterpfad landen als `PUBLIC_ORIGIN` in `.env`,
 woraus `server.js` die erlaubten WS-Origins ableitet.
 
 ## Funktionen
@@ -224,7 +227,15 @@ Zwei Punkte, die speziell für ein *Terminal* zählen:
 anzupassen. Das Portal gehört am besten auf eine eigene Subdomain **derselben** Domain
 (`auth.example.com`), sonst greift das Session-Cookie nicht.
 
-**Nachrüsten**: `deploy/setup-auth` führt durch denselben Dialog wie `install.sh`, sucht die
+**Nachrüsten ohne Neuinstallation**: `deploy/setup-auth` fragt getrennt nach Änderungen
+an der Anmeldung und an den optionalen Netzregeln. Standard ist jeweils **unverändert**.
+`deploy/setup-auth --ip-only` lässt die Anmeldung unberührt und bietet Netzregeln behalten,
+setzen/ersetzen oder entfernen an. Es zählen die Quelladressen, die Caddy sieht; bei
+VPN-NAT oder vorgeschalteten Proxys müssen die tatsächlich sichtbaren Netze gewählt werden.
+Eine zusätzliche IP-Beschränkung oder 2FA ist keine Pflicht für alle Installationen.
+Die Anleitung steht auch ganz oben unter **? → Hilfe & Tipps**.
+
+Das Skript sucht die
 aktive Caddy-Datei, zeigt den erkannten Ist-Zustand und schreibt den neuen Block als
 gitignorte Datei nach `deploy/<domain>.auth.local.caddy` — plus die Schritte zum Einspielen.
 Die gemeinsamen Schutzheader stammen aus `deploy/lib-caddy-security.sh`.

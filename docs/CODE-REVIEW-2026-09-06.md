@@ -1,6 +1,6 @@
 # Code-Review und Umsetzung – 06.09.2026
 
-Status: **Codekorrekturen umgesetzt und geprüft; zwei Betriebsangaben noch offen.**
+Status: **Codekorrekturen umgesetzt und geprüft; Zugangsschutz optional nachrüstbar, externer Backup-Nachweis offen.**
 Diese Datei ersetzt die [Review vom 22.08.2026](CODE-REVIEW-SICHERHEIT-2026-08-22.md).
 Die alte Review bleibt als historischer Befund erhalten. Hier stehen der überprüfte
 Ist-Zustand, die Umsetzung und verbleibende Voraussetzungen. Installationsspezifische
@@ -17,7 +17,7 @@ Adressen, Zugangsdaten und lokale Sicherungen werden nicht versioniert.
 | R05 | Mittel | Telegram wiederholt fehlgeschlagene Aufträge ohne Verlauf | Behoben, keine automatische Wiederholung mehr |
 | R06 | Mittel | README, CLAUDE und Deploy-Skill beschreiben veraltetes Verhalten | Aktualisiert; AGENTS verweist weiterhin auf CLAUDE |
 | R07 | Mittel | Schutzheader fehlen auf öffentlichen Proxy-401-Antworten | Generator korrigiert und Terminal-Site aktualisiert; live geprüft |
-| R08 | Betrieb | Zusätzliche Zugangsschranke neben Basic Auth fehlt | Offen: erlaubte IP-/VPN-Netze oder Auth-Dienst müssen benannt werden |
+| R08 | Betrieb | Zusätzliche Zugangsschranken je Umgebung wählbar machen | Optional: Installer und Nachrüst-Dialog, Anleitung oben in der Hilfe |
 | R09 | Betrieb | Berechtigungen und Backup-Nachweis unvollständig | Kritische lokale Rechte geprüft/gehärtet; externer Backup-/Restore-Nachweis offen |
 | R10 | Wartbarkeit | Großes Backend, wenig Tests für echte Fehlerpfade | Mehrere Module ausgegliedert und Integrationstests ergänzt; weitere Aufteilung bei fachlichen Änderungen |
 
@@ -141,18 +141,32 @@ Die öffentliche, nicht authentifizierte Anfrage liefert nun 401 mit HSTS, CSP u
 Quellen: [Caddy header](https://caddyserver.com/docs/caddyfile/directives/header) und
 [Caddy handle_errors](https://caddyserver.com/docs/caddyfile/directives/handle_errors).
 
-## R08 – Zusätzliche Zugangskontrolle: Angabe erforderlich
+## R08 – Freiwilliger Zugangsschutz für unterschiedliche Umgebungen
 
-Loopback-Bindung, TLS und Basic Auth sind aktiv. CrowdSec verarbeitet die Terminal-Logs;
-ein aktiver Firewall-Bouncer ist vorhanden. fail2ban überwacht bisher SSH.
-Ein zusätzlicher 2FA-/SSO-Dienst oder eine Caddy-IP-Allowlist ist für das Terminal noch nicht
-aktiv. Eine passende vorhandene Auth-Installation wurde nicht gefunden.
+**Präzisierung des Projektinhabers:** Zusätzliche 2FA oder IP-/VPN-Netzbeschränkungen sind
+keine Voraussetzung für jede Installation. Das Projekt wird von vielen Nutzern in
+unterschiedlichen Umgebungen betrieben. Eine zentrale Vorgabe von IP-Adressen oder ein
+zwangsweise eingerichteter Auth-Dienst wäre deshalb falsch.
 
-**Offen:** Der Betreiber muss erlaubte feste IP-Adressen/VPN-Netze oder den einzubindenden
-Auth-Dienst nennen. Die Angabe wurde angefragt. Ohne sie würde eine neue Sperre legitime
-Zugänge möglicherweise aussperren. Es wurden weder Adressen aus alten Notizen übernommen
-noch ein Auth-Dienst oder Benutzerzugang erfunden. Nach Angabe: Kandidat erstellen,
-vollständig validieren, aktivieren und erlaubte/abgewiesene Zugriffe prüfen.
+Der Installer bietet Basic Auth, Forward-Auth an einen externen Dienst oder anderweitigen
+Schutz an. Der gemeinsame IP-/VPN-Dialog erklärt IPv4, IPv6 und CIDR; eine leere Liste
+bedeutet keine zusätzliche Netzbeschränkung. Die Liste wird syntaktisch validiert.
+`deploy/setup-auth` erlaubt Anmeldung und Netzregeln unabhängig voneinander beizubehalten
+oder zu ändern. `--ip-only` erlaubt das Setzen, Ersetzen oder Entfernen von Netzregeln ohne
+Änderung der Anmeldung. Es werden ausschließlich lokale Snippets erzeugt; Einspielen und
+Prüfen bleiben bei der jeweiligen Administration.
+
+Zusätzliche Tests prüfen gültige und ungültige IP-/CIDR-Listen, unveränderte Defaults,
+IP-only-Nachrüstung ohne Auth-Änderung, das Entfernen und Caddy-Unterpfadfilter.
+
+Die Nachrüst-Anleitung steht ganz oben im „Hilfe & Tipps“-Dialog und in README/CLAUDE.
+Ein vorhandener IP-Filter wird beim bloßen Ändern der Anmeldung nicht stillschweigend
+entfernt. Bei Unterpfaden wird der Netzfilter auf den Terminalpfad begrenzt. Es zählt die
+bei Caddy sichtbare Quell-IP; Proxys werden nicht automatisch als vertrauenswürdig behandelt.
+
+In der geprüften Installation bleiben TLS, Basic Auth, Loopback-Bindung und CrowdSec aktiv.
+Eine zusätzliche Netzsperre oder 2FA wird nur auf konkrete Betreiberentscheidung eingerichtet;
+dieser optionale Ausbau blockiert weder das Projekt noch den Abschluss der Codekorrekturen.
 
 ## R09 – Berechtigungen und Sicherungen
 
@@ -188,7 +202,7 @@ nicht als erledigt ausgegeben.
 
 ## Verifikation
 
-- 20 Node-Tests einschließlich echter isolierter HTTP-/WebSocket- und Caddy-Prozesse.
+- 24 Node-Tests einschließlich echter isolierter HTTP-/WebSocket- und Caddy-Prozesse.
 - JavaScript-Syntaxprüfung sowie einzelne `bash -n`-Aufrufe für alle Shell-Skripte.
 - Vollständiges `npm audit`: 0 bekannte Schwachstellen.
 - Produktionsbuild; keine Produktions-Sourcemap.
@@ -199,5 +213,5 @@ nicht als erledigt ausgegeben.
   unverändert ist. Die Sidebar liefert weiterhin GPT-6-astra / high.
 
 Die Tests wurden lokal ausgeführt. Ein zukünftiger GitHub-Actions-Lauf ist dadurch nicht
-behauptet. R08 und der externe Backup-Nachweis aus R09 bleiben bis zu den erforderlichen
-Betreiberangaben ausdrücklich offen.
+behauptet. Der externe Backup-Nachweis aus R09 bleibt bis zu den erforderlichen Betreiberangaben
+ausdrücklich offen. Zusätzliche Zugangsschranken aus R08 sind eine freiwillige Betriebsentscheidung.

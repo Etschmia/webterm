@@ -113,6 +113,21 @@ nicht lesbar), sondern aus den Headern der laufenden Anfrage: `Authorization: Ba
 Basic Auth, `Remote-User`/`X-Forwarded-User` (von `copy_headers`) → Forward-Auth, sonst
 „ungeschützt?". Diese Header sind reine **Anzeige** — es hängt keine Autorisierung daran.
 
+### Optionale IP-/VPN-Netze und Nachrüstung
+
+`deploy/lib-ip-allowlist.sh` wird von `install.sh` und `deploy/setup-auth` geteilt.
+Der Installer erklärt und fragt IPv4-/IPv6-/CIDR-Netze ausdrücklich ab; leer bedeutet keine
+zusätzliche Netzbeschränkung. **2FA und Netzregeln bleiben freiwillig und unabhängig.**
+Keine festen Betreiberadressen oder zwingende Zusatz-Authentisierung ins Projekt aufnehmen.
+
+`deploy/setup-auth` lässt Anmeldung und Netzregeln standardmäßig unverändert und erzeugt
+nur die ausdrücklich gewählten Änderungen. `--ip-only` bearbeitet ausschließlich die
+Netzregeln (behalten, setzen/ersetzen, entfernen). Die Ausgabe erklärt, welche vorhandenen
+Caddy-Matcher zu ersetzen sind; bei Unterpfaden bleibt der Netzfilter im Site-Block und
+wird auf den Terminalpfad beschränkt. Caddy sieht ggf. NAT-/Proxy-Adressen statt der
+ursprünglichen Client-IP; keine automatische Vertrauensstellung für Forwarded-Header.
+Die Anleitung für Bestandsinstallationen steht oben in „Hilfe & Tipps“.
+
 ## Bugtracker: GitHub Issues (kein lokaler Speicher)
 
 Das Käfer-Icon in der Sidebar (`/api/bugs` in `server.js`) hängt an den **GitHub-Issues des
