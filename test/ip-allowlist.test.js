@@ -67,9 +67,13 @@ test('retrofit keeps everything by default; removal only describes the chosen ne
 test('generated IPv4/IPv6 VPN filter is accepted by Caddy', t => {
   try { execFileSync('caddy', ['version'], { stdio: 'ignore' }); } catch { t.skip('Caddy not installed'); return; }
   const snippet = setup(t, ['y', '/term', '2', '10.8.0.0/24, fd00::/64']);
-  const result = spawnSync('caddy', ['adapt', '--config', '-', '--adapter', 'caddyfile'], {
-    input: `http://127.0.0.1:18999 {\n${snippet}\nrespond "ok"\n}\n`, encoding: 'utf8',
-  });
+  // Aeltere Caddy-Versionen (u. a. das Ubuntu-Paket in der CI) lesen bei
+  // --config kein stdin. Eine echte Datei funktioniert in allen Versionen.
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'term-net-caddy-'));
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
+  const configFile = path.join(configDir, 'Caddyfile');
+  fs.writeFileSync(configFile, `http://127.0.0.1:18999 {\n${snippet}\nrespond "ok"\n}\n`);
+  const result = spawnSync('caddy', ['adapt', '--config', configFile, '--adapter', 'caddyfile'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /10\.8\.0\.0\/24/);
 });
