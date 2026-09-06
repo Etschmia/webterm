@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
+import { codexModelFromPane, codexRolloutForPid } from './lib/codex-model.js';
 import {
   canonicalOrigin, isLoopbackHost, isPathInside, terminalSize, validCsrfRequest,
 } from './lib/security.js';
@@ -188,17 +189,15 @@ async function agentSessions() {
 // ---------------------------------------------------------------------------
 // Modell & Effort einer Agent-Session (Chip-Zeile der Sidebar)
 // ---------------------------------------------------------------------------
-// Quelle ist NICHT das Pane: die TUIs zeigen das aktive Modell nicht
-// verlaesslich an (bei Claude Code steht in der Fusszeile je nach Breite und
-// Zustand etwas anderes). Alle vier Agenten schreiben ihren Sitzungszustand
-// aber unter $HOME weg — von dort kommen Modell und Effort:
+// Primaerquelle ist der Sitzungszustand unter $HOME. Ausnahmen sind die
+// aktuelle Codex-Statuszeile (auch vor dem ersten Turn) und der muse-Effort:
 //
 //   claude  ~/.claude/sessions/<pid>.json  -> sessionId (echte PID-Registry!)
 //           ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl  -> je Assistant-
 //           Record `message.model` + `effort` (also pro Turn, ein /model- oder
 //           /effort-Wechsel mitten in der Sitzung ist damit sofort sichtbar)
-//   codex   ~/.codex/sessions/<Y>/<M>/<D>/rollout-*.jsonl -> letzter
-//           `turn_context` mit `model` + `effort`
+//   codex   aktuelle Statuszeile mit passendem cwd; sonst eindeutig ueber
+//           /proc/<pid>/fd zugeordnetes Rollout -> letzter `turn_context`
 //   grok    ~/.grok/sessions/<urlencodeter cwd>/<id>/summary.json ->
 //           `current_model_id` + `reasoning_effort`
 //   kimi    ~/.kimi-code/sessions/wd_<dir>_<hash>/session_*/agents/main/
@@ -209,11 +208,11 @@ async function agentSessions() {
 //           ~/.local/share/muse/sessions/<Y>/<M>/<D>/<sessionId>/session.jsonl
 //           -> Modell aus dem juengsten `runtime.model_reconfigure.completed`
 //           bzw. `run.model.configured`. Den EFFORT schreibt muse nirgends
-//           mit; er kommt als einzige Ausnahme aus der Pane-Statuszeile
+//           mit; er kommt aus der Pane-Statuszeile
 //           (s. museEffortFromPane).
 //
-// claude und muse fuehren eine PID-Registry; die anderen drei sind
-// ausschliesslich ueber das Arbeitsverzeichnis des Prozesses zuzuordnen —
+// claude und muse fuehren eine PID-Registry; grok und kimi sind nur ueber
+// das Arbeitsverzeichnis zuzuordnen. Codex braucht Pane oder offene Datei —
 // daher der Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche Tools im
 // selben Verzeichnis => lieber nichts anzeigen als das Falsche).
 
@@ -242,24 +241,6 @@ function tailLines(file, bytes = 512 * 1024) {
     return lines.reverse();
   } catch {
     return [];
-  } finally {
-    if (fd !== null) { try { fs.closeSync(fd); } catch { /* egal */ } }
-  }
-}
-
-// Erste Zeile einer Datei (ohne sie ganz zu lesen). Gegenstueck zu tailLines:
-// bei codex steht die Zuordnung zum Arbeitsverzeichnis im ERSTEN Record.
-function headLine(file, bytes = 64 * 1024) {
-  let fd = null;
-  try {
-    fd = fs.openSync(file, 'r');
-    const buf = Buffer.alloc(bytes);
-    const read = fs.readSync(fd, buf, 0, bytes, 0);
-    const text = buf.toString('utf8', 0, read);
-    const nl = text.indexOf('\n');
-    return nl === -1 ? text : text.slice(0, nl);
-  } catch {
-    return '';
   } finally {
     if (fd !== null) { try { fs.closeSync(fd); } catch { /* egal */ } }
   }
@@ -356,47 +337,12 @@ function claudeModelInfo(pid) {
   });
 }
 
-// Die neuesten Rollout-Dateien, ohne den ganzen Baum zu lesen: Jahr/Monat/Tag
-// sind lexikografisch sortierbar, es reicht, von hinten so weit zu laufen, bis
-// genug Kandidaten beisammen sind.
-function newestCodexRollouts(root, limit = 40) {
-  const out = [];
-  const desc = (dir) => {
-    try { return fs.readdirSync(dir).sort().reverse(); } catch { return []; }
-  };
-  for (const y of desc(root)) {
-    for (const mo of desc(path.join(root, y))) {
-      for (const d of desc(path.join(root, y, mo))) {
-        const dir = path.join(root, y, mo, d);
-        for (const f of desc(dir)) {
-          if (f.startsWith('rollout-') && f.endsWith('.jsonl')) out.push(path.join(dir, f));
-          if (out.length >= limit) return out;
-        }
-      }
-    }
-  }
-  return out;
-}
-
-function codexModelInfo(cwd) {
-  const root = path.join(HOME, '.codex', 'sessions');
-  // Zuordnung Rollout <-> cwd steht in der ERSTEN Zeile (session_meta). Das
-  // Ergebnis haengt an der mtime der jeweils neuesten Kandidatendatei: laeuft
-  // der Turn weiter, bleibt die Datei dieselbe und der Scan entfaellt.
-  const candidates = newestCodexRollouts(root);
-  if (!candidates.length) return null;
-  const file = cachedBySig(`codex-file:${cwd}`, statSig(candidates[0]), () => {
-    const byTime = candidates
-      .map((f) => ({ f, t: (() => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } })() }))
-      .sort((a, b) => b.t - a.t);
-    for (const { f } of byTime) {
-      let d;
-      try { d = JSON.parse(headLine(f)); } catch { continue; }
-      const meta = d && d.payload;
-      if (meta && meta.cwd === cwd) return f;
-    }
-    return '';
-  });
+function codexModelInfo(pid, cwd, paneTail) {
+  // Die Statuszeile kennt auch das Modell vor dem ersten Turn und nach /model.
+  // Fehlt sie, darf nur ein vom laufenden Prozess geoeffnetes Rollout helfen.
+  const visible = codexModelFromPane(paneTail, cwd, HOME);
+  if (visible) return visible;
+  const file = codexRolloutForPid(pid);
   if (!file) return null;
   return cachedBySig(`codex:${file}`, statSig(file), () => {
     for (const line of tailLines(file)) {
@@ -605,7 +551,7 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
     if (agent === 'claude') return claudeModelInfo(pid);
     if (agent === 'muse') return museModelInfo(pid, paneTail);
     if (!cwd) return null;
-    if (agent === 'codex') return codexModelInfo(cwd);
+    if (agent === 'codex') return codexModelInfo(pid, cwd, paneTail);
     if (agent === 'grok') return grokModelInfo(cwd);
     if (agent === 'kimi') return kimiModelInfo(cwd);
   } catch { /* defekte/teilgeschriebene Datei: lieber nichts anzeigen */ }
@@ -622,7 +568,7 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
 // sonst 'idle'.
 //
 // Liefert { status, tail }: den eingelesenen Pane-Ausschnitt braucht der
-// Aufrufer bei muse noch einmal (Effort steht nur dort, s. museEffortFromPane)
+// Aufrufer bei Codex und muse noch einmal (Modell/Effort aus der Statuszeile)
 // — ein zweites capture-pane pro Poll waere reine Verschwendung.
 async function agentPaneStatus(name, title, agent) {
   // Braille-Spinner am Titelanfang = Claude arbeitet (gleiche Erkennung wie
@@ -726,7 +672,7 @@ async function listSessions() {
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
     const st = await agentPaneStatus(s.name, s.title, s.agent);
     s.agentStatus = st.status;
-    // Nur intern (muse-Effort), wird unten wieder entfernt.
+    // Nur intern (Codex-Modell/muse-Effort), wird unten wieder entfernt.
     s.paneTail = st.tail;
   }));
 

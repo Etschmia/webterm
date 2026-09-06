@@ -180,18 +180,25 @@ npm install          # bzw. npm run build
 Der PATH-Präfix ist beim Bauen zwingend: `node-pty` ist nativ, und sein `binding.gyp` ruft
 intern `node` auf.
 
-## Modell/Effort der Agent-Sessions: Quellen unter `$HOME`, nicht das Pane
+## Modell/Effort der Agent-Sessions: Sitzungszustand und Statuszeile
 
-Die Chip-Zeile der Sidebar liest Modell und Effort **nicht** aus dem tmux-Pane (die TUIs
-zeigen das Modell je nach Breite/Zustand gar nicht), sondern aus dem Sitzungszustand der
+Die Chip-Zeile der Sidebar liest Modell und Effort vorwiegend aus dem Sitzungszustand der
 Tools: `~/.claude/sessions/<pid>.json` → `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl`
-(dort je Assistant-Record `message.model` + `effort`), codex aus dem letzten `turn_context`
-des Rollouts, grok aus `summary.json`, kimi aus dem Wire-Log (+ `[thinking].effort` der
+(dort je Assistant-Record `message.model` + `effort`), grok aus `summary.json`,
+kimi aus dem Wire-Log (+ `[thinking].effort` der
 `config.toml`), muse aus `~/.local/share/muse/runtime/muse/sessions/<id>.json`
 (`process_generation_hint: "pid=…"`) → `…/muse/sessions/<Y>/<M>/<D>/<id>/session.jsonl`.
 
-Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — die anderen
-drei werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
+Codex liest die **letzte nichtleere Pane-Zeile**, sofern sie dem Format
+`<modell> <effort> · <pfad>` entspricht und der vollständige Pfad zum Prozess-cwd passt.
+Damit stimmen auch ein frischer Start und `/model` vor dem nächsten Turn. Fehlt die Zeile,
+dient ausschließlich ein eindeutig über `/proc/<pid>/fd` zugeordnetes offenes Rollout als
+Fallback (letzter `turn_context`). **Nie das neueste Rollout nur anhand des cwd wählen**:
+Das kann eine alte CLI-, Desktop- oder Subagent-Sitzung mit einem anderen Modell sein.
+Fehlen beide sicheren Quellen, bleibt der Chip leer.
+
+Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — grok und
+kimi werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
 Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt dann bewusst
 nichts an. Diesen Riegel nicht wegoptimieren.
 
@@ -203,7 +210,7 @@ Zwei muse-Eigenheiten, die man leicht falsch macht:
   teils in „retained frames" gebündelt und stecken dort als **String** in
   `children[].record_json`.
 - **Den Effort schreibt muse nirgends weg** (weder Log noch `~/.config/muse/settings.json`;
-  `/effort` ändert ihn nur im Prozess). Er kommt als einzige Ausnahme von der Pane-Regel aus
+  `/effort` ändert ihn nur im Prozess). Er kommt aus
   der muse-Statuszeile `"<modell> · <effort> · <pfad>"` — und wird nur übernommen, wenn die
   dort genannte Modell-ID exakt der aus dem Log entspricht. Damit liefert eine
   abgeschnittene, gescrollte oder fremde Zeile nichts statt etwas Falschem.

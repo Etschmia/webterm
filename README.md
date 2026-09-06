@@ -43,17 +43,18 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   beides.
 - **Modell & Effort je Agent-Session**: Läuft in einer Session `claude`, `codex`, `grok`,
   `kimi` oder `muse`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell**
-  und dem **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das nicht aus dem Pane — die TUIs
-  zeigen es dort nicht verlässlich —, sondern aus dem Sitzungszustand der Tools unter `$HOME`:
+  und dem **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das vorwiegend aus dem
+  Sitzungszustand der Tools unter `$HOME`:
   `~/.claude/sessions/<pid>.json` → Transcript (Modell/Effort stehen dort **pro Turn**, ein
-  `/model`-Wechsel ist also sofort sichtbar), bei codex der letzte `turn_context` des Rollouts,
+  `/model`-Wechsel ist also sofort sichtbar), bei codex die aktuelle Statuszeile mit passendem Pfad
+  (alternativ der letzte `turn_context` eines vom Prozess eindeutig geöffneten Rollouts),
   bei grok `summary.json`, bei kimi das Wire-Log (Effort dort nur global aus der `config.toml`;
   der Tooltip sagt das dazu), bei muse die PID-Registry unter
   `~/.local/share/muse/runtime/` → `session.jsonl` (dort steht das Modell am **Anfang**, nicht
-  am Ende). Claude und muse führen eine PID-Registry — die übrigen drei werden über
+  am Ende). Claude und muse führen eine PID-Registry — grok und kimi werden über
   das Arbeitsverzeichnis des Prozesses zugeordnet; laufen zwei gleiche Tools im **selben**
-  Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Einzige Ausnahme von der
-  Pane-Regel: muse protokolliert seinen Effort nirgends, er wird aus dessen Statuszeile gelesen
+  Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Auch muse nutzt das Pane:
+  Es protokolliert seinen Effort nirgends, er wird aus dessen Statuszeile gelesen
   — und nur übernommen, wenn die dort genannte Modell-ID zur protokollierten passt. Ergebnisse
   sind auf mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
