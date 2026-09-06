@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { backendVersion } from './lib/backend-version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, 'src');
@@ -13,26 +14,9 @@ const watch = process.argv.includes('--watch');
 
 fs.mkdirSync(PUBLIC, { recursive: true });
 
-// Build-Stamp fuer die Version-Skew-Erkennung: er wird SOWOHL ins Frontend-Bundle
-// eingebettet (__BUILD_STAMP__) ALS AUCH nach public/version.json geschrieben.
-// server.js liest version.json EINMAL beim Start; laeuft nach einem Deploy weiter
-// ein alter Prozess, meldet /api/version noch dessen alten Stamp, waehrend das neue
-// Bundle den neuen traegt -> das Frontend erkennt den Versatz und warnt.
-//
-// Als Stamp NICHT der HEAD-Commit, sondern der Kurzhash des LETZTEN Commits, der
-// eine Backend-Datei (server.js/package*.json) beruehrt hat. Sonst wuerde ein
-// reiner Frontend-/Docs-Commit den Stamp aendern und — weil dabei zurecht KEIN
-// Backend-Restart passiert — eine falsch-positive „Backend veraltet"-Warnung
-// ausloesen. So spiegelt der Stamp genau die Version des laufenden Backends.
-function buildStamp() {
-  const git = (args) => {
-    try { return execFileSync('git', args, { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null; }
-    catch { return null; }
-  };
-  return git(['log', '-1', '--format=%h', '--', 'server.js', 'package.json', 'package-lock.json'])
-      || git(['rev-parse', '--short', 'HEAD']);
-}
-const STAMP = buildStamp() || `build-${Date.now()}`;
+// Derselbe Inhalts-Hash aller Runtime-Dateien wie in Server und deploy/update.
+// Er erkennt auch uncommittierte Aenderungen sowie hinzugefuegte/entfernte Module.
+const STAMP = backendVersion(__dirname);
 
 // Frontend-Stamp = HEAD-Kurzhash: aendert sich bei JEDEM neuen Commit (auch
 // frontend-only), im Gegensatz zum backend-orientierten STAMP oben. Er treibt den

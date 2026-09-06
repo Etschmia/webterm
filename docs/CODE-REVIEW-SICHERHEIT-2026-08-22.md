@@ -1,5 +1,10 @@
 # Code-Review Sicherheit und Wartbarkeit – 22.08.2026
 
+> **VERALTET – historischer Stand vom 22.08.2026.**
+> Die aktuelle Nachprüfung, neue Findings, Umsetzungen und noch offenen Betriebsangaben
+> stehen in der [Review vom 06.09.2026](CODE-REVIEW-2026-09-06.md).
+> Die folgenden damaligen Aussagen sind kein Nachweis des aktuellen Betriebszustands.
+
 ## Geltungsbereich
 
 Geprüft wurden `server.js`, das Browser-Frontend unter `src/`, Build und

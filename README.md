@@ -1,7 +1,7 @@
 # term-web
 
 Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
-(TLS + HTTP Basic Auth). Portabel betreibbar unter eigener Domain oder Unterpfad
+(TLS + Basic Auth, vorgeschalteter 2FA/SSO-Dienst oder externer Zugangsschutz). Portabel betreibbar unter eigener Domain oder Unterpfad
 — der öffentliche Origin wird über `PUBLIC_ORIGIN` in der `.env` gesetzt.
 
 ## Schnellstart
@@ -26,8 +26,9 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
 ## Funktionen
 - **Standard** (Default): interaktive Login-Shell (`bash -l`) im Home, mit `.bashrc`/Farben.
 - **tmux-Sessions**: alle laufenden Sessions werden in der Sidebar gelistet; Klick hängt das
-  Arbeitsfenster live an die Session. Der aktive Session-Eintrag zeigt einen **Copy-Mode-Toggle**
-  (tmux `copy-mode` an/aus).
+  Arbeitsfenster live an die Session. **Markieren & Kopieren** öffnet ein Browser-Overlay
+  mit Terminaltext und tmux-History aus `/api/capture`; Scrollen und Textauswahl erfolgen
+  darin unabhängig von der laufenden Terminaleingabe.
 - **Shift+Enter** fügt in Claude Code & Co. einen Zeilenumbruch ein statt abzusenden
   (das Frontend schickt `ESC CR` — dieselbe Sequenz, die `claude /terminal-setup`
   Desktop-Terminals beibringt). Außerdem werden **OSC 9**-Notifications (Statuszeile,
@@ -56,7 +57,8 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Auch muse nutzt das Pane:
   Es protokolliert seinen Effort nirgends, er wird aus dessen Statuszeile gelesen
   — und nur übernommen, wenn die dort genannte Modell-ID zur protokollierten passt. Ergebnisse
-  sind auf mtime+Größe der Quelldatei gecacht, der 4-Sekunden-Poll kostet also nichts.
+  aus Sitzungsdateien werden nach mtime und Größe gecacht; Prozess- und Pane-Abfragen
+  bleiben Bestandteil des Pollings.
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
 - **Zugangsschutz** (Zahnrad unten in der Sidebar): zeigt, womit die eigenen Anfragen gerade
@@ -66,7 +68,7 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
 
 ## Architektur
 ```
-Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → Node-Backend
+Browser → Caddy :443 (TLS + Zugangsschutz) → reverse_proxy 127.0.0.1:7681 → Node-Backend
                                                                             ├─ Static (xterm UI)
                                                                             ├─ WS /ws → node-pty
                                                                             └─ GET /api/sessions (tmux)
@@ -74,6 +76,7 @@ Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → N
 - `server.js` — HTTP-Static + WebSocket→PTY + REST `/api/sessions`. Bindet nur `127.0.0.1:7681`,
   prüft WS-Origins und schützt schreibende HTTP-Endpunkte per Origin + CSRF-Token.
   Weitere APIs vermitteln Datei-Explorer/Editor, Clipboard-Bilder, Self-Update und GitHub-Issues.
+- `lib/` — Sicherheitsprüfungen, Telegram, Codex-Modellerkennung und Backend-Version.
 - `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
 - `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
 - `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check, `git-status.sh` für die
@@ -81,7 +84,7 @@ Browser → Caddy :443 (TLS + basic_auth) → reverse_proxy 127.0.0.1:7681 → N
   gitignorte `*.local.*`-Datei.
 
 ### WS-Protokoll
-- Client → Server: JSON-Text-Frames `{t:'start'|'input'|'resize'|'copyMode', …}`.
+- Client → Server: JSON-Text-Frames `{t:'start'|'input'|'resize', …}`.
 - Server → Client: Binär-Frames = rohe PTY-Ausgabe; JSON-Text = Control (`ready`/`exit`/`error`).
 
 ## Entwicklung
@@ -111,25 +114,21 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
     `/proc/<pid>/cgroup` (System- **und** User-Unit). Auf Multi-Instanz-Maschinen trotzdem
     `TERM_SERVICE` bzw. `deploy.env` setzen — die Auto-Erkennung ist nur der Fallback.
 - **Update einer bereits konfigurierten Installation — `deploy/update`** (nicht erneut
-  `install.sh`): `install.sh` ist Installer/Konfigurator (fragt `.env`, Service-Namen,
-  Caddy … ab) und startet einen *laufenden* Dienst per `enable --now` **nicht** neu — ein
-  reines `git pull && install.sh` würde also nur das Frontend neu bauen, Backend-Änderungen
-  in `server.js` blieben inaktiv. `deploy/update` macht stattdessen `git pull --ff-only` →
-  Build → und startet **nur dann** über `deploy/term-restart` neu (also sessions-schonend),
-  wenn sich das Backend (`server.js`/`package*.json`) gegenüber dem *laufenden Prozess*
-  geändert hat; reine Frontend-Änderungen brauchen nur einen **Tab-Reload**. Die
-  Restart-Entscheidung fällt aus dem Ist-Zustand (Datei-mtime vs. `ActiveEnterTimestamp`),
-  **nicht** aus dem Pull-Diff — so zieht auch der allererste Lauf (dem ein manuelles
-  `git pull` vorausging) korrekt nach. `--no-pull` überspringt den Pull; der Servicename wird
-  ermittelt (s. o.). Findet `deploy/update` ein anhängiges Backend-Update, aber **keinen**
-  passenden aktiven Dienst, bricht es **laut mit Exit 3** ab (statt still nur das Frontend zu
-  bauen) und nennt das nötige `TERM_SERVICE=<name>`.
-- **Version-Skew sichtbar machen**: `build.mjs` brennt einen Build-Stamp (Commit-Kurzhash) ins
-  Frontend-Bundle **und** nach `public/version.json`; `server.js` liest ihn einmal beim Start
-  und liefert ihn unter `/api/version`. Das Frontend vergleicht beim Laden seinen eingebauten
-  Stamp mit `/api/version` und warnt bei Versatz sichtbar („Backend veraltet — Deploy
-  unvollständig?"). So fällt ein *neues Frontend gegen altes Backend* (Restart vergessen)
-  sofort auf, statt dass Feature-Aufrufe stumm ins Leere laufen.
+  `install.sh`): `git pull --ff-only` → Build → bei geänderter Backend-Version ein geprüfter
+  Restart über `deploy/term-restart`. `--no-pull` überspringt den Pull.
+  Die gemeinsame Dateiliste steht in `deploy/backend-paths.json`: `server.js`, Paketmanifeste
+  und rekursiv `lib/`. Dateinamen und Inhalte fließen in einen Hash ein; neue oder gelöschte
+  Module und Änderungen bei unveränderter mtime werden ebenfalls erkannt.
+  Der laufende Server schreibt PID und Start-Hash nach `.backend-running.json` (0600,
+  gitignored). Ohne gültigen Stamp ist einmalig ein Restart erforderlich. Reine Frontend-
+  oder Doku-Änderungen benötigen keinen Backend-Restart. Ein nötiger Restart ohne passenden
+  aktiven Dienst scheitert mit Exit 3, ein unerreichbarer User-Bus mit Exit 4 und gefährdete
+  tmux-Sitzungen mit Exit 5. Fehlermeldungen beachten; ein erfolgreicher Build allein
+  bestätigt noch keinen vollständig aktivierten Deploy.
+- **Versionen sichtbar machen:** `public/version.json` und das Frontend-Bundle enthalten
+  den Backend-Inhalts-Hash sowie den HEAD-Kurzhash für den Frontend-Autoreload. Der Server
+  berechnet seinen Backend-Hash einmal beim Start und liefert ihn unter `/api/version`.
+  Abweichungen zeigen „Backend veraltet“ an. Auch eine reine Änderung in `lib/` wird erfasst.
 - **claude/codex/grok/kimi/muse in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
@@ -158,14 +157,14 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   - Migration von einer bestehenden System-Unit: erst `sudo systemctl disable --now
     <service>` (einmalig, Admin), dann `install.sh` mit Option User-Unit — parallel geht
     nicht, beide würden denselben Port binden.
-- **Neustart — IMMER `deploy/term-restart` statt `systemctl restart term-server`**:
-  Das Webterminal hostet *alle* tmux-Sessions im cgroup von `term-server.service`. Ein
-  direktes `systemctl restart` reißt wegen `KillMode=control-group` das ganze cgroup ab
-  und killt damit jede laufende Claude-/Kimi-Sitzung (auch fremde) — genau das ist am
-  24.06.2026 passiert. `deploy/term-restart` snapshottet die aktiven Agent-Panes, startet
-  aus einer **entkoppelten** transienten systemd-Unit neu (überlebt den cgroup-Abriss) und
-  setzt jede Sitzung danach automatisch wieder auf — claude per `claude --resume`,
-  kimi per `kimi --continue`, muse per `muse resume --last`.
+- **Neustart — `deploy/term-restart`**: Der Helfer prüft die tatsächliche Service-cgroup
+  gegen tmux-Server, alle Panes und deren Nachfahren. Bei gefährdeten oder nicht sicher
+  prüfbaren Sitzungen bricht er vor dem Restart mit Exit 5 ab. Das gilt für sämtliche Tools
+  und normale Shells. `deploy/term-restart --check` prüft ohne Neustart.
+  tmux außerhalb der Webterminal-Unit erhält Fenster, Panes und laufende Unterhaltungen.
+  Das frühere unvollständige Snapshot/Resume-Verfahren wurde entfernt. Bei Exit 5 Arbeit
+  sichern und betroffene Sitzungen kontrolliert beenden bzw. den unabhängigen tmux-Betrieb
+  einrichten. Auch ein direkter Restart per SSH kann Sitzungen in der Zielgruppe beenden.
 - **Caddy**: am einfachsten über `./install.sh` (erzeugt eine lokale, gitignorte
   `.caddy`-Datei mit dem gewählten Zugangsschutz). Manuell mit Basic Auth: Hash via
   `caddy hash-password` erzeugen, in einer `deploy/<domain>.caddy` als
@@ -228,9 +227,31 @@ anzupassen. Das Portal gehört am besten auf eine eigene Subdomain **derselben**
 **Nachrüsten**: `deploy/setup-auth` führt durch denselben Dialog wie `install.sh`, sucht die
 aktive Caddy-Datei, zeigt den erkannten Ist-Zustand und schreibt den neuen Block als
 gitignorte Datei nach `deploy/<domain>.auth.local.caddy` — plus die Schritte zum Einspielen.
+Die gemeinsamen Schutzheader stammen aus `deploy/lib-caddy-security.sh`.
+Die Löschung des `Server`-Headers bleibt separat, damit CSP und HSTS auch auf
+Authentisierungsfehlern gesetzt werden.
+
 Weder das Skript noch das Panel fassen `/etc/caddy` selbst an oder laden Caddy neu: dort liegen
 fremde Sites, und ein Webterminal, das seinen eigenen Türsteher umbauen darf, wäre genau die
 Lücke, die der Türsteher schließen soll.
+
+## Prüfungen und Review
+
+`npm test` prüft Sicherheitsgrenzen, Backend-Versionen, Restart-Schutz, Telegram-Aufträge
+und isolierte HTTP-/WebSocket-Server. Ist Caddy installiert, laufen zusätzlich echte
+Proxy-Tests für 200/401/403 und die SVG-Sandbox. `npm audit` umfasst auch die gebündelten
+Frontend-Abhängigkeiten. Die CI prüft jedes Shell-Skript einzeln.
+
+Aktueller Befund- und Umsetzungsstand: [Code-Review vom 06.09.2026](docs/CODE-REVIEW-2026-09-06.md).
+Die Review vom 22.08.2026 ist historisch. Instanzdetails und lokale Rückfallkopien gehören
+weiterhin nicht ins Git-Repository.
+
+## Telegram
+
+Der optionale Sidebar-Bot vermittelt Nachrichten an lokales Claude Code. Fehlgeschlagene
+Aufträge werden nicht automatisch erneut ausgeführt; auch nach einem Timeout bleibt der
+bisherige Verlauf erhalten. Eine nicht mehr vorhandene Sitzung kann bewusst mit `/new`
+verlassen werden. Konfiguration und Token liegen lokal unter `~/.term-telegram/`.
 
 ## Hinweise
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester
@@ -247,8 +268,7 @@ Lücke, die der Türsteher schließen soll.
   der Hauptzweck des Pakets, deshalb fragt `install.sh` es jetzt mit Default **nein**. Was das
   Paket weiterhin abdeckt: Retry bei anhaltendem API-Overload (529), Retry bei
   Safeguard-Fehlalarmen und Wiederaufnahme, wenn der `claude`-Prozess die Wartezeit nicht
-  überlebt (nativ gilt „relaunched/exited during the wait → task will not resume" — genau der
-  Fall bei `deploy/term-restart`). **Beides parallel auf denselben Fall anzusetzen ist keine
+  überlebt (nativ gilt „relaunched/exited during the wait → task will not resume" — etwa bei ungeprüften Prozessabbrüchen). **Beides parallel auf denselben Fall anzusetzen ist keine
   gute Idee**: der Monitor scrapet das Pane und weiß nichts vom nativen Warten, im Zweifel
   landet nach dem Reset ein doppeltes „continue" in der Session. Dann entweder in
   `~/.claude-auto-retry/config.json` den Usage-Limit-Pfad abschalten oder in `/config` das

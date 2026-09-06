@@ -1,5 +1,7 @@
 node_modules/
 public/
+.backend-running.json
+.backend-running.json.*.tmp
 *.log
 .DS_Store
 _wstest.mjs
@@ -11,7 +13,8 @@ deploy/*.local.*
 deploy/deploy.env
 
 # Lokale Notizen/Ideen — nicht ins Repo (u. a. Betriebsdetails, Publish-Checks)
-docs/
+docs/*
+!docs/CODE-REVIEW-*.md
 
 # Projekt-lokale node-Installation (vendor/node) samt gekapselter npm-Konfiguration.
 # Bewusst NICHT im PATH: nebenan liegt ein bun-Projekt, das ein globales node/npm

@@ -32,7 +32,7 @@ ENV_FILE="$SCRIPT_DIR/.env"
 DEPLOY_DIR="$SCRIPT_DIR/deploy"
 DEFAULT_PORT="7681"
 
-for _lib in lib-ask.sh lib-caddy-auth.sh; do
+for _lib in lib-ask.sh lib-caddy-auth.sh lib-caddy-security.sh; do
   if [ ! -r "$DEPLOY_DIR/$_lib" ]; then
     printf 'Fehlt: %s — bitte das Repository vollstaendig auschecken.\n' "$DEPLOY_DIR/$_lib" >&2
     exit 1
@@ -48,6 +48,7 @@ done
 # geteilt mit deploy/setup-auth und dem Panel "Zugangsschutz" in der Sidebar.
 # shellcheck source=deploy/lib-caddy-auth.sh
 . "$DEPLOY_DIR/lib-caddy-auth.sh"
+. "$DEPLOY_DIR/lib-caddy-security.sh"
 
 # Servicenamen-Ermittlung und die Reparatur des systemd-User-Bus
 # (term_user_bus_repair) — geteilt mit deploy/update und deploy/term-restart.
@@ -519,15 +520,7 @@ fi)
         header_up X-Real-IP {remote_host}
     }
 
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options SAMEORIGIN
-        Referrer-Policy strict-origin-when-cross-origin
-        Strict-Transport-Security "max-age=31536000"
-        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
-        Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        -Server
-    }
+$(term_security_headers '    ')
 
     encode gzip zstd
 
@@ -604,15 +597,7 @@ $(auth_block '        ')
         reverse_proxy 127.0.0.1:$PORT {
             header_up X-Real-IP {remote_host}
         }
-        header {
-            X-Content-Type-Options nosniff
-            X-Frame-Options SAMEORIGIN
-            Referrer-Policy strict-origin-when-cross-origin
-            Strict-Transport-Security "max-age=31536000"
-            Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
-            Permissions-Policy "camera=(), microphone=(), geolocation=()"
-            -Server
-        }
+$(term_security_headers '        ')
     }
 EOF
     ok "Caddy-Snippet geschrieben: $CADDY_OUT"

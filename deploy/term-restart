@@ -1,266 +1,58 @@
 #!/usr/bin/env bash
-# term-restart — startet term-server.service neu, OHNE laufende Agent-Sessions zu verlieren.
-#
-# Hintergrund: Das Webterminal (server.js) hostet ALLE tmux-Sessions im cgroup von
-# term-server.service. Ein einfaches `systemctl restart term-server` reißt wegen
-# KillMode=control-group das gesamte cgroup ab — also den tmux-Server samt jeder
-# darin laufenden Claude-/Kimi-Sitzung (auch fremder!). Genau das ist am 24.06.2026 passiert.
-#
-# Dieser Wrapper:
-#   1. snapshottet alle tmux-Panes, die gerade `claude`, `kimi` oder `muse` laufen
-#      (Session-Name + cwd + Tool),
-#   2. führt den Restart aus einer ENTKOPPELTEN transienten systemd-Unit aus, die den
-#      cgroup-Abriss überlebt (KillMode=none, eigenes cgroup unter system.slice),
-#   3. setzt nach dem Restart jede Sitzung wieder auf — claude per
-#      `claude --resume <neueste-session-id>`, kimi per `kimi --continue`,
-#      muse per `muse resume --last`
-#      (nimmt selbst die neueste Session im cwd) — die Konversationen kommen
-#      also mit voller Historie zurück.
-#
-# Benutze IMMER diesen Befehl statt `systemctl restart term-server`, wenn du aus einer
-# Sitzung heraus neu startest, die selbst im Webterminal läuft.
-#
-# Aufruf:  deploy/term-restart           (normaler entkoppelter Restart + Restore)
-#          deploy/term-restart --restore <snapfile>   (intern, von der Unit aufgerufen)
-#
-# Der Service kann als System-Unit (/etc/systemd/system, Restart braucht sudo) ODER als
-# User-Unit (~/.config/systemd/user, komplett ohne sudo) laufen. Das Skript erkennt
-# automatisch, wo die Unit liegt; Override per TERM_USER_UNIT=1 bzw. =0.
+# Restart nur, wenn keine tmux-Sitzung in der Ziel-cgroup gefaehrdet ist.
+# Gilt fuer alle Tools, Shells, Fenster und Panes; kein unvollstaendiges Resume.
 set -euo pipefail
-
-PROJECTS="$HOME/.claude/projects"
-
 log(){ printf '[term-restart] %s\n' "$*" >&2; }
-
-# Servicenamen robust ermitteln: explizit $TERM_SERVICE -> deploy/deploy.env ->
-# Auto-Erkennung des laufenden server.js dieses Repos (frueher hart 'term-server' —
-# das traf auf abweichend benannten Instanzen die falsche bzw. keine Unit).
-# term_resolve_service setzt SERVICE/SERVICE_SOURCE/REPO_BACKEND_PID und ggf.
-# TERM_USER_UNIT. Nicht-Null-Rueckgabe (kein Dienst gefunden) hier tolerieren —
-# der Normalpfad prueft SERVICE unten explizit; --help soll ohne Dienst laufen.
-# shellcheck source=deploy/lib-service.sh
-. "$(dirname "$(readlink -f "$0")")/lib-service.sh"
+SELF="$(readlink -f "$0")"
+RESTART_DIR="$(dirname "$SELF")"
+case "${1:-}" in
+  --help|-h)
+    printf '%s\n' 'deploy/term-restart [--check]' \
+      'Dienst: TERM_SERVICE -> deploy/deploy.env -> Prozess-Erkennung.' \
+      '--check prueft ohne Restart. Exit 5: tmux gefaehrdet oder Pruefung unvollstaendig.'
+    exit 0 ;;
+  ''|--check|--execute) ;;
+  *) log "Unbekanntes Argument: $1"; exit 2 ;;
+esac
+. "$RESTART_DIR/lib-service.sh"
 term_resolve_service || true
-
-# PTY-Umgebungen (z. B. das Webterminal selbst) setzen XDG_RUNTIME_DIR oft nicht —
-# ohne das erreicht `systemctl --user` den User-Manager nicht, und die Auto-Erkennung
-# unten fiele faelschlich auf die System-Unit zurueck.
-if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
-  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-fi
-
-# User-Bus proben, gaengige Umgebungsfehler (falsches XDG_RUNTIME_DIR, verwaistes
-# DBUS_SESSION_BUS_ADDRESS) reparieren (s. lib-service.sh). Ohne erreichbaren Bus
-# darf eine User-Unit unten NICHT angefasst werden — systemd-run --user scheiterte
-# erst nach dem Snapshot mitten im Ablauf.
+[[ "${SERVICE:-}" =~ ^[A-Za-z0-9_@.:-]+$ ]] || { log 'Kein gueltiger Dienst ermittelt; TERM_SERVICE setzen.'; exit 1; }
 USER_BUS_OK=1; term_user_bus_repair || USER_BUS_OK=0
-
-# System- oder User-Unit? Auto-Erkennung: liegt die Unit im User-Manager, wird sie dort
-# verwaltet (kein sudo noetig — wichtig fuer Nutzer, die keins haben sollen). Ist der
-# User-Bus nicht erreichbar, ersatzweise ueber das Unit-File im User-Verzeichnis.
-# Die Restore-Phase laeuft in der transienten Unit; dorthin wird das Ergebnis per
-# --setenv=TERM_USER_UNIT weitergereicht, damit beide Phasen sicher dasselbe tun.
 case "${TERM_USER_UNIT:-}" in
-  1|yes|true)  USER_UNIT=1 ;;
-  0|no|false)  USER_UNIT=0 ;;
+  1|yes|true) USER_UNIT=1 ;;
+  0|no|false) USER_UNIT=0 ;;
   *) if [ "$USER_BUS_OK" -eq 1 ] && systemctl --user cat "$SERVICE" >/dev/null 2>&1; then USER_UNIT=1
-     elif [ "$USER_BUS_OK" -eq 0 ] && [ -n "${SERVICE:-}" ] && [ -f "$HOME/.config/systemd/user/$SERVICE.service" ]; then USER_UNIT=1
+     elif [ -f "$HOME/.config/systemd/user/$SERVICE.service" ]; then USER_UNIT=1
      else USER_UNIT=0; fi ;;
 esac
-
-sysctl(){
-  if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi
-}
-
-# cwd -> Name des Claude-Projektverzeichnisses (Claude ersetzt '/' und '.' durch '-').
-enc_dir(){ printf '%s' "$1" | sed 's#[/.]#-#g'; }
-
-# bin-Verzeichnis der aktiven node-Installation (fuer den PATH der Unit, s.u.).
-# Suchreihenfolge wie install.sh: PATH, projekt-lokales vendor/node, gaengige Orte,
-# dann neueste nvm-Version.
-node_bin_dir(){
-  local p latest
-  if p="$(command -v node 2>/dev/null)"; then dirname "$p"; return 0; fi
-  # Deployments ohne globales node (z. B. neben einem bun-Projekt) halten node
-  # projekt-lokal in vendor/node und bewusst aus dem PATH heraus.
-  p="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)/vendor/node/bin/node"
-  [ -x "$p" ] && { dirname "$p"; return 0; }
-  for p in "$HOME/.local/bin/node" "$HOME/.volta/bin/node" /usr/local/bin/node \
-           /usr/bin/node /opt/homebrew/bin/node; do
-    [ -x "$p" ] && { dirname "$p"; return 0; }
-  done
-  if [ -d "$HOME/.nvm/versions/node" ]; then
-    latest="$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n1)"
-    if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/node" ]; then
-      printf '%s\n' "$HOME/.nvm/versions/node/$latest/bin"; return 0
-    fi
-  fi
-  return 1
-}
-
-# Neueste Top-Level-Session-ID (*.jsonl) für ein cwd, ohne subagents/.
-newest_session_id(){
-  local dir="$PROJECTS/$(enc_dir "$1")" f
-  [ -d "$dir" ] || return 1
-  f=$(find "$dir" -maxdepth 1 -name '*.jsonl' -printf '%T@ %f\n' 2>/dev/null \
-        | sort -rn | head -1 | awk '{print $2}')
-  [ -n "$f" ] && printf '%s' "${f%.jsonl}"
-}
-
-# name<TAB>cwd<TAB>tool je tmux-Pane, in dessen Prozess-Subtree ein `claude`,
-# `kimi` oder `muse` läuft. (Robust gegen den claude-auto-retry-Wrapper: dort
-# meldet pane_current_command 'bash'/'node'; verlässlich ist nur der Prozessname
-# comm irgendwo im Baum. muse exec't aus ~/.local/bin/muse heraus sein
-# versioniertes Binary — comm heißt dort 'muse-bin-<version>', deshalb ein
-# Präfix-Vergleich statt Gleichheit.)
-snapshot(){
-  local panes
-  panes=$(tmux list-panes -a -F '#{pane_pid}|#{session_name}|#{pane_current_path}' 2>/dev/null) || return 0
-  [ -n "$panes" ] || return 0
-  ps -e -o pid=,ppid=,comm= | awk -v panes="$panes" '
-    BEGIN{
-      n=split(panes, rows, "\n");
-      for(i=1;i<=n;i++){ if(rows[i]=="") continue; split(rows[i], a, "|"); paneinfo[a[1]]=a[2]"\t"a[3] }
-    }
-    { ppid[$1]=$2; comm[$1]=$3 }
-    END{
-      for(pid in comm){
-        tool=""
-        if(comm[pid]=="claude" || comm[pid]=="kimi") tool=comm[pid]
-        else if(index(comm[pid], "muse-bin-")==1 || comm[pid]=="muse") tool="muse"
-        if(tool=="") continue
-        x=pid
-        while(x!="" && x!=0 && (x in ppid)){
-          if(x in paneinfo){ found[x]=tool; break }
-          x=ppid[x]
-        }
-      }
-      # Pro Session ein Eintrag (bei mehreren Agent-Panes gewinnt einer).
-      for(p in found) if(!seen[paneinfo[p]]++) print paneinfo[p] "\t" found[p]
-    }' | sort -u
-}
-
-# Phase 2 (in der entkoppelten Unit): warten bis Service zurück ist, dann Sessions resumen.
-restore(){
-  local snapfile="$1" name cwd tool sid i
-  for i in $(seq 1 60); do
-    sysctl is-active --quiet "$SERVICE" && break
-    sleep 0.5
-  done
-  while IFS=$'\t' read -r name cwd tool; do
-    [ -n "${name:-}" ] || continue
-    if tmux has-session -t "$name" 2>/dev/null; then
-      log "Session '$name' existiert bereits — übersprungen."
-      continue
-    fi
-    tmux new-session -d -s "$name" -c "$cwd"
-    if [ "$tool" = "kimi" ]; then
-      # kimi findet die neueste Session im cwd selbst — keine ID nötig.
-      log "Restore '$name' ($cwd) -> kimi --continue"
-      tmux send-keys -t "$name" "kimi --continue" Enter
-    elif [ "$tool" = "muse" ]; then
-      # muse ebenso: --last nimmt die neueste Session dieses Workspace.
-      log "Restore '$name' ($cwd) -> muse resume --last"
-      tmux send-keys -t "$name" "muse resume --last" Enter
-    elif sid=$(newest_session_id "$cwd"); then
-      log "Restore '$name' ($cwd) -> claude --resume $sid"
-      tmux send-keys -t "$name" "claude --resume $sid" Enter
-    else
-      log "Kein Transkript für $cwd — leere Session '$name' angelegt."
-    fi
-  done < "$snapfile"
-  rm -f "$snapfile"
-  log "Restore abgeschlossen."
-}
-
-usage(){
-  cat >&2 <<USAGE
-term-restart — Restart von '$SERVICE' ohne Verlust laufender Claude-/Kimi-Sessions.
-
-  deploy/term-restart                       entkoppelter Restart + Restore
-  deploy/term-restart --restore <snapfile>  intern, von der Unit aufgerufen
-  deploy/term-restart --help                diese Hilfe
-
-Service via TERM_SERVICE waehlen (Default: term-server). Auf Maschinen mit
-mehreren Instanzen ZWINGEND setzen, sonst trifft es die fremde Instanz:
-  TERM_SERVICE=<unit> deploy/term-restart
-
-System- vs. User-Unit wird automatisch erkannt (User-Unit => kein sudo noetig).
-Override: TERM_USER_UNIT=1 (User-Unit) bzw. TERM_USER_UNIT=0 (System-Unit).
-USAGE
-}
-
-# Unbekannte Argumente MUESSEN abbrechen: ohne diesen Zweig fiel z. B. ein
-# harmlos gemeintes '--help' in den Normalpfad und hat produktiv durchgestartet
-# (am 17.07.2026 so passiert — traf die fremde Instanz 'term-server').
-case "${1:-}" in
-  --restore)  shift; restore "${1:?snapfile fehlt}"; exit 0 ;;
-  --help|-h)  usage; exit 0 ;;
-  '')         ;;
-  *)          log "Unbekanntes Argument: $1"; usage; exit 2 ;;
-esac
-
-# ---- Phase 1: Snapshot, dann Übergabe an entkoppelte Unit ----
-# Ab hier der Normalpfad: ohne ermittelten Dienstnamen kein Restart moeglich.
-if [ -z "${SERVICE:-}" ]; then
-  log "Kein term-web-Dienst gefunden — weder \$TERM_SERVICE noch deploy/deploy.env,"
-  log "noch ein laufender server.js dieses Repos (${TERM_REPO_DIR:-?})."
-  log "Instanz explizit angeben:  TERM_SERVICE=<unit> $0"
-  exit 1
-fi
-[ "${SERVICE_SOURCE:-}" = "TERM_SERVICE" ] || log "Dienst: $SERVICE (Quelle: ${SERVICE_SOURCE:-?})"
 if [ "$USER_UNIT" -eq 1 ] && [ "$USER_BUS_OK" -eq 0 ]; then
-  log "FEHLER: '$SERVICE' ist eine User-Unit, aber systemctl --user erreicht den"
-  log "User-Bus nicht (auch nach Reparatur von XDG_RUNTIME_DIR) — Restart aus"
-  log "dieser Sitzung nicht moeglich."
-  log "Abhilfe: aus einer echten Login-Sitzung (z. B. SSH) als $(id -un) ausfuehren;"
-  log "bleibt der Bus auch dort unerreichbar: 'loginctl enable-linger $(id -un)'."
-  exit 4
+  log 'User-Bus nicht erreichbar; aus einer Login-Sitzung erneut versuchen.'; exit 4
 fi
-command -v tmux   >/dev/null || { log "tmux nicht gefunden."; exit 1; }
-if [ "$USER_UNIT" -eq 0 ]; then
-  command -v sudo >/dev/null || { log "sudo nicht gefunden (System-Unit braucht sudo — oder Service als User-Unit betreiben, siehe --help)."; exit 1; }
+sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi; }
+NODE_BIN=""
+for candidate in "$RESTART_DIR/../vendor/node/bin/node" "$(command -v node || true)" "$HOME/.local/bin/node" /usr/local/bin/node /usr/bin/node; do
+  if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi
+done
+[ -n "$NODE_BIN" ] || { log 'node fuer die Restart-Pruefung nicht gefunden.'; exit 1; }
+GROUP="$(sysctl show -p ControlGroup --value "$SERVICE")"
+"$NODE_BIN" "$RESTART_DIR/restart-check.mjs" "$GROUP"
+[ "${1:-}" != '--check' ] || exit 0
+# Auch die entkoppelte Phase prueft erneut direkt vor dem Restart.
+if [ "${1:-}" = '--execute' ]; then
+  if [ "$USER_UNIT" -eq 1 ]; then systemctl --user restart "$SERVICE"
+  else sudo -n systemctl restart "$SERVICE"; fi
+  sysctl is-active --quiet "$SERVICE"
+  log 'Dienst erfolgreich neu gestartet; tmux-Sitzungen bleiben erhalten.'
+  exit 0
 fi
-
-SNAP=$(mktemp /tmp/term-restart.XXXXXX)
-snapshot > "$SNAP"
-log "$(wc -l < "$SNAP") aktive Agent-Session(s) gesichert."
-
-SELF=$(readlink -f "$0")
 UNIT="term-restart-$$-$(id -u)"
-# Robuster PATH für die Unit (claude/node/tmux/systemctl/sudo erreichbar).
-# node zur Laufzeit suchen: ein hartkodierter nvm-Pfad zeigt nach jedem Node-Update
-# ins Leere, und der Restore-Teil findet dann weder 'node' noch 'claude'.
-NODE_DIR="$(node_bin_dir || true)"
-[ -n "$NODE_DIR" ] || log "WARNUNG: kein node gefunden — 'claude --resume' schlaegt evtl. fehl."
-RUN_PATH="$HOME/.local/bin${NODE_DIR:+:$NODE_DIR}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-log "Starte entkoppelten Restart in Unit '$UNIT' …"
+RUN_PATH="$(dirname "$NODE_BIN"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ARGS=(--collect --quiet --unit="$UNIT" -p KillMode=none
+  --setenv="HOME=$HOME" --setenv="PATH=$RUN_PATH"
+  --setenv="TERM_SERVICE=$SERVICE" --setenv="TERM_USER_UNIT=$USER_UNIT")
 if [ "$USER_UNIT" -eq 1 ]; then
-  # User-Modus: transiente Unit im User-Manager — eigener cgroup neben der Service-Unit,
-  # ueberlebt deren Abriss genauso; kein sudo an keiner Stelle.
-  systemd-run --user --collect --quiet --unit="$UNIT" \
-    -p KillMode=none \
-    --setenv=HOME="$HOME" \
-    --setenv=PATH="$RUN_PATH" \
-    --setenv=LANG="${LANG:-C.UTF-8}" \
-    --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
-    --setenv=XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
-    --setenv=TERM_SERVICE="$SERVICE" \
-    --setenv=TERM_USER_UNIT=1 \
-    bash -c "systemctl --user restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+  systemd-run --user "${ARGS[@]}" --setenv="XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" "$SELF" --execute
 else
-  sudo systemd-run --collect --quiet --unit="$UNIT" \
-    --uid="$(id -u)" --gid="$(id -g)" \
-    -p KillMode=none \
-    --setenv=HOME="$HOME" \
-    --setenv=PATH="$RUN_PATH" \
-    --setenv=LANG="${LANG:-C.UTF-8}" \
-    --setenv=LC_ALL="${LC_ALL:-${LANG:-C.UTF-8}}" \
-    --setenv=TERM_SERVICE="$SERVICE" \
-    --setenv=TERM_USER_UNIT=0 \
-    bash -c "sudo -n systemctl restart '$SERVICE'; '$SELF' --restore '$SNAP'"
+  sudo -n systemd-run "${ARGS[@]}" --uid="$(id -u)" --gid="$(id -g)" "$SELF" --execute
 fi
-
-log "Restart entkoppelt angestoßen. Diese Sitzung wird gleich beendet —"
-log "die Claude-/Kimi-Sessions kommen automatisch per 'claude --resume' bzw. 'kimi --continue' zurück."
+log "Gepruefter Restart in $UNIT angestossen."

@@ -12,25 +12,20 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
 (nur das neu gebaute Frontend käme per Tab-Reload). Wichtige Eigenschaften von
 `deploy/update`:
 
-- **Baut immer**, entscheidet den Restart aber aus dem **Ist-Zustand** (Datei-mtime von
-  `server.js`/`package*.json` vs. `ActiveEnterTimestamp` des Dienstes), **nicht** aus dem
-  Pull-Diff. Das ist bewusst so: beim allerersten Lauf ging ein manuelles `git pull` voraus,
-  das interne `git pull` meldet dann „up to date" — ein leerer Diff heißt hier **nicht**
-  „nichts zu tun".
-- Reine Frontend-Änderung ⇒ **kein** Restart (nur Tab-Reload) — schont fremde Sessions.
-- `npm install` läuft nur bei echter Lockfile-Änderung (Hash-Stamp in
-  `node_modules/.term-deps-stamp`; die mtime wird sonst wiederhergestellt, damit sie die
-  Restart-Heuristik nicht verfälscht).
-- **mdlite-Dependency mit Transport-Fallback** (`install_deps_resilient` in `deploy/update`):
-  Die Markdown-Vorschau bindet `github:Etschmia/mdlite` als git-Dependency ein — npm
-  normalisiert die im Lockfile aber **immer** auf `git+ssh`, sodass Server ohne GitHub-SSH-Key
-  am Clone scheitern würden. Der Install probiert daher der Reihe nach: **git (ssh)** →
-  **gh** (authentifiziertes `gh`-CLI, scoped `GIT_CONFIG_GLOBAL` mit `insteadOf`-HTTPS-Umleitung,
-  färbt `~/.gitconfig` nicht ein) → **Tarball** (`.../archive/refs/tags/<tag>.tar.gz`, reines
-  HTTPS ohne git). Der Tarball-Fallback biegt die `mdlite`-Spec nur temporär um (`npm pkg set`)
-  und stellt `package.json`/`package-lock.json` danach wieder auf die committete git-Form her —
-  `node_modules` bleibt gefüllt, der Tree sauber. Beim Tag-Bump von mdlite auch
-  `MDLITE_REPO_SSH`/`MDLITE_TARBALL` in `deploy/update` mitziehen.
+- **Baut immer**, entscheidet den Restart aus dem Inhalts-Hash der Runtime-Dateien
+  gegen `.backend-running.json` (PID + Start-Hash des Servers). Build, Server und Update
+  verwenden `deploy/backend-paths.json`: `server.js`, Paketmanifeste und rekursiv `lib/`.
+  Neue/gelöschte Module und Änderungen mit alter mtime zählen ebenfalls. Ein fehlender
+  oder fremder Prozess-Stamp erfordert einen Restart; reine Frontend-/Docs-Änderungen nicht.
+- **Restart prüft sämtliche tmux-Prozesse**, unabhängig vom Agent-Namen. Liegen tmux-Server,
+  Panes oder deren Nachfahren in der Ziel-cgroup, bricht `deploy/term-restart` mit Exit 5 ab.
+  Es gibt kein Snapshot/Resume mehr. `--check` prüft ohne Restart. tmux muss unabhängig
+  betrieben oder betroffene Arbeit vorher gesichert und beendet werden.
+- **mdlite-Transport:** Git/SSH oder authentifiziertes gh/HTTPS mit scoped Git-Konfiguration;
+  beide beziehen den gepinnten Commit. **Kein Tarball-Fallback**, keine temporäre Umstellung
+  der Manifeste auf bewegliche Tags. Scheitern beide Transporte, endet das Update mit Fehler.
+- `npm install` läuft nur bei geändertem Lockfile-Hash. Lokale Config/Cache bleiben bei
+  einer projektlokalen Node-Installation gekapselt.
 - **Servicename wird ermittelt, nicht mehr hart `term-server`** (`deploy/lib-service.sh`,
   von `update` **und** `term-restart` gesourct): explizit `TERM_SERVICE` → `deploy/deploy.env`
   (gitignored, von `install.sh` angelegt) → Auto-Erkennung des laufenden
@@ -46,13 +41,13 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   21.07.2026 auf `jeb-webterm`), wird erst die Umgebung repariert (XDG_RUNTIME_DIR hart
   auf `/run/user/<uid>`, verwaistes DBUS_SESSION_BUS_ADDRESS weg) und erneut geprobt.
   Bleibt der Bus weg, gilt eine User-Unit mit nachweislich laufendem `server.js`
-  (Prozess-Evidenz, Startzeit aus `/proc/<pid>`) trotzdem als **aktiv** — statt des
+  (Prozess-Evidenz aus `/proc/<pid>`) trotzdem als **aktiv** — statt des
   irreführenden „Dienst ist nicht aktiv" (Exit 3). Ist dann ein Restart fällig, ist der
   ohne Bus aber unmöglich (auch `systemd-run --user` braucht ihn) ⇒ **Exit 4** mit
   Hinweis auf echte Login-Sitzung bzw. `loginctl enable-linger`; `term-restart` bricht
-  in dem Fall früh ab, bevor Snapshot/`systemd-run` ins Leere laufen.
+  in dem Fall früh ab, bevor `systemd-run` ins Leere läuft.
 - **Version-Skew**: `build.mjs` → Stamp ins Bundle (`__BUILD_STAMP__`) **und**
-  `public/version.json`; `server.js` liest ihn beim Start, liefert `/api/version`; das
+  `public/version.json`; `server.js` berechnet denselben Runtime-Hash selbst beim Start, liefert `/api/version`; das
   Frontend warnt bei Versatz („Backend veraltet — Deploy unvollständig?"). Ein 404 auf
   `/api/fs/cwd` wird in `fxFollowCwd` einmalig per `console.warn` protokolliert.
 - **Standard-Session-Wrapper rollt mit aus**: `update` trägt die Source-Zeile für

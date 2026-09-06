@@ -21,10 +21,17 @@ jobs:
       - run: "git config --global url.https://github.com/.insteadOf ssh://git@github.com/"
       - run: "git config --global --add url.https://github.com/.insteadOf git@github.com:"
       - run: npm ci
+      - name: Install Caddy for proxy regression tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends caddy
       - run: npm test
       - run: npm run build
       - run: test ! -e public/app.bundle.js.map
       # Build-Abhängigkeiten landen im ausgelieferten Browserbundle und gehören
       # deshalb ausdrücklich in den Audit-Scope.
       - run: npm audit
-      - run: bash -n install.sh deploy/*.sh deploy/update deploy/term-restart
+      - run: |
+          for script in install.sh deploy/*.sh deploy/update deploy/term-restart deploy/setup-auth; do
+            bash -n "$script" || exit 1
+          done

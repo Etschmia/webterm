@@ -7,44 +7,42 @@ tmux-Sessions (`/api/sessions`).
 Instanz-spezifische Werte (Service-Name, Port, Domain, Service-User) stehen **nicht** hier,
 sondern in der lokalen `.env` bzw. `deploy/deploy.env` — beide sind gitignored. Lege
 Betriebsnotizen zu einer konkreten Installation in eine untrackte Datei unter `docs/`
-(ebenfalls gitignored), nicht in diese Datei.
+(gitignored), nicht in diese Datei. `docs/CODE-REVIEW-*.md` wird dagegen versioniert.
 
 ## ⚠️ Service-Neustart: NIEMALS `systemctl restart <unit>` direkt
 
-Die Unit läuft mit `KillMode=control-group`. Das Webterminal hostet **alle** tmux-Sessions
-(inkl. jeder darin laufenden Claude-Instanz, auch fremder) im **selben cgroup**. Ein direkter
-`systemctl restart` reißt das komplette cgroup ab und killt dadurch sämtliche laufenden
-Sessions — du killst dich u. U. **selbst** mitten im Deploy. (Genau so sind schon zwei
-fremde Claude-Sessions verloren gegangen.)
+Die Unit läuft mit `KillMode=control-group`. Ein Restart beendet alle Prozesse
+**innerhalb ihrer tatsächlichen cgroup**. Ein tmux-Server und seine Panes können darin
+liegen oder unabhängig davon betrieben werden. Auch ein Restart per SSH kann fremde
+Sitzungen innerhalb der Zielgruppe beenden.
 
-**Stattdessen immer:**
-
-```bash
-deploy/term-restart
-```
-
-Das Skript snapshottet die aktiven Agent-Panes (Erkennung über `comm=claude`/`kimi` im
-Prozess-Subtree, robust gegen den `claude-auto-retry`-Wrapper), startet den Service aus einer
-**entkoppelten** transienten systemd-Unit neu (eigenes cgroup unter `system.slice`,
-`KillMode=none` → überlebt den Abriss) und setzt danach jede Session wieder auf — claude per
-`claude --resume <neueste-session-id>`, kimi per `kimi --continue` (findet die neueste Session
-im cwd selbst). Voraussetzung: passwortloses `sudo` und `systemd-run`.
-
-Der Service-Name defaultet auf `term-server`; abweichende Installationen setzen ihn per
-`TERM_SERVICE=<unit>` bzw. dauerhaft in `deploy/deploy.env`:
+**Immer den geprüften Helfer verwenden:**
 
 ```bash
-TERM_SERVICE=<unit> deploy/term-restart
+deploy/term-restart --check  # nur prüfen
+deploy/term-restart          # prüfen und entkoppelt neu starten
 ```
 
-⚠️ Laufen mehrere Instanzen auf derselben Maschine, ist der Service-Name die kritische
-Stelle: `install.sh` schlägt `term-server` als Default vor und würde eine fremde Unit per
-`sudo cp` überschreiben und auf dieses Verzeichnis umbiegen — inklusive Abriss aller dort
-laufenden tmux-/Claude-Sessions. Vor `install.sh` immer prüfen, welche Units schon existieren.
+Der Helfer prüft tmux-Server, sämtliche Panes und deren Prozessnachfahren gegen die
+`ControlGroup` der Ziel-Unit. Das gilt unabhängig vom Tool-Namen, also auch für Codex,
+Grok, Claude, Kimi, Muse und normale Shells. Gefährdete oder nicht eindeutig prüfbare
+Sitzungen führen zu **Exit 5 vor dem Restart**. In der entkoppelten Phase erfolgt die
+Prüfung erneut. Das frühere unvollständige Snapshot/Resume-Verfahren wurde entfernt:
+Es konnte weder alle Panes noch die exakte Unterhaltung zuverlässig wiederherstellen.
 
-Wenn du den Restart von **außerhalb** des Webterminals fährst (echte SSH-Sitzung, nicht im
-Service-cgroup), ist ein direktes `systemctl restart` unkritisch — aber `deploy/term-restart`
-schadet auch dort nicht und stellt die Sessions ebenso wieder her.
+Bei Exit 5 erst die Arbeit sichern und betroffene Sitzungen kontrolliert beenden bzw.
+tmux außerhalb der Webterminal-Unit betreiben. Keine cgroup-Sperre umgehen und keine
+laufenden Prozesse automatisch umhängen. Ein Betrieb außerhalb der Service-Gruppe
+bewahrt laufende Unterhaltungen einschließlich aller Fenster und Panes beim Restart.
+
+Servicename: `TERM_SERVICE=<unit>` → `deploy/deploy.env` → Erkennung des laufenden
+Repo-Backends. Ohne eindeutige Ermittlung wird abgebrochen. System-Units benötigen
+passwortloses `sudo` und `systemd-run`; User-Units benötigen einen erreichbaren User-Bus,
+aber kein `sudo`. Fehlender User-Bus führt zu Exit 4.
+
+Auf Multi-Instanz-Systemen vor `install.sh` vorhandene Units prüfen: Der Installer
+verwendet weiterhin `term-server` als vorgeschlagenen Namen und kann eine gleichnamige
+Unit überschreiben. Für Updates `deploy/update` verwenden.
 
 ### Stand-Update einspielen: `deploy/update`, nicht `install.sh`
 
@@ -52,10 +50,20 @@ Für „neuen Stand ziehen und aktiv machen" gibt es **`deploy/update`** — **n
 (das ist Installer/Konfigurator und startet einen *laufenden* Dienst **nicht** neu; nach
 `git pull && install.sh` liefe also weiter der alte `server.js`).
 
-Alle Details — Restart-Heuristik aus dem Ist-Zustand, mdlite-Transport-Fallback,
+Alle Details — Runtime-Inhaltsvergleich, mdlite-Transport über Git/SSH oder gh/HTTPS,
 Servicenamen-Ermittlung, User-Bus-Fallback (Exit 3/4), Version-Skew, Standard-Session-Wrapper,
 Self-Update-Icon — stehen im Skill `deploy-update` (`.claude/skills/deploy-update/SKILL.md`);
 er wird bei Deploy-/Update-Fragen geladen.
+
+`deploy/backend-paths.json` ist die gemeinsame Liste für Build, Server und Update:
+`server.js`, Paketmanifeste und rekursiv `lib/`. `lib/backend-version.js` berechnet einen
+Inhalts-Hash einschließlich Dateinamen; auch neue/gelöschte Module und Änderungen mit alter
+mtime zählen. Der Server hält den Hash beim Start fest, liefert ihn als `/api/version`
+und schreibt `.backend-running.json` mit PID und Hash (0600, gitignored).
+`deploy/update` vergleicht gegen die tatsächliche Dienst-PID. Fehlender/ungültiger Stamp
+führt einmalig zum sicheren Restart. Frontend- und reine Doku-Änderungen ändern diesen
+Hash nicht. Bei neuen Runtime-Verzeichnissen das Manifest ergänzen.
+
 
 ## Öffentlicher Origin: `PUBLIC_ORIGIN` setzen
 
@@ -144,6 +152,9 @@ Serverprozess — kein Webhook, keine öffentliche Erreichbarkeit nötig.
   benutzt); alle anderen Absender werden abgewiesen. Kein `--dangerously-skip-permissions`.
 - **Voraussetzung** ist ein lokal auffindbares `claude`-Binary (Auflösung wie beim gh-CLI:
   `CLAUDE_BIN` → `~/.local/bin` → übliche Pfade → PATH); fehlt es, ist die Zeile ausgegraut.
+- Fehlgeschlagene Aufträge werden **nie automatisch wiederholt**, auch nicht bei Timeout
+  oder fehlender Resume-Sitzung. Der Verlauf bleibt erhalten; `/new` startet auf ausdrücklichen
+  Wunsch ein neues Gespräch.
 - „Löschen" entfernt nur die hiesige Einrichtung — den Bot selbst löscht man bei
   @BotFather (`/deletebot`), das kann die Bot-API nicht.
 
@@ -157,6 +168,16 @@ auf `0.0.0.0` ändern. Der Server verweigert Nicht-Loopback-Adressen inzwischen 
 Schreibende HTTP-Endpunkte verlangen zusätzlich einen pro Prozess erzeugten CSRF-Token und bei
 Browserrequests einen erlaubten Origin. Originlose WebSockets sind ab Werk verboten; der Override
 `TERM_ALLOW_ORIGINLESS_WS=1` ist nur für kontrollierte Nicht-Browser-Clients gedacht.
+
+WebSocket-Fehler (z. B. Payload > 1 MiB oder ungültiges UTF-8) schließen nur die jeweilige
+Verbindung und ihr PTY. `close` und `error` verwerfen ausstehende Session-Starts.
+Integrationstests starten isolierte Backends ohne produktive Telegram-Konfiguration.
+
+Caddy-Header kommen aus `deploy/lib-caddy-security.sh`. `header -Server` bleibt ein
+**eigener** Block: Im gemeinsamen Block verzögert die Löschoperation alle Header;
+bei einem Auth-Fehler fehlen sie dann auf der 401-Antwort. Unmittelbar gesetzte CSP/HSTS
+bleiben auch dort erhalten, zusätzliche CSP-Sandbox-Regeln des Backends bleiben wirksam.
+
 
 ## Runtime: node, nicht bun
 
@@ -232,9 +253,9 @@ Was nativ **nicht** abgedeckt ist und wofür das Paket weiterhin taugt:
 - **Overload-Retry** bei anhaltendem `API Error: 529` / `overloaded_error` im Pane.
 - **Safeguard-Retry** bei „safeguards flagged this message"-Fehlalarmen.
 - **Überleben eines Prozess-Neustarts.** Das native Warten läuft *im* claude-Prozess
-  („relaunched/exited during the wait, so the task will not resume"). `deploy/term-restart`
-  reißt genau diesen Prozess ab. Der externe Monitor wird per `reconcile`-Timer neu armiert
-  und schickt nach dem Reset trotzdem „continue".
+  („relaunched/exited during the wait, so the task will not resume"). Der geprüfte `deploy/term-restart` verhindert inzwischen den Abriss gehosteter
+  tmux-Sitzungen; andere Prozessabbrüche können weiterhin auftreten. Ein externer Monitor
+  kann über seinen `reconcile`-Timer erneut armiert werden.
 
 ⚠️ **Beide gleichzeitig können sich ins Gehege kommen.** Der Monitor scrapet das Pane und
 weiß nichts vom nativen Warten; erkennt er dessen Zeile („Continuing automatically when your
