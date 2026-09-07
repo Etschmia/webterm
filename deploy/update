@@ -307,7 +307,7 @@ run_npm run build || die "Build fehlgeschlagen."
 log "Build ok -> public/"
 
 # ---- Phase 3b: Standard-Session-Wrapper (bashrc) ---------------------------
-# deploy/standard-session-wrappers.sh (claude/codex/grok/kimi aus der Standard-
+# deploy/standard-session-wrappers.sh (claude/codex/grok/kimi/muse/opencode aus der Standard-
 # Sitzung in eigene tmux-Sessions umlenken) wird aus der ~/.bashrc gesourct.
 # Zwei Dinge erledigt ein reines git pull NICHT:
 #   * Instanzen, deren install.sh-Lauf aelter ist als das Feature, haben die
@@ -320,7 +320,7 @@ log "Build ok -> public/"
 WRAP_SRC="$SCRIPT_DIR/deploy/standard-session-wrappers.sh"
 BASHRC="$HOME/.bashrc"
 if [ -f "$WRAP_SRC" ] && ! grep -qF "standard-session-wrappers.sh" "$BASHRC" 2>/dev/null; then
-  printf '\n# term-web: claude/codex/grok/kimi aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
+  printf '\n# term-web: claude/codex/grok/kimi/muse/opencode aus der Standard-Sitzung in eigene tmux-Sessions\n[ -f "%s" ] && . "%s"\n' \
     "$WRAP_SRC" "$WRAP_SRC" >> "$BASHRC"
   log "Standard-Session-Wrapper in ~/.bashrc eingebunden (Zeile fehlte noch)."
 fi

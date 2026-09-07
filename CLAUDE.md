@@ -222,7 +222,9 @@ Die Chip-Zeile der Sidebar liest Modell und Effort vorwiegend aus dem Sitzungszu
 Tools: `~/.claude/sessions/<pid>.json` → `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl`
 (dort je Assistant-Record `message.model` + `effort`), grok aus `summary.json`,
 kimi aus dem Wire-Log (+ `[thinking].effort` der
-`config.toml`), muse aus `~/.local/share/muse/runtime/muse/sessions/<id>.json`
+`config.toml`), opencode aus der jüngsten Assistant-Nachricht (`modelID`) der
+passenden Sitzung unter `~/.local/share/opencode/storage/` (kein Effort),
+muse aus `~/.local/share/muse/runtime/muse/sessions/<id>.json`
 (`process_generation_hint: "pid=…"`) → `…/muse/sessions/<Y>/<M>/<D>/<id>/session.jsonl`.
 
 Codex liest die **letzte nichtleere Pane-Zeile**, sofern sie dem Format
@@ -233,10 +235,10 @@ Fallback (letzter `turn_context`). **Nie das neueste Rollout nur anhand des cwd 
 Das kann eine alte CLI-, Desktop- oder Subagent-Sitzung mit einem anderen Modell sein.
 Fehlen beide sicheren Quellen, bleibt der Chip leer.
 
-Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — grok und
-kimi werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben Tools im selben
-Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt dann bewusst
-nichts an. Diesen Riegel nicht wegoptimieren.
+Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — grok,
+kimi und opencode werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben
+Tools im selben Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt
+dann bewusst nichts an. Diesen Riegel nicht wegoptimieren.
 
 Zwei muse-Eigenheiten, die man leicht falsch macht:
 
@@ -255,6 +257,12 @@ Erkannt wird muse über den Prozessnamen mit **Präfix** `muse-bin-`: der Launch
 `~/.local/bin/muse` ist ein Shell-Skript, das das versionierte Binary exec't
 (`comm` = `muse-bin-1.0.3-R2198.1`, von Linux auf 15 Zeichen gekürzt). Ein
 Gleichheitsvergleich wie bei den anderen Tools greift nie.
+
+Opencode wird über `comm` `opencode` erkannt; per npm als `opencode-ai`
+installiert heißt das Binary dagegen `opencode.exe` (ebenfalls gemappt).
+Der Ampel-Status kommt aus dem Pane: `esc interrupt` (ohne „to") bzw.
+`esc again to interrupt` = arbeitet, `△ Permission required` / `Allow once` /
+`Allow always` = wartet auf Freigabe.
 
 ## claude-auto-retry: seit Claude Code 2.1.234 nur noch Ergänzung
 

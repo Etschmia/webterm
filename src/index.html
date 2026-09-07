@@ -272,7 +272,7 @@
         <section>
           <h3>Modell &amp; Effort einer Agent-Session</h3>
           <p>Läuft in einer Session <code>claude</code>, <code>codex</code>, <code>grok</code>,
-          <code>kimi</code> oder <code>muse</code>, steht unter dem Namen eine kleine Zeile mit dem
+          <code>kimi</code>, <code>muse</code> oder <code>opencode</code>, steht unter dem Namen eine kleine Zeile mit dem
           <b>aktuell benutzten Modell</b> und dem <b>Effort</b> — etwa <b>Opus 5</b> ·
           <b>medium</b>. Beim Überfahren zeigt der Tooltip die vollständige Modell-ID und ob der
           Effort für <i>diese Session</i> gilt oder eine globale Einstellung des Tools ist (so bei
@@ -282,7 +282,10 @@
           Antwortschritt zu sehen. (Bei <code>codex</code> wird die aktuelle Statuszeile mit passendem Pfad gelesen,
           alternativ ein eindeutig vom Prozess geöffnetes Sitzungsprotokoll. <code>muse</code> schreibt seinen
           Effort nirgends mit, er wird aus dessen Statuszeile gelesen — und nur übernommen, wenn
-          das dort genannte Modell zum protokollierten passt.) Steht dort <b>nichts</b>, ließ sich
+          das dort genannte Modell zum protokollierten passt. Bei <code>opencode</code> wird die
+          jüngste Assistant-Nachricht der passenden Sitzung unter
+          <code>~/.local/share/opencode/storage/</code> gelesen; einen Effort kennt opencode
+          nicht.) Steht dort <b>nichts</b>, ließ sich
           die Session nicht zweifelsfrei zuordnen (etwa wenn zwei gleiche Tools im selben
           Verzeichnis laufen) — dann bleibt die Zeile lieber leer, statt womöglich das Falsche zu
           behaupten.</p>
@@ -300,7 +303,8 @@
           <h3>Sessions</h3>
           <p>Der Eintrag <b>Standard</b> ist eine persistente tmux-Sitzung — sie überlebt
           Seiten-Reload und Verbindungsabbruch. Startet man dort <code>claude</code>,
-          <code>codex</code>, <code>grok</code>, <code>kimi</code> oder <code>muse</code>, bekommt das
+          <code>codex</code>, <code>grok</code>, <code>kimi</code>, <code>muse</code> oder
+          <code>opencode</code>, bekommt das
           Tool automatisch eine
           <b>eigene tmux-Session</b> und die Ansicht wechselt dorthin — die Standard-Shell
           bleibt frei. Darunter erscheinen alle weiteren

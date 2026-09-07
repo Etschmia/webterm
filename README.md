@@ -46,16 +46,18 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   (Attach, Copy-Mode via `-t`) wird immer der echte Session-Name verwendet; der Tooltip zeigt
   beides.
 - **Modell & Effort je Agent-Session**: Läuft in einer Session `claude`, `codex`, `grok`,
-  `kimi` oder `muse`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell**
+  `kimi`, `muse` oder `opencode`, steht unter dem Namen eine Chip-Zeile mit dem **aktuell benutzten Modell**
   und dem **Effort** (z. B. `Opus 5` · `medium`). Gelesen wird das vorwiegend aus dem
   Sitzungszustand der Tools unter `$HOME`:
   `~/.claude/sessions/<pid>.json` → Transcript (Modell/Effort stehen dort **pro Turn**, ein
   `/model`-Wechsel ist also sofort sichtbar), bei codex die aktuelle Statuszeile mit passendem Pfad
   (alternativ der letzte `turn_context` eines vom Prozess eindeutig geöffneten Rollouts),
   bei grok `summary.json`, bei kimi das Wire-Log (Effort dort nur global aus der `config.toml`;
-  der Tooltip sagt das dazu), bei muse die PID-Registry unter
+  der Tooltip sagt das dazu), bei opencode die jüngste Assistant-Nachricht (`modelID`) der
+  passenden Sitzung unter `~/.local/share/opencode/storage/` (einen Effort kennt opencode
+  nicht), bei muse die PID-Registry unter
   `~/.local/share/muse/runtime/` → `session.jsonl` (dort steht das Modell am **Anfang**, nicht
-  am Ende). Claude und muse führen eine PID-Registry — grok und kimi werden über
+  am Ende). Claude und muse führen eine PID-Registry — grok, kimi und opencode werden über
   das Arbeitsverzeichnis des Prozesses zugeordnet; laufen zwei gleiche Tools im **selben**
   Verzeichnis, bleibt die Zeile bewusst leer statt womöglich falsch. Auch muse nutzt das Pane:
   Es protokolliert seinen Effort nirgends, er wird aus dessen Statuszeile gelesen
@@ -79,7 +81,7 @@ Browser → Caddy :443 (TLS + Zugangsschutz) → reverse_proxy 127.0.0.1:7681 �
 - `server.js` — HTTP-Static + WebSocket→PTY + REST `/api/sessions`. Bindet nur `127.0.0.1:7681`,
   prüft WS-Origins und schützt schreibende HTTP-Endpunkte per Origin + CSRF-Token.
   Weitere APIs vermitteln Datei-Explorer/Editor, Clipboard-Bilder, Self-Update und GitHub-Issues.
-- `lib/` — Sicherheitsprüfungen, Telegram, Codex-Modellerkennung und Backend-Version.
+- `lib/` — Sicherheitsprüfungen, Telegram, Codex-/Opencode-Modellerkennung und Backend-Version.
 - `src/` — Frontend (`index.html`, `app.js`, `styles.css`), Dark-Theme nach dem Depot-Design-System.
 - `build.mjs` — esbuild-Bundle (`src/app.js` + xterm) → `public/`.
 - `deploy/` — Deployment-Helfer (`term-restart`, Cron-Update-Check, `git-status.sh` für die
@@ -132,10 +134,10 @@ npm start             # node server.js  (HOST=127.0.0.1 PORT=7681)
   den Backend-Inhalts-Hash sowie den HEAD-Kurzhash für den Frontend-Autoreload. Der Server
   berechnet seinen Backend-Hash einmal beim Start und liefert ihn unter `/api/version`.
   Abweichungen zeigen „Backend veraltet“ an. Auch eine reine Änderung in `lib/` wird erfasst.
-- **claude/codex/grok/kimi/muse in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
+- **claude/codex/grok/kimi/muse/opencode in eigenen Sessions**: Die Standard-Sitzung ist selbst eine
   tmux-Session — direkt darin gestartete Tools bekämen keine eigene Session mehr.
   `deploy/standard-session-wrappers.sh` (von `install.sh` in die `~/.bashrc` eingehängt)
-  legt beim Aufruf von `claude`/`codex`/`grok`/`kimi`/`muse` aus der Standard-Sitzung automatisch eine
+  legt beim Aufruf von `claude`/`codex`/`grok`/`kimi`/`muse`/`opencode` aus der Standard-Sitzung automatisch eine
   neue tmux-Session an (`<tool>-<verzeichnis>`) und wechselt dorthin; eine vorhandene
   `claude`-Funktion (claude-auto-retry) wird gesichert und weiter durchgereicht.
 - **Ohne sudo (User ohne Root-Rechte)**: die oben genannte **systemd-User-Unit**

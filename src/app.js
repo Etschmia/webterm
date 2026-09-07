@@ -794,9 +794,9 @@ function isGenericClaudeTitle(clean) {
 }
 
 // Welcher Agent laeuft in der Session ('claude'|'kimi'|'codex'|'grok'|'muse'|
-// null)? Primaer das aktuelle agent-Feld; der Rueckfall aufs alte claude-Flag
-// ueberbrueckt den Version-Skew kurz nach einem Deploy (neues Frontend, altes
-// Backend).
+// 'opencode'|null)? Primaer das aktuelle agent-Feld; der Rueckfall aufs alte
+// claude-Flag ueberbrueckt den Version-Skew kurz nach einem Deploy (neues
+// Frontend, altes Backend).
 function agentOf(s) {
   if (s.agent !== undefined) return s.agent;
   return s.claude ? 'claude' : null;
@@ -806,6 +806,7 @@ function agentOf(s) {
 // Unbekannt (auch: altes Backend ohne agent-Feld) faellt auf "Claude" zurueck.
 const AGENT_NAMES = {
   claude: 'Claude', kimi: 'Kimi', codex: 'Codex', grok: 'Grok', muse: 'Muse',
+  opencode: 'Opencode',
 };
 function agentName(s) {
   return AGENT_NAMES[agentOf(s)] || 'Claude';

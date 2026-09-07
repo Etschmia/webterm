@@ -19,6 +19,7 @@ import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 import { backendVersion } from './lib/backend-version.js';
 import { codexModelFromPane, codexRolloutForPid } from './lib/codex-model.js';
+import { opencodeMessageFiles, opencodeModelFromFiles } from './lib/opencode-model.js';
 import {
   canonicalOrigin, isLoopbackHost, isPathInside, terminalSize, validCsrfRequest,
 } from './lib/security.js';
@@ -123,17 +124,20 @@ function tmux(args) {
 }
 
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
-const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse'];
+const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse', 'opencode'];
 
-// comm -> Agent-Name. Normalerweise identisch; muse ist die Ausnahme: der
-// Launcher ~/.local/bin/muse ist ein Shell-Skript, das das VERSIONIERTE Binary
-// exec't — comm heisst dann 'muse-bin-1.0.3-R2198.1' (und wird von Linux auf
-// 15 Zeichen gekuerzt: 'muse-bin-1.0.3-'). Ein Gleichheitsvergleich findet die
-// Session deshalb nie; nach jedem muse-Update waere es ausserdem ein anderer
-// Name.
+// comm -> Agent-Name. Normalerweise identisch; zwei Ausnahmen:
+// muse: der Launcher ~/.local/bin/muse ist ein Shell-Skript, das das
+// VERSIONIERTE Binary exec't — comm heisst dann 'muse-bin-1.0.3-R2198.1'
+// (und wird von Linux auf 15 Zeichen gekuerzt: 'muse-bin-1.0.3-'). Ein
+// Gleichheitsvergleich findet die Session deshalb nie; nach jedem
+// muse-Update waere es ausserdem ein anderer Name.
+// opencode: per npm als opencode-ai installiert heisst das Binary
+// 'opencode.exe' (comm), per Install-Skript dagegen 'opencode'.
 function agentFromComm(comm) {
   if (AGENT_COMMANDS.includes(comm)) return comm;
   if (comm.startsWith('muse-bin-')) return 'muse';
+  if (comm === 'opencode.exe') return 'opencode';
   return null;
 }
 
@@ -158,7 +162,7 @@ async function agentSessions() {
     });
   });
   const parent = new Map();
-  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'|'muse'
+  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'|'muse'|'opencode'
   for (const line of ps.split('\n')) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
@@ -199,6 +203,10 @@ async function agentSessions() {
 //   kimi    ~/.kimi-code/sessions/wd_<dir>_<hash>/session_*/agents/main/
 //           wire.jsonl -> `model`; einen Effort kennt die Sitzung nicht, der
 //           steht global in ~/.kimi-code/config.toml ([thinking].effort)
+//   opencode ~/.local/share/opencode/storage/session/<projectID>/ses_*.json
+//           (`directory` == Prozess-cwd) -> juengste Assistant-Nachricht mit
+//           `modelID` aus storage/message/<sessionID>/msg_*.json; einen Effort
+//           kennt opencode nicht (s. lib/opencode-model.js)
 //   muse    ~/.local/share/muse/runtime/muse/sessions/<sessionId>.json
 //           -> `process_generation_hint: "pid=<pid>"` (PID-Registry!), dann
 //           ~/.local/share/muse/sessions/<Y>/<M>/<D>/<sessionId>/session.jsonl
@@ -207,10 +215,10 @@ async function agentSessions() {
 //           mit; er kommt aus der Pane-Statuszeile
 //           (s. museEffortFromPane).
 //
-// claude und muse fuehren eine PID-Registry; grok und kimi sind nur ueber
-// das Arbeitsverzeichnis zuzuordnen. Codex braucht Pane oder offene Datei —
-// daher der Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche Tools im
-// selben Verzeichnis => lieber nichts anzeigen als das Falsche).
+// claude und muse fuehren eine PID-Registry; grok, kimi und opencode sind nur
+// ueber das Arbeitsverzeichnis zuzuordnen. Codex braucht Pane oder offene
+// Datei — daher der Mehrdeutigkeits-Riegel in listSessions() (zwei gleiche
+// Tools im selben Verzeichnis => lieber nichts anzeigen als das Falsche).
 
 function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -418,6 +426,16 @@ function kimiModelInfo(cwd) {
   return model ? { model, effort: kimiEffort() } : null;
 }
 
+// opencode: Sitzungsliste nach Prozess-cwd filtern, Modell aus der juengsten
+// Assistant-Nachricht (s. lib/opencode-model.js). Gecacht wird nur das Parsen
+// der Nachrichten — die Dateiliste wird je Poll neu erstellt (reine stats),
+// damit eine neue Nachricht sofort zaehlt.
+function opencodeModelInfo(cwd) {
+  const files = opencodeMessageFiles(path.join(HOME, '.local', 'share', 'opencode', 'storage'), cwd);
+  if (!files.length) return null;
+  return cachedBySig(`opencode:${files[0]}`, statSig(files[0]), () => opencodeModelFromFiles(files));
+}
+
 // --- muse (Meta "Muse Code") ------------------------------------------------
 // Besonderheit gegenueber den anderen Tools: der Sitzungslog liegt nicht flach
 // im Tool-Verzeichnis, sondern unter <sessions>/<Y>/<M>/<D>/<sessionId>/ — die
@@ -550,6 +568,7 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
     if (agent === 'codex') return codexModelInfo(pid, cwd, paneTail);
     if (agent === 'grok') return grokModelInfo(cwd);
     if (agent === 'kimi') return kimiModelInfo(cwd);
+    if (agent === 'opencode') return opencodeModelInfo(cwd);
   } catch { /* defekte/teilgeschriebene Datei: lieber nichts anzeigen */ }
   return null;
 }
@@ -579,6 +598,15 @@ async function agentPaneStatus(name, title, agent) {
 }
 
 function agentStatusFromTail(tail, agent) {
+  if (agent === 'opencode') {
+    // Freigabe-Dialog: "△ Permission required" mit "Allow once / Allow always
+    // / Reject" (Fusszeile "Esc to cancel · Tab to amend").
+    if (/Permission required/i.test(tail) || /\bAllow (once|always)\b/.test(tail)) return 'blocked';
+    // Arbeitet: Fusszeile "esc interrupt" (ohne "to") bzw.
+    // "esc again to interrupt", teils mit Spinner und Laufzeit.
+    if (/esc\s+(again\s+to\s+|to\s+)?interrupt/i.test(tail)) return 'working';
+    return 'idle';
+  }
   if (agent === 'muse') {
     // Freigabe-Dialog: die Auswahl heisst immer "Allow once" / "Allow for this
     // session" / "Reject" / "Always allow in this workspace".
@@ -637,8 +665,8 @@ async function listSessions() {
         command: command || '',
         path: path || '',
         // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi'|'codex'|
-        // 'grok'|'muse')? Steuert das Sidebar-Label ("<Verzeichnis> — Claude"), das
-        // nach dem Beenden wieder verschwindet.
+        // 'grok'|'muse'|'opencode')? Steuert das Sidebar-Label
+        // ("<Verzeichnis> — Claude"), das nach dem Beenden wieder verschwindet.
         agent: (agents.get(name) || {}).agent || null,
         // PID des Agenten — nur intern (Modell-/Effort-Lookup), wird unten
         // wieder entfernt und geht nicht an den Client.
