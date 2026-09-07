@@ -15,9 +15,14 @@ try {
   const processes = records.trim().split('\n').map(line => {
     const [, pid, ppid, comm] = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     let groups = [];
+    let gone = false;
     try { groups = fs.readFileSync(`/proc/${pid}/cgroup`, 'utf8').trim().split('\n').map(line => line.split(':').slice(2).join(':')); }
-    catch { /* Unbekannte tmux-Prozessgruppen werden unten abgewiesen. */ }
-    return { pid, ppid, comm, groups };
+    catch (error) {
+      // Beendet zwischen `ps` und diesem Lesen (haeufig der eigene `ps`-Kindprozess):
+      // kein Risiko. Alles andere bleibt eine unbekannte Gruppe und wird abgewiesen.
+      gone = error.code === 'ENOENT' && !fs.existsSync(`/proc/${pid}`);
+    }
+    return { pid, ppid, comm, groups, gone };
   });
   // Auch Server auf benannten/custom Sockets pruefen, nicht nur den aktuellen.
   panes.push(...processes.filter(p => p.comm === 'tmux: server').map(p => p.pid));

@@ -20,3 +20,9 @@ test('unknown cgroups and missing pane PIDs fail closed', () => {
   assert.throws(() => restartRisks(service, [proc(1, 0, null)], [], 1), /unbekannt/);
   assert.throws(() => restartRisks(service, [], [2], 1), /unbekannt/);
 });
+test('processes that exited during the scan are no risk, unlike live ones without a group', () => {
+  const scanned = { pid: 4, ppid: 2, groups: [], gone: true };
+  const records = [proc(1, 0, '/tmux'), proc(2, 1, '/tmux'), scanned];
+  assert.deepEqual(restartRisks(service, records, [2], 1), []);
+  assert.deepEqual(restartRisks(service, [...records.slice(0, 2), { ...scanned, gone: false }], [2], 1).map(p => p.pid), [4]);
+});
