@@ -43,6 +43,17 @@ const copies = [
   // Prose-Styles der Markdown-Vorschau aus der mdlite-Bibliothek (single source of truth).
   [path.join(__dirname, 'node_modules/mdlite/src/mdlite.css'), path.join(PUBLIC, 'mdlite.css')],
 ];
+// Terminal-Schrift mitliefern (JetBrains Mono, OFL): Ohne sie faellt z. B. Windows
+// auf Consolas zurueck, das in xterms festen Zellen gequetscht und duenn wirkt.
+// Nur latin + latin-ext in 400/700; Rahmen-/Blockzeichen zeichnet der WebGL-Renderer.
+const FONT_SRC = path.join(__dirname, 'node_modules/@fontsource/jetbrains-mono/files');
+fs.mkdirSync(path.join(PUBLIC, 'fonts'), { recursive: true });
+for (const subset of ['latin', 'latin-ext']) {
+  for (const weight of [400, 700]) {
+    const name = `jetbrains-mono-${subset}-${weight}-normal.woff2`;
+    copies.push([path.join(FONT_SRC, name), path.join(PUBLIC, 'fonts', name)]);
+  }
+}
 function copyAssets() {
   for (const [from, to] of copies) fs.copyFileSync(from, to);
 }

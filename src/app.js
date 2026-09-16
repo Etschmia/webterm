@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 // Editor-Fenster (Datei-Explorer -> Bearbeiten)
 import { basicSetup } from 'codemirror';
 import { EditorView, keymap } from '@codemirror/view';
@@ -52,8 +53,15 @@ const themeLight = {
 };
 const theme = document.documentElement.dataset.theme === 'light' ? themeLight : themeDark;
 
+// Terminal-Schrift: zuerst die mitgelieferte JetBrains Mono (styles.css/@font-face),
+// damit das Terminal auf jedem System gleich aussieht. Sie wird erst nach dem Laden
+// eingesetzt (s. u.) — xterm misst die Zelle beim Setzen der Schrift und wuerde sonst
+// dauerhaft mit den Massen der Fallback-Schrift rendern.
+const TERM_FONT_FALLBACK = 'ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
+const TERM_FONT = `"JetBrains Mono Web", ${TERM_FONT_FALLBACK}`;
+
 const term = new Terminal({
-  fontFamily: 'ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+  fontFamily: TERM_FONT_FALLBACK,
   fontSize: 13.5,
   lineHeight: 1.05,
   cursorBlink: true,
@@ -73,6 +81,28 @@ term.loadAddon(searchAddon);
 // Links im Terminal selbst klickbar (oeffnen in neuem Tab).
 term.loadAddon(new WebLinksAddon((event, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
 term.open(document.getElementById('terminal'));
+
+// WebGL-Renderer: schaerfere Glyphen und selbst gezeichnete Rahmen-/Blockzeichen
+// (customGlyphs) — Claude-Logo, Trennlinien und Boxen schliessen ohne Luecken an.
+// Ohne WebGL oder nach Kontextverlust bleibt bzw. faellt xterm auf den DOM-Renderer.
+try {
+  const webgl = new WebglAddon();
+  webgl.onContextLoss(() => { webgl.dispose(); scheduleFit(); });
+  term.loadAddon(webgl);
+} catch (err) {
+  console.warn('WebGL-Renderer nicht verfuegbar, nutze DOM-Renderer', err);
+}
+
+if (document.fonts?.load) {
+  Promise.all([
+    document.fonts.load('400 13.5px "JetBrains Mono Web"'),
+    document.fonts.load('700 13.5px "JetBrains Mono Web"'),
+  ]).then((faces) => {
+    if (!faces.some((f) => f.length)) return;
+    term.options.fontFamily = TERM_FONT; // loest Neuvermessung + Atlas-Neuaufbau aus
+    scheduleFit();
+  }).catch(() => {});
+}
 
 // ---------------------------------------------------------------- Theme-Umschalter
 // data-theme setzt bereits ein Inline-Skript im <head> (vor dem ersten Paint);
