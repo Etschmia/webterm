@@ -1021,6 +1021,13 @@ body.col-resizing, body.col-resizing * {
   color: var(--muted-foreground);
   background: var(--panel-tint);
 }
+.fx-branch { cursor: pointer; }
+.fx-branch:hover, .fx-branch:focus-visible {
+  color: var(--foreground);
+  border-color: var(--border-strong);
+  background: var(--hover);
+  outline: none;
+}
 .fx-branch svg { flex: 0 0 auto; opacity: 0.75; }
 .fx-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-branch.detached { font-family: var(--font-mono); font-size: 10.5px; }
@@ -1237,6 +1244,7 @@ body.col-resizing, body.col-resizing * {
   text-align: left;
 }
 .fx-menu button:hover:not(:disabled) { background: var(--hover); }
+.fx-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 .fx-menu button:disabled { color: var(--muted-foreground); opacity: 0.55; cursor: default; }
 .fx-menu .fx-mi {
   flex: 0 0 auto;
@@ -1402,6 +1410,139 @@ body.col-resizing, body.col-resizing * {
 .md-hint { flex: 0 0 auto; opacity: 0.7; }
 .md-body::-webkit-scrollbar { width: 8px; height: 8px; }
 .md-body::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+
+.md-win:focus { outline: none; }
+
+/* --- Git-Log (.gl-*) und Commit-Diff (.gd-*): Fenster aus makeWin() --- */
+.gl-win .md-body, .gd-win .md-body { padding: 0; }
+.gl-row {
+  padding: 7px 12px 7px 10px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+.gl-row:hover { background: var(--hover); }
+.gl-row.sel { background: var(--hover-strong); border-left-color: var(--primary); }
+.gl-subject {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.gl-subject-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-unpushed { flex: 0 0 auto; color: var(--git-new); font-weight: 700; }
+.gl-ref {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--muted-foreground);
+  background: var(--panel-tint);
+}
+.gl-ref.head { color: var(--primary); border-color: var(--primary); }
+.gl-ref.tag { color: var(--git-mod); border-color: var(--git-mod); }
+.gl-ref.remote { opacity: 0.8; }
+.gl-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  min-width: 0;
+}
+.gl-hash { flex: 0 0 auto; font-family: var(--font-mono); font-size: 10.5px; }
+.gl-author { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-when { flex: 0 0 auto; margin-left: auto; }
+.gl-note, .gd-note { padding: 14px 16px; font-size: 12px; color: var(--muted-foreground); }
+.gl-note.err, .gd-note.err { color: var(--git-del); }
+
+.gd-commit { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.gd-msg {
+  margin: 0 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gd-msg::first-line { font-weight: 600; }
+.gd-meta { font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.gd-toc { padding: 8px 8px; border-bottom: 1px solid var(--border); }
+.gd-toc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.gd-toc-item:hover { background: var(--hover); }
+.gd-fname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.gd-counts { flex: 0 0 auto; display: inline-flex; gap: 6px; font-family: var(--font-mono); font-size: 10.5px; }
+.gd-counts .add, .gd-status.s-A { color: var(--git-new); }
+.gd-counts .del, .gd-status.s-D { color: var(--git-del); }
+.gd-status { flex: 0 0 auto; font-size: 10.5px; color: var(--git-ren); }
+.gd-file { border-bottom: 1px solid var(--border); }
+.gd-file > summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  list-style: none;
+}
+.gd-file > summary::-webkit-details-marker { display: none; }
+.gd-file > summary::before { content: '▸'; flex: 0 0 auto; font-size: 10px; color: var(--muted-foreground); }
+.gd-file[open] > summary::before { content: '▾'; }
+.gd-code {
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.gd-hunk {
+  padding: 2px 12px;
+  min-width: max-content;
+  color: var(--muted-foreground);
+  background: var(--panel-tint);
+}
+.gd-line { display: flex; min-width: max-content; }
+.gd-no {
+  flex: 0 0 auto;
+  width: 4.5ch;
+  padding-right: 6px;
+  text-align: right;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+  user-select: none;
+}
+.gd-text { flex: 1 0 auto; padding: 0 12px 0 6px; white-space: pre; tab-size: 4; }
+.gd-line.add { background: color-mix(in oklch, var(--git-new) 16%, transparent); }
+.gd-line.del { background: color-mix(in oklch, var(--git-del) 16%, transparent); }
+.gd-line.meta .gd-text { color: var(--muted-foreground); font-style: italic; }
 
 /* CodeMirror-Panels (Suche via Strg+F) und Tooltips ans Theme angleichen */
 .ed-win .cm-panels {

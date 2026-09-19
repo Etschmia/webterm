@@ -1027,6 +1027,95 @@ async function gitDirStatus(abs) {
   return data;
 }
 
+// --- Git-Historie (Log-Fenster + Commit-Diff im Frontend) -------------------
+// Rein lesend. Revisionen werden strikt als Hex-Hash validiert und Pfade stehen
+// hinter '--' — nichts aus der Anfrage kann als git-Option gelesen werden.
+// --no-ext-diff/--no-textconv: keine im Repo konfigurierten Fremdprogramme.
+const GIT_LOG_MAX = 200;
+const GIT_SHOW_MAX_BYTES = 2 * 1024 * 1024;
+const GIT_REV_RE = /^[0-9a-f]{7,64}$/;
+
+// Arbeitsverzeichnis + Pathspec fuer einen Explorer-Eintrag: eine Datei wird
+// ueber ihr Verzeichnis angesprochen (cwd muss ein Verzeichnis sein).
+async function gitTarget(real) {
+  let st;
+  try { st = await fs.promises.stat(real); } catch { return null; }
+  return st.isDirectory()
+    ? { cwd: real, spec: '.', isDir: true }
+    : { cwd: path.dirname(real), spec: path.basename(real), isDir: false };
+}
+
+// spec: null = ganzes Repo; sonst nur Commits, die diesen Pfad beruehren
+// (--follow verfolgt Umbenennungen, kann aber nur genau EINE Datei).
+async function gitLog(abs, skip, limit, spec = null, follow = false) {
+  // Ein Commit mehr als verlangt -> 'more', ohne zweiten Aufruf.
+  // --literal-pathspecs: ein Dateiname wie '*.js' oder ':(top)x' ist kein Muster.
+  const out = await gitIn(abs, [
+    '--literal-pathspecs', '-c', 'core.quotepath=false', 'log', '--no-color', '-z',
+    `--skip=${skip}`, `-n${limit + 1}`, ...(follow ? ['--follow'] : []),
+    '--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%s', '--', ...(spec ? [spec] : []),
+  ]);
+  if (out == null) return null;
+  const commits = [];
+  for (const rec of out.split('\0')) {
+    if (!rec) continue;
+    const [hash, short, author, at, refs, ...subject] = rec.split('\x1f');
+    commits.push({ hash, short, author, at: +at || 0, refs: refs || '', subject: subject.join(' ') });
+  }
+  const more = commits.length > limit;
+  if (more) commits.length = limit;
+  const data = { commits, more };
+  if (skip === 0) {
+    // Noch nicht gepushte Commits (nur mit Upstream; sonst bleibt die Liste leer).
+    const un = await gitIn(abs, ['rev-list', '--max-count=500', '@{u}..HEAD', '--']);
+    data.unpushed = un ? un.split('\n').filter(Boolean) : [];
+    if (spec) {
+      // Repo-relativer Pfad des Eintrags: damit findet das Frontend im Commit-Diff
+      // den passenden Datei-Abschnitt.
+      const prefix = await gitIn(abs, ['rev-parse', '--show-prefix']);
+      data.scopePath = ((prefix || '').split('\n')[0] + (spec === '.' ? '' : spec)).replace(/\/$/, '');
+    }
+  }
+  return data;
+}
+
+// git-Aufruf mit Patch-Ausgabe; bei Ueberlauf an einer Zeilengrenze gekuerzt.
+function gitPatch(cwd, args) {
+  return new Promise((resolve) => {
+    execFile('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', ...args],
+      { cwd, timeout: 10000, maxBuffer: GIT_SHOW_MAX_BYTES }, (err, stdout) => {
+        const truncated = !!err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        if (err && !truncated) return resolve(null);
+        resolve({ out: truncated ? stdout.slice(0, stdout.lastIndexOf('\n') + 1) : stdout, truncated });
+      });
+  });
+}
+
+// Ungespeicherter Stand (Arbeitsverzeichnis + Index) gegen HEAD, auf spec begrenzt.
+async function gitWorkDiff(cwd, spec) {
+  const r = await gitPatch(cwd, [
+    'diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', spec,
+  ]);
+  return r && { diff: r.out, truncated: r.truncated };
+}
+
+async function gitShow(abs, rev) {
+  const r = await gitPatch(abs, [
+    'show', '--no-color', '--no-ext-diff', '--no-textconv',
+    '-M', '--diff-merges=first-parent', '--patch',
+    '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%B%x00', rev, '--',
+  ]);
+  const nul = r ? r.out.indexOf('\0') : -1;
+  if (nul < 0) return null;
+  const [hash, short, author, email, at, parents, ...body] = r.out.slice(0, nul).split('\x1f');
+  return {
+    hash, short, author, email, at: +at || 0,
+    parents: parents ? parents.split(' ') : [],
+    message: body.join(' ').trim(),
+    diff: r.out.slice(nul + 1).replace(/^\n+/, ''), truncated: r.truncated,
+  };
+}
+
 async function handleFs(req, res, route) {
   const u = new URL(req.url, 'http://localhost');
 
@@ -1087,6 +1176,47 @@ async function handleFs(req, res, route) {
     const real = await safeExistingPath(abs);
     if (!real) return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden oder ausserhalb von FS_ROOT' });
     return sendJson(res, 200, await gitDirStatus(real));
+  }
+
+  // Commit-Liste des Repos, in dem das Verzeichnis liegt -> { commits, more,
+  // unpushed }. Seitenweise ueber skip/limit (das Frontend laedt beim Scrollen nach).
+  if (route === '/api/fs/git/log' && req.method === 'GET') {
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden oder ausserhalb von FS_ROOT' });
+    const skip = Math.max(0, parseInt(u.searchParams.get('skip'), 10) || 0);
+    const limit = Math.min(GIT_LOG_MAX, Math.max(1, parseInt(u.searchParams.get('limit'), 10) || 100));
+    // scope=1: nur die Historie des Eintrags selbst (Datei oder Verzeichnis).
+    let data;
+    if (u.searchParams.get('scope') === '1') {
+      const tg = await gitTarget(real);
+      data = tg && await gitLog(tg.cwd, skip, limit, tg.spec, !tg.isDir);
+    } else {
+      data = await gitLog(real, skip, limit);
+    }
+    if (!data) return sendJson(res, 404, { error: 'Kein git-Repository oder git log fehlgeschlagen' });
+    return sendJson(res, 200, data);
+  }
+
+  // Ein Commit mit Patch -> { hash, author, message, diff, truncated, ... }.
+  if (route === '/api/fs/git/show' && req.method === 'GET') {
+    const rev = u.searchParams.get('rev') || '';
+    if (!GIT_REV_RE.test(rev)) return sendJson(res, 400, { error: 'Ungueltige Revision' });
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Verzeichnis nicht gefunden oder ausserhalb von FS_ROOT' });
+    const tg = await gitTarget(real);
+    const data = tg && await gitShow(tg.cwd, rev);
+    if (!data) return sendJson(res, 404, { error: 'Commit nicht gefunden' });
+    return sendJson(res, 200, data);
+  }
+
+  // Aenderungen eines Eintrags gegenueber HEAD -> { diff, truncated }.
+  if (route === '/api/fs/git/diff' && req.method === 'GET') {
+    const real = await safeExistingPath(abs);
+    if (!real) return sendJson(res, 404, { error: 'Nicht gefunden oder ausserhalb von FS_ROOT' });
+    const tg = await gitTarget(real);
+    const data = tg && await gitWorkDiff(tg.cwd, tg.spec);
+    if (!data) return sendJson(res, 404, { error: 'Kein git-Repository oder noch kein Commit' });
+    return sendJson(res, 200, data);
   }
 
   // Datei herunterladen (als Attachment).

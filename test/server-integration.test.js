@@ -102,3 +102,68 @@ test('HTTP guards reject CSRF and external symlinks while atomic uploads work', 
   assert.equal(fs.readFileSync(path.join(server.home, 'normal'), 'utf8'), 'new content');
   assert.equal(fs.statSync(path.join(server.home, 'normal')).mode & 0o777, 0o600);
 });
+
+test('git log and show endpoints page commits and reject non-hash revisions', { timeout: 15000 }, async t => {
+  const server = await startServer(t);
+  const repo = path.join(server.home, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args) => assert.equal(spawnSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: repo }).status, 0);
+  git('init', '-q', '-b', 'main');
+  for (const n of [1, 2, 3]) {
+    fs.writeFileSync(path.join(repo, 'a.txt'), `line ${n}\n`);
+    git('add', 'a.txt');
+    git('commit', '-q', '-m', `commit ${n}`);
+  }
+  const log = await (await fetch(server.base + '/api/fs/git/log?path=repo&limit=2')).json();
+  assert.deepEqual(log.commits.map(c => c.subject), ['commit 3', 'commit 2']);
+  assert.equal(log.more, true);
+  assert.deepEqual(log.unpushed, []);
+  assert.match(log.commits[0].refs, /HEAD -> main/);
+  const rest = await (await fetch(server.base + '/api/fs/git/log?path=repo&skip=2&limit=2')).json();
+  assert.deepEqual(rest.commits.map(c => c.subject), ['commit 1']);
+  assert.equal(rest.more, false);
+
+  const show = await (await fetch(server.base + `/api/fs/git/show?path=repo&rev=${log.commits[0].hash}`)).json();
+  assert.equal(show.message, 'commit 3');
+  assert.match(show.diff, /^diff --git a\/a\.txt b\/a\.txt/);
+  assert.match(show.diff, /\n-line 2\n\+line 3\n/);
+  assert.equal(show.truncated, false);
+
+  for (const rev of ['HEAD', '--output=x', 'main', 'abc']) {
+    assert.equal((await fetch(server.base + '/api/fs/git/show?path=repo&rev=' + encodeURIComponent(rev))).status, 400);
+  }
+  assert.equal((await fetch(server.base + '/api/fs/git/show?path=repo&rev=' + 'f'.repeat(40))).status, 404);
+  assert.equal((await fetch(server.base + '/api/fs/git/log?path=')).status, 404);
+
+  // Historie eines Eintrags: --follow ueber eine Umbenennung, Verzeichnis als Pathspec,
+  // Dateinamen mit Pathspec-Magie bleiben woertlich.
+  git('mv', 'a.txt', 'b.txt');
+  git('commit', '-q', '-m', 'rename');
+  fs.mkdirSync(path.join(repo, 'sub'));
+  fs.writeFileSync(path.join(repo, 'sub', '*.txt'), 'star\n');
+  fs.writeFileSync(path.join(repo, 'sub', 'c.txt'), 'c\n');
+  git('add', 'sub');
+  git('commit', '-q', '-m', 'sub');
+  const scoped = p => fetch(server.base + '/api/fs/git/log?scope=1&path=' + encodeURIComponent(p)).then(r => r.json());
+  const hist = await scoped('repo/b.txt');
+  assert.deepEqual(hist.commits.map(c => c.subject), ['rename', 'commit 3', 'commit 2', 'commit 1']);
+  assert.equal(hist.scopePath, 'b.txt');
+  const dirHist = await scoped('repo/sub');
+  assert.deepEqual(dirHist.commits.map(c => c.subject), ['sub']);
+  assert.equal(dirHist.scopePath, 'sub');
+  assert.equal((await scoped('repo/sub/*.txt')).scopePath, 'sub/*.txt');
+  // show funktioniert auch mit einer Datei als path (cwd = deren Verzeichnis).
+  assert.equal((await fetch(server.base + `/api/fs/git/show?path=repo%2Fb.txt&rev=${hist.commits[0].hash}`)).status, 200);
+
+  // Stand gegen HEAD: Arbeitsverzeichnis + staged, auf den Eintrag begrenzt.
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'line 3\nnew\n');
+  fs.writeFileSync(path.join(repo, 'sub', 'c.txt'), 'changed\n');
+  git('add', 'sub/c.txt');
+  const work = p => fetch(server.base + '/api/fs/git/diff?path=' + encodeURIComponent(p)).then(r => r.json());
+  const fileDiff = await work('repo/b.txt');
+  assert.match(fileDiff.diff, /\n\+new\n/);
+  assert.doesNotMatch(fileDiff.diff, /c\.txt/);
+  assert.match((await work('repo/sub')).diff, /\n\+changed\n/);
+  assert.equal((await work('repo/sub/*.txt')).diff, '');
+  assert.match((await work('repo')).diff, /b\.txt[\s\S]*c\.txt/);
+});

@@ -399,7 +399,7 @@ function scheduleFit() {
 }
 
 // ResizeObserver deckt alle Groessenaenderungen ab (Fenster, Zoom, DevTools).
-const ro = new ResizeObserver(() => { scheduleFit(); edClampToWork(); });
+const ro = new ResizeObserver(() => { scheduleFit(); edClampToWork(); winClampAll(); });
 ro.observe(workEl);
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFit);
 
@@ -1811,6 +1811,20 @@ function fxApplyGit() {
   }
 }
 
+// git-Eintraege fuers Kontextmenue eines Explorer-Eintrags. Der Code kommt aus
+// dem Status des angezeigten Verzeichnisses: kein Code = versioniert und
+// unveraendert; '?'/'!' = git kennt den Eintrag nicht -> keine Historie.
+function fxGitMenu(child, name) {
+  if (fxGit.path !== fxPath || !fxGit.repo || name === '.git') return [];
+  const code = (fxGit.entries || {})[name];
+  if (code === '?' || code === '!') return [];
+  return [
+    ...(code ? [{ label: 'Änderungen anzeigen', icon: ICON_DIFF,
+      onClick: () => gdOpenWork(child, name) }] : []),
+    { label: 'Git-Historie', icon: ICON_LOG, onClick: () => glOpen({ rel: child, name }) },
+  ];
+}
+
 function fxRenderBranch() {
   const old = fxCrumbsEl.querySelector('.fx-branch');
   if (old) old.remove();
@@ -1826,8 +1840,20 @@ function fxRenderBranch() {
   if (fxGit.ahead) ab.push(`${fxGit.ahead} voraus`);
   if (fxGit.behind) ab.push(`${fxGit.behind} zurück`);
   el.title = (fxGit.detached ? 'Abgekoppelter HEAD: ' : 'Branch: ') + fxGit.branch
-    + (ab.length ? ` (${ab.join(', ')})` : '');
+    + (ab.length ? ` (${ab.join(', ')})` : '') + '\nKlick: Log · Rechtsklick: mehr';
   if (fxGit.detached) el.classList.add('detached');
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
+  el.addEventListener('click', () => glOpen());
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); glOpen(); }
+  });
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    fxShowMenu(e.clientX, e.clientY, [
+      { label: 'Log', icon: ICON_LOG, onClick: () => glOpen() },
+    ]);
+  });
   fxCrumbsEl.append(el);
 }
 
@@ -1989,11 +2015,12 @@ function fxRenderList(entries) {
       : null;
     const icon = e.type === 'dir' ? { svg: ICON_DIR } : fxFileIcon(e.name);
     const item = fxItem(e, icon, onClick, previewUrl, docPreview);
-    // Kontextmenue fuer Dateien: Bearbeiten (Textdateien) + Vorschau (md/html) + Herunterladen.
-    if (e.type === 'file') {
-      item.addEventListener('contextmenu', (ev) => {
-        ev.preventDefault();
-        fxShowMenu(ev.clientX, ev.clientY, [
+    // Kontextmenue: Dateien bekommen Bearbeiten (Textdateien) + Vorschau (md/html)
+    // + Herunterladen; im Repo kommen fuer Dateien UND Verzeichnisse die
+    // git-Eintraege dazu. Ein Verzeichnis ausserhalb eines Repos hat kein Menue.
+    item.addEventListener('contextmenu', (ev) => {
+      const items = [
+        ...(e.type === 'file' ? [
           { label: 'Bearbeiten', icon: ICON_EDIT, disabled: !fxEditable(e.name),
             onClick: () => edOpen(child, e.name, e.size) },
           ...(DOC_PREVIEW_RE.test(e.name) ? [
@@ -2002,9 +2029,15 @@ function fxRenderList(entries) {
           ] : []),
           { label: 'Herunterladen', icon: ICON_DOWNLOAD,
             onClick: () => fxDownload(child, e.name) },
-        ]);
-      });
-    }
+        ] : []),
+      ];
+      const gitItems = fxGitMenu(child, e.name);
+      if (items.length && gitItems.length) items.push({ sep: true });
+      items.push(...gitItems);
+      if (!items.length) return;
+      ev.preventDefault();
+      fxShowMenu(ev.clientX, ev.clientY, items);
+    });
     fxListEl.append(item);
   }
   fxApplyGit();   // bekannter git-Stand (Re-Render bei Sortwechsel) sofort auftragen
@@ -2115,6 +2148,8 @@ fxReopenBtn.addEventListener('click', () => fxCollapse(false));
 // ---------------------------------------------------------------- Kontextmenü (Datei-Explorer)
 const ICON_EDIT = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11.1 2.4 2.5 2.5L5.4 13l-3 .6.6-3z"/></svg>';
 const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5V10M4.8 7.2 8 10.4l3.2-3.2M3 13h10"/></svg>';
+const ICON_LOG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="3.5" r="1.4"/><circle cx="4" cy="12.5" r="1.4"/><path d="M4 4.9v6.2M7.5 3.5H14M7.5 8H14M7.5 12.5H14"/></svg>';
+const ICON_DIFF = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v5M5.5 5h5M5.5 12h5"/><rect x="2" y="1" width="12" height="14" rx="2" opacity=".45"/></svg>';
 const ICON_EYE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="1.9"/></svg>';
 
 const fxMenuEl = document.createElement('div');
@@ -2132,6 +2167,12 @@ function fxShowMenu(x, y, items) {
   fxHideDocPreview(true);
   fxMenuEl.replaceChildren();
   for (const it of items) {
+    if (it.sep) {
+      const hr = document.createElement('div');
+      hr.className = 'fx-menu-sep';
+      fxMenuEl.append(hr);
+      continue;
+    }
     const b = document.createElement('button');
     b.type = 'button';
     b.disabled = !!it.disabled;
@@ -2440,33 +2481,126 @@ window.addEventListener('beforeunload', (e) => {
   if (ed.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
-// ------------------------------------------------------ Markdown-Vorschau (mdlite)
-// Nur-Lese-Fenster im Arbeitsbereich: rendert Markdown ueber die geteilte
-// mdlite-Bibliothek (renderMarkdown = marked+DOMPurify, kein KaTeX). Laden wie der
-// Editor ueber /api/fs/download; kein Speichern. Fenster-Mechanik spiegelt .ed-win.
-const MD_MAX_BYTES = 2 * 1024 * 1024;
+// ------------------------------------------------------ Schwebende Fenster (Fabrik)
+// Gemeinsame Mechanik der Nur-Lese-Fenster im Arbeitsbereich (Markdown-Vorschau,
+// Git-Log, Commit-Diff): Kopf zum Ziehen, CSS-resize, Einpassen in den
+// Arbeitsbereich, Esc schliesst, Klick holt nach vorn. Optik: .md-win & Co.
+// place(workW, workH) -> { w, h, left, top } bestimmt die Erstplatzierung.
+const winAll = [];
 
-const mdWin = document.createElement('div');
-mdWin.className = 'md-win';
-mdWin.hidden = true;
-mdWin.innerHTML = `
+function winFront(el) {
+  for (const w of [edWin, ...winAll.map((x) => x.el)]) w.style.zIndex = w === el ? '9' : '';
+}
+
+function winClampAll() {
+  for (const w of winAll) w.clamp();
+}
+
+function makeWin({ cls = '', hint = '', place, onClose }) {
+  const el = document.createElement('div');
+  el.className = 'md-win' + (cls ? ' ' + cls : '');
+  el.hidden = true;
+  el.tabIndex = -1;
+  el.innerHTML = `
   <div class="md-head">
     <span class="md-title"></span>
     <button class="md-close fx-btn" type="button" title="Schließen" aria-label="Schließen">×</button>
   </div>
-  <div class="md-body"><div class="mdlite-prose"></div></div>
+  <div class="md-body"></div>
   <div class="md-foot">
     <span class="md-path"></span>
-    <span class="md-hint">Nur Vorschau · Esc schließt</span>
+    <span class="md-hint"></span>
   </div>`;
-workEl.append(mdWin);
+  workEl.append(el);
+  const head = el.querySelector('.md-head');
+  const win = {
+    el,
+    body: el.querySelector('.md-body'),
+    title: el.querySelector('.md-title'),
+    path: el.querySelector('.md-path'),
+    get open() { return !el.hidden; },
+  };
+  el.querySelector('.md-hint').textContent = hint;
+  let placed = false;
 
-const mdHeadEl = mdWin.querySelector('.md-head');
-const mdBodyEl = mdWin.querySelector('.md-body');
-const mdProseEl = mdWin.querySelector('.mdlite-prose');
-const mdTitleEl = mdWin.querySelector('.md-title');
-const mdPathEl = mdWin.querySelector('.md-path');
-let mdPlaced = false;
+  win.clamp = () => {
+    if (el.hidden) return;
+    const maxW = Math.max(280, workEl.clientWidth - 24);
+    const maxH = Math.max(180, workEl.clientHeight - 24);
+    if (el.offsetWidth > maxW) el.style.width = maxW + 'px';
+    if (el.offsetHeight > maxH) el.style.height = maxH + 'px';
+    const maxX = Math.max(0, workEl.clientWidth - el.offsetWidth);
+    const maxY = Math.max(0, workEl.clientHeight - el.offsetHeight);
+    el.style.left = Math.max(0, Math.min(el.offsetLeft, maxX)) + 'px';
+    el.style.top = Math.max(0, Math.min(el.offsetTop, maxY)) + 'px';
+  };
+  win.show = (focus = true) => {
+    const wasHidden = el.hidden;
+    el.hidden = false;
+    if (!placed) {
+      placed = true;
+      const r = place(workEl.clientWidth, workEl.clientHeight);
+      el.style.width = r.w + 'px';
+      el.style.height = r.h + 'px';
+      el.style.left = r.left + 'px';
+      el.style.top = r.top + 'px';
+    }
+    win.clamp();
+    if (wasHidden) winFront(el);
+    if (focus) el.focus({ preventScroll: true });
+  };
+  win.close = () => {
+    if (el.hidden) return;
+    el.hidden = true;
+    if (onClose) onClose();
+    const other = winAll.find((w) => w.open);
+    if (other) other.el.focus({ preventScroll: true });
+    else term.focus();
+  };
+
+  let drag = null;
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const maxX = Math.max(0, workEl.clientWidth - el.offsetWidth);
+    const maxY = Math.max(0, workEl.clientHeight - el.offsetHeight);
+    el.style.left = Math.max(0, Math.min(e.clientX - drag.dx, maxX)) + 'px';
+    el.style.top = Math.max(0, Math.min(e.clientY - drag.dy, maxY)) + 'px';
+  });
+  head.addEventListener('pointerup', () => { drag = null; });
+  head.addEventListener('pointercancel', () => { drag = null; });
+  el.addEventListener('pointerdown', () => winFront(el), true);
+  el.querySelector('.md-close').addEventListener('click', win.close);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); win.close(); }
+  });
+  winAll.push(win);
+  return win;
+}
+edWin.addEventListener('pointerdown', () => winFront(edWin), true);
+
+// ------------------------------------------------------ Markdown-Vorschau (mdlite)
+// Nur-Lese-Fenster im Arbeitsbereich: rendert Markdown ueber die geteilte
+// mdlite-Bibliothek (renderMarkdown = marked+DOMPurify, kein KaTeX). Laden wie der
+// Editor ueber /api/fs/download; kein Speichern.
+const MD_MAX_BYTES = 2 * 1024 * 1024;
+
+const mdProseEl = document.createElement('div');
+mdProseEl.className = 'mdlite-prose';
+const mdWin = makeWin({
+  hint: 'Nur Vorschau · Esc schließt',
+  place: (W, H) => {
+    const w = Math.max(320, Math.min(760, W - 48));
+    return { w, h: Math.max(240, Math.min(620, Math.round(H * 0.75))),
+      left: Math.max(12, Math.round((W - w) / 2)), top: 28 };
+  },
+  onClose: () => { mdProseEl.innerHTML = ''; },
+});
+mdWin.body.append(mdProseEl);
 
 async function mdPreviewOpen(rel, name, size) {
   if (size > MD_MAX_BYTES) { fxSetStatus('Zu groß für die Vorschau (max. 2 MB)', true); return; }
@@ -2481,65 +2615,422 @@ async function mdPreviewOpen(rel, name, size) {
     return;
   }
   fxSetStatus(null);
-  mdTitleEl.textContent = name;
-  mdTitleEl.title = '~/' + rel;
-  mdPathEl.textContent = '~/' + rel;
-  mdPathEl.title = '~/' + rel;
+  mdWin.title.textContent = name;
+  mdWin.title.title = '~/' + rel;
+  mdWin.path.textContent = '~/' + rel;
+  mdWin.path.title = '~/' + rel;
   // renderMarkdown sanitisiert bereits per DOMPurify -> innerHTML ist sicher.
   mdProseEl.innerHTML = renderMarkdown(text);
-  mdBodyEl.scrollTop = 0;
-  mdShow();
+  mdWin.body.scrollTop = 0;
+  mdWin.show();
 }
 
-function mdClose() {
-  mdWin.hidden = true;
-  mdProseEl.innerHTML = '';
-  term.focus();
+// ------------------------------------------------------ Git-Log + Commit-Diff
+// Klick auf den Branch-Chip oeffnet den Log des Repos; ein Klick auf einen Commit
+// (oder ↑/↓ im Log) zeigt dessen Diff in EINEM wiederverwendeten Zweitfenster.
+const GL_PAGE = 100;
+const gl = { rel: null, scoped: false, scopePath: '', commits: [], more: false, loading: false, unpushed: new Set(), sel: -1, token: 0 };
+
+const glWin = makeWin({
+  cls: 'gl-win',
+  hint: 'Klick: Diff · ↑↓ blättern · Esc schließt',
+  place: (W, H) => ({ w: glPlaceW(W), h: glPlaceH(H), left: 16, top: 28 }),
+  onClose: () => { gl.token++; glListEl.replaceChildren(); gdWin.close(); },
+});
+const glListEl = document.createElement('div');
+glListEl.className = 'gl-list';
+glListEl.setAttribute('role', 'listbox');
+glWin.body.append(glListEl);
+
+const gdWin = makeWin({
+  cls: 'gd-win',
+  hint: 'Esc schließt',
+  // Neben dem Log, solange rechts davon genug Platz bleibt; sonst versetzt darueber.
+  place: (W, H) => {
+    const left = 16 + glPlaceW(W) + 12;
+    const avail = W - left - 16;
+    if (avail >= 460) return { w: Math.min(avail, 900), h: glPlaceH(H), left, top: 28 };
+    const w = Math.max(340, Math.min(860, W - 80));
+    return { w, h: glPlaceH(H), left: Math.max(16, W - w - 16), top: 52 };
+  },
+  onClose: () => { gdToken++; gdWin.body.replaceChildren(); },
+});
+let gdToken = 0;
+
+function glPlaceW(W) { return Math.max(320, Math.min(W < 1100 ? 380 : 460, W - 48)); }
+function glPlaceH(H) { return Math.max(240, Math.min(680, Math.round(H * 0.82))); }
+
+function glRelTime(sec) {
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  if (d < 90) return 'gerade eben';
+  if (d < 3600) return `vor ${Math.round(d / 60)} Min.`;
+  if (d < 86400) return `vor ${Math.round(d / 3600)} Std.`;
+  if (d < 86400 * 14) return `vor ${Math.round(d / 86400)} Tagen`;
+  return new Date(sec * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-function mdShow() {
-  mdWin.hidden = false;
-  if (!mdPlaced) {
-    mdPlaced = true;
-    const w = Math.max(320, Math.min(760, workEl.clientWidth - 48));
-    const h = Math.max(240, Math.min(620, Math.round(workEl.clientHeight * 0.75)));
-    mdWin.style.width = w + 'px';
-    mdWin.style.height = h + 'px';
-    mdWin.style.left = Math.max(12, Math.round((workEl.clientWidth - w) / 2)) + 'px';
-    mdWin.style.top = '28px';
+function glAbsTime(sec) {
+  return new Date(sec * 1000).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+// "%D" -> Badges: "HEAD -> main, origin/main, tag: v1".
+function glRefBadges(refs) {
+  const out = [];
+  for (let r of refs.split(', ')) {
+    if (!r || r === 'HEAD') continue;
+    let cls = 'gl-ref';
+    if (r.startsWith('HEAD -> ')) { r = r.slice(8); cls += ' head'; }
+    else if (r.startsWith('tag: ')) { r = r.slice(5); cls += ' tag'; }
+    else if (r.includes('/')) cls += ' remote';
+    const b = document.createElement('span');
+    b.className = cls;
+    b.textContent = r;
+    out.push(b);
   }
-  mdClampToWork();
+  return out;
 }
 
-function mdClampToWork() {
-  if (mdWin.hidden) return;
-  const maxW = Math.max(280, workEl.clientWidth - 24);
-  const maxH = Math.max(180, workEl.clientHeight - 24);
-  if (mdWin.offsetWidth > maxW) mdWin.style.width = maxW + 'px';
-  if (mdWin.offsetHeight > maxH) mdWin.style.height = maxH + 'px';
-  const maxX = Math.max(0, workEl.clientWidth - mdWin.offsetWidth);
-  const maxY = Math.max(0, workEl.clientHeight - mdWin.offsetHeight);
-  mdWin.style.left = Math.max(0, Math.min(mdWin.offsetLeft, maxX)) + 'px';
-  mdWin.style.top = Math.max(0, Math.min(mdWin.offsetTop, maxY)) + 'px';
+function glRow(c, idx) {
+  const row = document.createElement('div');
+  row.className = 'gl-row';
+  row.setAttribute('role', 'option');
+  row.dataset.idx = idx;
+  const top = document.createElement('div');
+  top.className = 'gl-subject';
+  if (gl.unpushed.has(c.hash)) {
+    const up = document.createElement('span');
+    up.className = 'gl-unpushed';
+    up.textContent = '↑';
+    up.title = 'Noch nicht gepusht';
+    top.append(up);
+  }
+  const subj = document.createElement('span');
+  subj.className = 'gl-subject-text';
+  subj.textContent = c.subject || '(ohne Betreff)';
+  top.append(subj, ...glRefBadges(c.refs));
+  const meta = document.createElement('div');
+  meta.className = 'gl-meta';
+  const hash = document.createElement('span');
+  hash.className = 'gl-hash';
+  hash.textContent = c.short;
+  const who = document.createElement('span');
+  who.className = 'gl-author';
+  who.textContent = c.author;
+  const when = document.createElement('span');
+  when.className = 'gl-when';
+  when.textContent = glRelTime(c.at);
+  when.title = glAbsTime(c.at);
+  meta.append(hash, who, when);
+  row.append(top, meta);
+  return row;
 }
 
-let mdDrag = null;
-mdHeadEl.addEventListener('pointerdown', (e) => {
-  if (e.target.closest('button')) return;
-  mdDrag = { dx: e.clientX - mdWin.offsetLeft, dy: e.clientY - mdWin.offsetTop };
-  mdHeadEl.setPointerCapture(e.pointerId);
+async function glLoadMore() {
+  if (gl.loading || !gl.more) return;
+  gl.loading = true;
+  const token = gl.token;
+  let data = null;
+  try {
+    const r = await fetch(`${BASE}api/fs/git/log?path=${encodeURIComponent(gl.rel)}&skip=${gl.commits.length}&limit=${GL_PAGE}${gl.scoped ? '&scope=1' : ''}`, { cache: 'no-store' });
+    if (r.ok) data = await r.json();
+  } catch {}
+  if (token !== gl.token) return;
+  gl.loading = false;
+  if (!data) {
+    gl.more = false;
+    const err = document.createElement('div');
+    err.className = 'gl-note err';
+    err.textContent = 'Konnte den Log nicht laden (Backend aktuell?)';
+    glListEl.append(err);
+    return;
+  }
+  if (data.unpushed) gl.unpushed = new Set(data.unpushed);
+  if (data.scopePath != null) gl.scopePath = data.scopePath;
+  gl.more = !!data.more;
+  for (const c of data.commits) {
+    gl.commits.push(c);
+    glListEl.append(glRow(c, gl.commits.length - 1));
+  }
+  if (!gl.commits.length) {
+    const note = document.createElement('div');
+    note.className = 'gl-note';
+    note.textContent = gl.scoped ? 'Keine Commits zu diesem Eintrag' : 'Noch keine Commits';
+    glListEl.append(note);
+  }
+  // Fuellt die erste Seite das Fenster nicht, gaebe es nie ein scroll-Event.
+  if (gl.more && glWin.body.scrollHeight <= glWin.body.clientHeight + 40) glLoadMore();
+}
+
+// scope: null = ganzes Repo (Branch-Chip); { rel, name } = Historie nur dieses
+// Explorer-Eintrags (Datei mit --follow, Verzeichnis als Pathspec).
+function glOpen(scope = null) {
+  if (!fxGit.repo || fxGit.path !== fxPath) return;
+  gl.token++;
+  Object.assign(gl, { rel: scope ? scope.rel : fxPath, scoped: !!scope, scopePath: '',
+    commits: [], more: true, loading: false, unpushed: new Set(), sel: -1 });
+  glListEl.replaceChildren();
+  glWin.title.textContent = scope ? `Historie · ${scope.name}` : `Log · ${fxGit.branch || 'HEAD'}`;
+  glWin.path.textContent = '~/' + gl.rel;
+  glWin.path.title = '~/' + gl.rel;
+  glWin.body.scrollTop = 0;
+  glWin.show();
+  glLoadMore();
+}
+
+function glSelect(idx, focusDiff) {
+  if (idx < 0 || idx >= gl.commits.length) return;
+  const old = glListEl.querySelector('.gl-row.sel');
+  if (old) { old.classList.remove('sel'); old.removeAttribute('aria-selected'); }
+  gl.sel = idx;
+  const row = glListEl.querySelector(`.gl-row[data-idx="${idx}"]`);
+  if (row) {
+    row.classList.add('sel');
+    row.setAttribute('aria-selected', 'true');
+    row.scrollIntoView({ block: 'nearest' });
+  }
+  gdOpen(gl.rel, gl.commits[idx], focusDiff, gl.scoped ? gl.scopePath : '');
+}
+
+glListEl.addEventListener('click', (e) => {
+  const row = e.target.closest('.gl-row');
+  if (row) glSelect(+row.dataset.idx, false);
 });
-mdHeadEl.addEventListener('pointermove', (e) => {
-  if (!mdDrag) return;
-  const maxX = Math.max(0, workEl.clientWidth - mdWin.offsetWidth);
-  const maxY = Math.max(0, workEl.clientHeight - mdWin.offsetHeight);
-  mdWin.style.left = Math.max(0, Math.min(e.clientX - mdDrag.dx, maxX)) + 'px';
-  mdWin.style.top = Math.max(0, Math.min(e.clientY - mdDrag.dy, maxY)) + 'px';
+glWin.body.addEventListener('scroll', () => {
+  const b = glWin.body;
+  if (b.scrollTop + b.clientHeight > b.scrollHeight - 200) glLoadMore();
 });
-mdHeadEl.addEventListener('pointerup', () => { mdDrag = null; });
-mdHeadEl.addEventListener('pointercancel', () => { mdDrag = null; });
-mdWin.querySelector('.md-close').addEventListener('click', mdClose);
-mdWin.addEventListener('keydown', (e) => { if (e.key === 'Escape') mdClose(); });
+glWin.el.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const next = gl.sel < 0 ? 0 : gl.sel + (e.key === 'ArrowDown' ? 1 : -1);
+  if (next >= gl.commits.length) glLoadMore();
+  glSelect(next, false);
+});
+
+// Unified-Diff -> [{ path, from, status, binary, add, del, hunks: [{ head, lines }] }].
+function gdParse(diff) {
+  const files = [];
+  let f = null, h = null;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
+      f = { path: m ? m[2] : line.slice(11), from: '', status: 'M', binary: false, add: 0, del: 0, hunks: [] };
+      h = null;
+      files.push(f);
+    } else if (!f) {
+      continue;
+    } else if (line.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      h = { head: line, o: m ? +m[1] : 0, n: m ? +m[2] : 0, lines: [] };
+      f.hunks.push(h);
+    } else if (h) {
+      const k = line[0];
+      if (k === '+') { f.add++; h.lines.push(['+', line.slice(1)]); }
+      else if (k === '-') { f.del++; h.lines.push(['-', line.slice(1)]); }
+      else if (k === ' ') h.lines.push([' ', line.slice(1)]);
+      else if (k === '\\') h.lines.push(['\\', line.slice(2)]);
+    } else if (line.startsWith('new file mode')) f.status = 'A';
+    else if (line.startsWith('deleted file mode')) f.status = 'D';
+    else if (line.startsWith('rename from ')) { f.status = 'R'; f.from = line.slice(12); }
+    else if (line.startsWith('rename to ')) f.path = line.slice(10);
+    else if (line.startsWith('+++ b/')) f.path = line.slice(6);
+    else if (line.startsWith('Binary files ') || line === 'GIT binary patch') f.binary = true;
+  }
+  return files;
+}
+
+function gdRenderHunks(f, into) {
+  if (f.binary) {
+    const n = document.createElement('div');
+    n.className = 'gd-note';
+    n.textContent = 'Binärdatei — kein Textdiff';
+    into.append(n);
+    return;
+  }
+  if (!f.hunks.length) {
+    const n = document.createElement('div');
+    n.className = 'gd-note';
+    n.textContent = f.status === 'R' ? 'Nur umbenannt' : 'Keine inhaltliche Änderung (z. B. nur Dateimodus)';
+    into.append(n);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const h of f.hunks) {
+    const hh = document.createElement('div');
+    hh.className = 'gd-hunk';
+    hh.textContent = h.head;
+    frag.append(hh);
+    let o = h.o, n = h.n;
+    for (const [k, text] of h.lines) {
+      const ln = document.createElement('div');
+      ln.className = 'gd-line' + (k === '+' ? ' add' : k === '-' ? ' del' : k === '\\' ? ' meta' : '');
+      const a = document.createElement('span');
+      a.className = 'gd-no';
+      const b = document.createElement('span');
+      b.className = 'gd-no';
+      if (k === '-' || k === ' ') a.textContent = o++;
+      if (k === '+' || k === ' ') b.textContent = n++;
+      const t = document.createElement('span');
+      t.className = 'gd-text';
+      t.textContent = k === '\\' ? text : (k + text);
+      ln.append(a, b, t);
+      frag.append(ln);
+    }
+  }
+  into.append(frag);
+}
+
+const GD_STATUS = { A: 'neu', D: 'gelöscht', R: 'umbenannt', M: '' };
+const GD_AUTO_OPEN_LINES = 1500;          // groessere Dateien erst beim Aufklappen rendern
+
+function gdCounts(f) {
+  const el = document.createElement('span');
+  el.className = 'gd-counts';
+  const a = document.createElement('span');
+  a.className = 'add';
+  a.textContent = '+' + f.add;
+  const d = document.createElement('span');
+  d.className = 'del';
+  d.textContent = '−' + f.del;
+  el.append(a, d);
+  return el;
+}
+
+// c: Commit aus /git/show ODER { diff, truncated, workName } (Stand gegen HEAD).
+// focusPath (repo-relativ; Datei oder Verzeichnis): nur passende Abschnitte
+// aufklappen und zum ersten springen — fuer die Historie eines Eintrags.
+function gdRender(c, focusPath = '') {
+  const body = gdWin.body;
+  body.replaceChildren();
+  const head = document.createElement('div');
+  head.className = 'gd-commit';
+  const msg = document.createElement('pre');
+  msg.className = 'gd-msg';
+  const meta = document.createElement('div');
+  meta.className = 'gd-meta';
+  if (c.hash) {
+    msg.textContent = c.message;
+    meta.textContent = `${c.author} <${c.email}> · ${glAbsTime(c.at)} · ${c.hash}`
+      + (c.parents.length > 1 ? ' · Merge (Diff gegen ersten Parent)' : '');
+  } else {
+    msg.textContent = `Änderungen gegenüber HEAD · ${c.workName}`;
+    meta.textContent = 'Arbeitsverzeichnis einschließlich vorgemerkter (staged) Änderungen';
+  }
+  head.append(msg, meta);
+  body.append(head);
+
+  const files = gdParse(c.diff);
+  const toc = document.createElement('div');
+  toc.className = 'gd-toc';
+  const sections = [];
+  let total = 0;
+  for (const f of files) total += f.hunks.reduce((s, h) => s + h.lines.length, 0);
+  const inFocus = (f) => [f.path, f.from].some((p) => p === focusPath || p.startsWith(focusPath + '/'));
+  const hasFocus = !!focusPath && files.some(inFocus);
+  let focusEl = null;
+  for (const f of files) {
+    const det = document.createElement('details');
+    det.className = 'gd-file';
+    const sum = document.createElement('summary');
+    const name = document.createElement('span');
+    name.className = 'gd-fname';
+    name.textContent = f.from ? `${f.from} → ${f.path}` : f.path;
+    sum.append(name);
+    if (GD_STATUS[f.status]) {
+      const st = document.createElement('span');
+      st.className = 'gd-status s-' + f.status;
+      st.textContent = GD_STATUS[f.status];
+      sum.append(st);
+    }
+    sum.append(gdCounts(f));
+    const content = document.createElement('div');
+    content.className = 'gd-code';
+    det.append(sum, content);
+    let rendered = false;
+    const render = () => { if (!rendered) { rendered = true; gdRenderHunks(f, content); } };
+    det.addEventListener('toggle', () => { if (det.open) render(); });
+    const small = f.hunks.reduce((s, h) => s + h.lines.length, 0) <= GD_AUTO_OPEN_LINES;
+    if (hasFocus ? inFocus(f) : (small && total <= GD_AUTO_OPEN_LINES * 4)) {
+      det.open = true;
+      render();
+      if (hasFocus && !focusEl) focusEl = det;
+    }
+    sections.push(det);
+
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'gd-toc-item';
+    const lname = document.createElement('span');
+    lname.className = 'gd-fname';
+    lname.textContent = f.path;
+    link.append(lname, gdCounts(f));
+    link.addEventListener('click', () => { det.open = true; det.scrollIntoView({ block: 'start' }); });
+    toc.append(link);
+  }
+  if (files.length > 1) body.append(toc);
+  if (!files.length) {
+    const n = document.createElement('div');
+    n.className = 'gd-note';
+    n.textContent = c.hash ? 'Keine Dateiänderungen in diesem Commit' : 'Keine Änderungen gegenüber HEAD';
+    body.append(n);
+  }
+  body.append(...sections);
+  if (c.truncated) {
+    const n = document.createElement('div');
+    n.className = 'gd-note err';
+    n.textContent = 'Diff gekürzt (über 2 MB) — Rest im Terminal: git show ' + c.short;
+    body.append(n);
+  }
+  body.scrollTop = 0;
+  if (focusEl && files.length > 1) focusEl.scrollIntoView({ block: 'start' });
+}
+
+async function gdOpen(rel, commit, focus, focusPath = '') {
+  const token = ++gdToken;
+  gdWin.title.textContent = `${commit.short} · ${commit.subject}`;
+  gdWin.title.title = commit.subject;
+  gdWin.path.textContent = commit.hash;
+  gdWin.show(focus);
+  let data = null;
+  try {
+    const r = await fetch(`${BASE}api/fs/git/show?path=${encodeURIComponent(rel)}&rev=${commit.hash}`, { cache: 'no-store' });
+    if (r.ok) data = await r.json();
+  } catch {}
+  if (token !== gdToken || !gdWin.open) return;
+  if (!data) {
+    gdWin.body.replaceChildren();
+    const n = document.createElement('div');
+    n.className = 'gd-note err';
+    n.textContent = 'Konnte den Commit nicht laden';
+    gdWin.body.append(n);
+    return;
+  }
+  gdRender(data, focusPath);
+}
+
+// Ungespeicherter Stand eines Explorer-Eintrags gegen HEAD, im selben Diff-Fenster.
+async function gdOpenWork(rel, name) {
+  const token = ++gdToken;
+  gdWin.title.textContent = `Änderungen · ${name}`;
+  gdWin.title.title = '~/' + rel;
+  gdWin.path.textContent = '~/' + rel;
+  gdWin.show();
+  let data = null;
+  try {
+    const r = await fetch(`${BASE}api/fs/git/diff?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    if (r.ok) data = await r.json();
+  } catch {}
+  if (token !== gdToken || !gdWin.open) return;
+  if (!data) {
+    gdWin.body.replaceChildren();
+    const n = document.createElement('div');
+    n.className = 'gd-note err';
+    n.textContent = 'Konnte die Änderungen nicht laden (Backend aktuell? Noch kein Commit?)';
+    gdWin.body.append(n);
+    return;
+  }
+  gdRender({ ...data, workName: name });
+}
 
 // ---------------------------------------------------------------- Version-Skew
 // Der Build brennt seinen Stamp ins Bundle (__BUILD_STAMP__) und schreibt ihn
