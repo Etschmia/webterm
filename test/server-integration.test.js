@@ -166,4 +166,14 @@ test('git log and show endpoints page commits and reject non-hash revisions', { 
   assert.match((await work('repo/sub')).diff, /\n\+changed\n/);
   assert.equal((await work('repo/sub/*.txt')).diff, '');
   assert.match((await work('repo')).diff, /b\.txt[\s\S]*c\.txt/);
+  // Modi + repo=1 (ganzes Repo, auch aus einem Unterverzeichnis heraus).
+  const mode = (p, q) => fetch(server.base + '/api/fs/git/diff?path=' + encodeURIComponent(p) + q).then(r => r.json());
+  const unstaged = await mode('repo/sub', '&mode=work&repo=1');
+  assert.match(unstaged.diff, /b\.txt/);
+  assert.doesNotMatch(unstaged.diff, /c\.txt/);
+  const staged = await mode('repo/sub', '&mode=staged&repo=1');
+  assert.match(staged.diff, /c\.txt/);
+  assert.doesNotMatch(staged.diff, /b\.txt/);
+  assert.equal((await mode('repo/sub', '&mode=work')).diff, '');
+  assert.equal((await fetch(server.base + '/api/fs/git/diff?path=repo&mode=--output=x')).status, 400);
 });

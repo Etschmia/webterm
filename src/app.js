@@ -1852,6 +1852,11 @@ function fxRenderBranch() {
     e.preventDefault();
     fxShowMenu(e.clientX, e.clientY, [
       { label: 'Log', icon: ICON_LOG, onClick: () => glOpen() },
+      { sep: true },
+      { label: 'Änderungen (Arbeitsverzeichnis)', icon: ICON_DIFF,
+        onClick: () => gdOpenWork(fxPath, fxGit.branch, 'work', true) },
+      { label: 'Änderungen (staged)', icon: ICON_DIFF,
+        onClick: () => gdOpenWork(fxPath, fxGit.branch, 'staged', true) },
     ]);
   });
   fxCrumbsEl.append(el);
@@ -2913,8 +2918,8 @@ function gdRender(c, focusPath = '') {
     meta.textContent = `${c.author} <${c.email}> · ${glAbsTime(c.at)} · ${c.hash}`
       + (c.parents.length > 1 ? ' · Merge (Diff gegen ersten Parent)' : '');
   } else {
-    msg.textContent = `Änderungen gegenüber HEAD · ${c.workName}`;
-    meta.textContent = 'Arbeitsverzeichnis einschließlich vorgemerkter (staged) Änderungen';
+    msg.textContent = `${GD_WORK_MODES[c.workMode][0]} · ${c.workName}`;
+    meta.textContent = GD_WORK_MODES[c.workMode][1] + ' · unversionierte Dateien erscheinen hier nicht';
   }
   head.append(msg, meta);
   body.append(head);
@@ -2971,7 +2976,7 @@ function gdRender(c, focusPath = '') {
   if (!files.length) {
     const n = document.createElement('div');
     n.className = 'gd-note';
-    n.textContent = c.hash ? 'Keine Dateiänderungen in diesem Commit' : 'Keine Änderungen gegenüber HEAD';
+    n.textContent = c.hash ? 'Keine Dateiänderungen in diesem Commit' : 'Keine Änderungen';
     body.append(n);
   }
   body.append(...sections);
@@ -3008,16 +3013,24 @@ async function gdOpen(rel, commit, focus, focusPath = '') {
   gdRender(data, focusPath);
 }
 
-// Ungespeicherter Stand eines Explorer-Eintrags gegen HEAD, im selben Diff-Fenster.
-async function gdOpenWork(rel, name) {
+// Ungespeicherter Stand im selben Diff-Fenster. mode wie im Backend: 'head'
+// (alles gegen HEAD), 'work' (nicht vorgemerkt), 'staged'. repo: ganzes Repo
+// statt nur des Eintrags rel.
+const GD_WORK_MODES = {
+  head: ['Änderungen gegenüber HEAD', 'Arbeitsverzeichnis einschließlich vorgemerkter (staged) Änderungen'],
+  work: ['Nicht vorgemerkte Änderungen', 'Arbeitsverzeichnis gegenüber dem Index'],
+  staged: ['Vorgemerkte Änderungen (staged)', 'Index gegenüber HEAD — das käme in den nächsten Commit'],
+};
+
+async function gdOpenWork(rel, name, mode = 'head', repo = false) {
   const token = ++gdToken;
-  gdWin.title.textContent = `Änderungen · ${name}`;
+  gdWin.title.textContent = `${mode === 'staged' ? 'Staged' : 'Änderungen'} · ${name}`;
   gdWin.title.title = '~/' + rel;
   gdWin.path.textContent = '~/' + rel;
   gdWin.show();
   let data = null;
   try {
-    const r = await fetch(`${BASE}api/fs/git/diff?path=${encodeURIComponent(rel)}`, { cache: 'no-store' });
+    const r = await fetch(`${BASE}api/fs/git/diff?path=${encodeURIComponent(rel)}&mode=${mode}${repo ? '&repo=1' : ''}`, { cache: 'no-store' });
     if (r.ok) data = await r.json();
   } catch {}
   if (token !== gdToken || !gdWin.open) return;
@@ -3029,7 +3042,7 @@ async function gdOpenWork(rel, name) {
     gdWin.body.append(n);
     return;
   }
-  gdRender({ ...data, workName: name });
+  gdRender({ ...data, workName: name, workMode: mode });
 }
 
 // ---------------------------------------------------------------- Version-Skew

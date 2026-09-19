@@ -1091,12 +1091,25 @@ function gitPatch(cwd, args) {
   });
 }
 
-// Ungespeicherter Stand (Arbeitsverzeichnis + Index) gegen HEAD, auf spec begrenzt.
-async function gitWorkDiff(cwd, spec) {
+// Ungespeicherter Stand, auf spec begrenzt. mode: 'head' = Arbeitsverzeichnis +
+// Index gegen HEAD, 'work' = nur nicht vorgemerkte, 'staged' = nur vorgemerkte.
+const GIT_DIFF_MODES = { head: ['HEAD'], work: [], staged: ['--cached'] };
+
+async function gitWorkDiff(cwd, spec, mode) {
   const r = await gitPatch(cwd, [
-    'diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', spec,
+    'diff', ...GIT_DIFF_MODES[mode], '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', spec,
   ]);
   return r && { diff: r.out, truncated: r.truncated };
+}
+
+// Repo-Wurzel zu einem Verzeichnis — aber nur, wenn sie innerhalb von FS_ROOT
+// liegt; sonst bleibt es beim Verzeichnis selbst (kein Diff ueber FS_ROOT hinaus).
+async function gitTopWithinRoot(cwd) {
+  const out = await gitIn(cwd, ['rev-parse', '--show-toplevel']);
+  const top = out && out.split('\n')[0];
+  if (!top) return cwd;
+  const real = await fs.promises.realpath(top).catch(() => null);
+  return real && (real === FS_ROOT || real.startsWith(FS_ROOT + path.sep)) ? real : cwd;
 }
 
 async function gitShow(abs, rev) {
@@ -1209,12 +1222,16 @@ async function handleFs(req, res, route) {
     return sendJson(res, 200, data);
   }
 
-  // Aenderungen eines Eintrags gegenueber HEAD -> { diff, truncated }.
+  // Ungespeicherte Aenderungen eines Eintrags (oder des Repos) -> { diff, truncated }.
   if (route === '/api/fs/git/diff' && req.method === 'GET') {
     const real = await safeExistingPath(abs);
     if (!real) return sendJson(res, 404, { error: 'Nicht gefunden oder ausserhalb von FS_ROOT' });
-    const tg = await gitTarget(real);
-    const data = tg && await gitWorkDiff(tg.cwd, tg.spec);
+    const mode = u.searchParams.get('mode') || 'head';
+    if (!Object.hasOwn(GIT_DIFF_MODES, mode)) return sendJson(res, 400, { error: 'Ungueltiger Modus' });
+    // repo=1: das ganze Repo statt nur des Eintrags (Branch-Chip).
+    let tg = await gitTarget(real);
+    if (tg && u.searchParams.get('repo') === '1') tg = { cwd: await gitTopWithinRoot(tg.cwd), spec: '.' };
+    const data = tg && await gitWorkDiff(tg.cwd, tg.spec, mode);
     if (!data) return sendJson(res, 404, { error: 'Kein git-Repository oder noch kein Commit' });
     return sendJson(res, 200, data);
   }
