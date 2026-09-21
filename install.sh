@@ -251,7 +251,14 @@ install_vendor_node() {
   ext="tar.gz"; command -v xz >/dev/null 2>&1 && ext="tar.xz"
   tarball="node-$ver-$plat.$ext"
   url="https://nodejs.org/dist/$ver/$tarball"
-  tmp="$(mktemp -d)"
+  # Zwischenlager bewusst IM Projekt (vendor/) statt in /tmp: gehaertete Systeme
+  # mounten /tmp mit 'noexec', dort meldet schon 'test -x' auf das entpackte Binary
+  # "nicht ausfuehrbar", obwohl alles in Ordnung ist. Ausserdem waere ein 'mv' ueber
+  # Dateisystemgrenzen eine 200-MB-Kopie.
+  mkdir -p "$SCRIPT_DIR/vendor"
+  rm -rf "$SCRIPT_DIR"/vendor/.stage.*
+  tmp="$SCRIPT_DIR/vendor/.stage.$$"
+  mkdir -p "$tmp"
   info "Lade $tarball …"
   if ! fetch_file "$url" "$tmp/$tarball"; then
     err "Download fehlgeschlagen: $url"; rm -rf "$tmp"; return 1
@@ -276,10 +283,18 @@ install_vendor_node() {
     err "Entpacken fehlgeschlagen (bei .tar.xz fehlt evtl. 'xz')."; rm -rf "$tmp"; return 1
   fi
   dir="$tmp/node-$ver-$plat"
-  if [ ! -x "$dir/bin/node" ]; then
-    err "Unerwarteter Tarball-Inhalt — abgebrochen."; rm -rf "$tmp"; return 1
+  if [ ! -d "$dir" ]; then
+    dir="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -name 'node-v*' 2>/dev/null | head -n1 || true)"
   fi
-  mkdir -p "$SCRIPT_DIR/vendor"
+  # Probelauf statt Rechte-Test: faengt auch eine falsche Architektur oder ein
+  # unvollstaendiges Archiv ab und sagt etwas ueber die tatsaechliche Ursache.
+  if [ -z "$dir" ] || ! "$dir/bin/node" -v >/dev/null 2>&1; then
+    err "Entpacktes node laeuft nicht — abgebrochen."
+    note "    Inhalt des Archivs: $(ls -A "$tmp" 2>/dev/null | tr '\n' ' ')"
+    note "    Haeufige Ursache: das Dateisystem des Projektverzeichnisses ist 'noexec'"
+    note "    (pruefen mit:  findmnt -T '$SCRIPT_DIR' -o TARGET,OPTIONS )."
+    rm -rf "$tmp"; return 1
+  fi
   rm -rf "$SCRIPT_DIR/vendor/node.old"
   if [ -d "$SCRIPT_DIR/vendor/node" ]; then mv "$SCRIPT_DIR/vendor/node" "$SCRIPT_DIR/vendor/node.old"; fi
   mv "$dir" "$SCRIPT_DIR/vendor/node"
