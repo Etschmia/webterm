@@ -8,6 +8,10 @@ Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
 **Voraussetzungen:** Node.js + npm sowie native Build-Tools für `node-pty`
 (falls kein Prebuild zur Node-Version passt) — auf Debian/Ubuntu
 `sudo apt-get install -y build-essential python3`, auf macOS `xcode-select --install`.
+Fehlt node ganz (etwa auf reinen bun-Maschinen — bun ist **kein** Ersatz, node-pty
+liefert dort keine PTY-Daten), bietet der Installer in Schritt 2 an, das offizielle
+LTS-Tarball projekt-lokal nach `vendor/node/` zu laden (Prüfsumme gegen
+`SHASUMS256.txt`, bewusst **nicht** im PATH).
 ```bash
 ./install.sh
 ```

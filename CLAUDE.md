@@ -116,6 +116,10 @@ Basic Auth, `Remote-User`/`X-Forwarded-User` (von `copy_headers`) → Forward-Au
 ### Optionale IP-/VPN-Netze und Nachrüstung
 
 `deploy/lib-ip-allowlist.sh` wird von `install.sh` und `deploy/setup-auth` geteilt.
+Die Adressen werden mit node geprüft (`node:net`, `isIP()`) — ungeprüft darf nichts in einen
+Caddy-Matcher. Fehlt node, wird die Frage deshalb **einmal** übersprungen (Hinweis auf
+`vendor/node` und `deploy/setup-auth --ip-only`) statt endlos wiederholt;
+`normalize_ip_allowlist` unterscheidet dafür Exit 2 (ungültige Eingabe) von Exit 3 (kein node).
 Der Installer erklärt und fragt IPv4-/IPv6-/CIDR-Netze ausdrücklich ab; leer bedeutet keine
 zusätzliche Netzbeschränkung. **2FA und Netzregeln bleiben freiwillig und unabhängig.**
 Keine festen Betreiberadressen oder zwingende Zusatz-Authentisierung ins Projekt aufnehmen.
@@ -201,7 +205,10 @@ liefert keine Daten (bun-Lücke bei `net.Socket({fd})`) — ein Webterminal ohne
 
 Auf Maschinen ohne globales node/npm (etwa weil dort bun-Projekte liegen, die ein globales
 `~/.npmrc` mitlesen würden) gehört eine projekt-lokale node-Installation nach `vendor/node/`
-(gitignored, offizielles Tarball). Sie ist bewusst **nie im PATH** — ein global auffindbares
+(gitignored, offizielles Tarball). `install.sh` bietet das in Schritt 2 selbst an
+(`install_vendor_node`: neueste LTS aus `nodejs.org/dist/index.json`, Prüfsumme gegen
+`SHASUMS256.txt`, Entpacken nach `vendor/node/`) — nur interaktiv, damit ein
+unbeaufsichtigter Lauf nicht ungefragt ins Netz geht. Sie ist bewusst **nie im PATH** — ein global auffindbares
 `node` wäre eine Falle: `install.sh` fände es per `find_cmd node` und baute eine systemd-Unit,
 die `server.js` unter bun startet, womit node-pty tot wäre. Aufruf dann immer so (der
 PATH-Präfix gilt nur für diesen einen Prozess, npm-Config/Cache bleiben im Projekt statt in `~`):

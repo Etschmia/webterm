@@ -193,6 +193,102 @@ check_build_toolchain() {
   return 1
 }
 
+fetch_url() {
+  # $1 = URL -> stdout (1 = weder curl noch wget vorhanden bzw. Fehler).
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1"
+  elif command -v wget >/dev/null 2>&1; then wget -qO- "$1"
+  else return 1; fi
+}
+
+fetch_file() {
+  # $1 = URL, $2 = Zieldatei (mit Fortschrittsanzeige).
+  if command -v curl >/dev/null 2>&1; then curl -fL --progress-bar -o "$2" "$1"
+  elif command -v wget >/dev/null 2>&1; then wget -q --show-progress -O "$2" "$1"
+  else return 1; fi
+}
+
+vendor_node_platform() {
+  # Plattform-Kuerzel der offiziellen nodejs.org-Tarballs -> stdout (1 = keins).
+  local os arch
+  case "$(uname -s)" in
+    Linux)  os=linux ;;
+    Darwin) os=darwin ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64)  arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    armv7l)        arch=armv7l ;;
+    ppc64le)       arch=ppc64le ;;
+    s390x)         arch=s390x ;;
+    *) return 1 ;;
+  esac
+  if [ "$os" = "darwin" ] && [ "$arch" != "x64" ] && [ "$arch" != "arm64" ]; then return 1; fi
+  printf '%s-%s' "$os" "$arch"
+}
+
+install_vendor_node() {
+  # Holt das offizielle Node-Tarball (neueste LTS) nach vendor/node/. Gedacht fuer
+  # Maschinen ohne globales node — etwa solche mit bun-Nachbarprojekten, wo node
+  # bewusst nicht im PATH liegt. Der Ordner bleibt aus dem PATH heraus: ein global
+  # auffindbares 'node' waere hier eine Falle (bun-Shims biegen die Unit um).
+  local plat ver ext tarball url tmp want got dir
+  if ! plat="$(vendor_node_platform)"; then
+    err "Fuer $(uname -s)/$(uname -m) gibt es kein offizielles Node-Tarball zum Nachladen."
+    return 1
+  fi
+  command -v tar >/dev/null 2>&1 || { err "tar wird zum Entpacken benoetigt."; return 1; }
+  info "Neueste LTS-Version ermitteln (nodejs.org) …"
+  # index.json ist eine einzige Zeile; 'tr' macht daraus einen Datensatz pro Zeile.
+  # Die Liste ist absteigend sortiert, der erste Eintrag mit "lts":"<Name>" gewinnt.
+  ver="$(fetch_url 'https://nodejs.org/dist/index.json' 2>/dev/null | tr '}' '\n' \
+        | grep -m1 '"lts":"[A-Za-z]' | grep -oE '"version":"v[0-9]+\.[0-9]+\.[0-9]+"' \
+        | head -n1 | cut -d'"' -f4 || true)"
+  if [ -z "$ver" ]; then
+    err "Version konnte nicht ermittelt werden (kein curl/wget, kein Netz oder Proxy?)."
+    return 1
+  fi
+  ext="tar.gz"; command -v xz >/dev/null 2>&1 && ext="tar.xz"
+  tarball="node-$ver-$plat.$ext"
+  url="https://nodejs.org/dist/$ver/$tarball"
+  tmp="$(mktemp -d)"
+  info "Lade $tarball …"
+  if ! fetch_file "$url" "$tmp/$tarball"; then
+    err "Download fehlgeschlagen: $url"; rm -rf "$tmp"; return 1
+  fi
+  # Eine Runtime wird nicht ungeprueft entpackt.
+  want="$(fetch_url "https://nodejs.org/dist/$ver/SHASUMS256.txt" 2>/dev/null \
+         | grep -F "  $tarball" | awk '{print $1}' || true)"
+  got=""
+  if command -v sha256sum >/dev/null 2>&1; then got="$(sha256sum "$tmp/$tarball" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then got="$(shasum -a 256 "$tmp/$tarball" | awk '{print $1}')"; fi
+  if [ -n "$want" ] && [ -n "$got" ]; then
+    if [ "$want" != "$got" ]; then
+      err "Pruefsumme stimmt nicht mit SHASUMS256.txt ueberein — Download verworfen."
+      rm -rf "$tmp"; return 1
+    fi
+    ok "Pruefsumme ok (SHASUMS256.txt)."
+  else
+    warn "Pruefsumme nicht vergleichbar (kein sha256sum/shasum oder SHASUMS256.txt unerreichbar)."
+  fi
+  info "Entpacken nach vendor/node/ …"
+  if ! tar -xf "$tmp/$tarball" -C "$tmp"; then
+    err "Entpacken fehlgeschlagen (bei .tar.xz fehlt evtl. 'xz')."; rm -rf "$tmp"; return 1
+  fi
+  dir="$tmp/node-$ver-$plat"
+  if [ ! -x "$dir/bin/node" ]; then
+    err "Unerwarteter Tarball-Inhalt — abgebrochen."; rm -rf "$tmp"; return 1
+  fi
+  mkdir -p "$SCRIPT_DIR/vendor"
+  rm -rf "$SCRIPT_DIR/vendor/node.old"
+  if [ -d "$SCRIPT_DIR/vendor/node" ]; then mv "$SCRIPT_DIR/vendor/node" "$SCRIPT_DIR/vendor/node.old"; fi
+  mv "$dir" "$SCRIPT_DIR/vendor/node"
+  rm -rf "$tmp" "$SCRIPT_DIR/vendor/node.old"
+  ok "node $ver liegt in vendor/node (bewusst NICHT im PATH)."
+  note "    Direkt aufrufen:  $SCRIPT_DIR/vendor/node/bin/node"
+  return 0
+}
+
 # --------------------------------------------------------------------------
 # Start
 # --------------------------------------------------------------------------
@@ -229,6 +325,23 @@ set_env HOST "127.0.0.1"
 step "2/6  npm/node finden und bauen"
 NPM_BIN="$(find_cmd npm || true)"
 NODE_BIN="$(find_cmd node || true)"
+# Ohne node/npm gibt es weder Build noch systemd-Unit — und bun ist kein Ersatz
+# (node-pty laedt dort zwar, die PTY liefert aber keine Daten). Statt den Rest des
+# Dialogs ins Leere laufen zu lassen, gleich hier das offizielle Tarball anbieten.
+if [ -z "$NPM_BIN" ] || [ -z "$NODE_BIN" ]; then
+  warn "node/npm nicht gefunden (vendor/node, PATH, ~/.local/bin, nvm, volta, /usr/local, /usr/bin, homebrew geprueft)."
+  note "bun kann node hier nicht ersetzen: node-pty liefert unter bun keine PTY-Daten."
+  # Nur interaktiv: ein unbeaufsichtigter Lauf soll nicht ungefragt Netz nutzen.
+  if [ "$INTERACTIVE" -eq 1 ] && ask_yes_no "Offizielles node-Tarball (LTS) nach vendor/node/ laden?" "y"; then
+    if install_vendor_node; then
+      NPM_BIN="$(find_cmd npm || true)"
+      NODE_BIN="$(find_cmd node || true)"
+    fi
+  fi
+  if [ -z "$NPM_BIN" ] || [ -z "$NODE_BIN" ]; then
+    note "Ohne node laufen Build, systemd-Unit und die IP-Pruefung in Schritt 5 ins Leere."
+  fi
+fi
 # Merken, ob node aus der projekt-lokalen vendor/node-Installation stammt —
 # dann braucht npm den PATH-Praefix und eine gekapselte Config (siehe run_npm).
 USING_VENDOR_NODE=0
@@ -237,8 +350,9 @@ case "$NODE_BIN" in
 esac
 BUILD_OK=0
 if [ -z "$NPM_BIN" ]; then
-  err "npm wurde nicht gefunden (PATH, ~/.local/bin, nvm, volta, /usr/local, /usr/bin, homebrew geprueft)."
+  err "npm wurde nicht gefunden (vendor/node, PATH, ~/.local/bin, nvm, volta, /usr/local, /usr/bin, homebrew geprueft)."
   warn "Bitte Node.js/npm installieren (z. B. via nvm) und das Skript erneut ausfuehren."
+  note "Alternativ projekt-lokal: install.sh erneut starten und das Tarball-Angebot annehmen."
 else
   ok "npm:  $NPM_BIN"
   [ -n "$NODE_BIN" ] && ok "node: $NODE_BIN" || warn "node-Binary nicht separat gefunden — systemd-Unit braucht den Pfad."
