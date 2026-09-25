@@ -35,6 +35,12 @@ tmux außerhalb der Webterminal-Unit betreiben. Keine cgroup-Sperre umgehen und 
 laufenden Prozesse automatisch umhängen. Ein Betrieb außerhalb der Service-Gruppe
 bewahrt laufende Unterhaltungen einschließlich aller Fenster und Panes beim Restart.
 
+Muss das Webterminal selbst einen tmux-Server starten (Standard-Session, „+"-Knopf),
+startet es ihn per `systemd-run --user --scope` **außerhalb** der Unit (`tmuxNewSession`
+in `server.js`; bei System-Units über `/run/user/<uid>`). Ohne User-Bus oder mit
+`TERM_TMUX_SCOPE=0` fällt es auf den Start in der Unit zurück (Warnung im Log). Ein
+bereits laufender Server wird nicht umgehängt.
+
 Servicename: `TERM_SERVICE=<unit>` → `deploy/deploy.env` → Erkennung des laufenden
 Repo-Backends. Ohne eindeutige Ermittlung wird abgebrochen. System-Units benötigen
 passwortloses `sudo` und `systemd-run`; User-Units benötigen einen erreichbaren User-Bus,

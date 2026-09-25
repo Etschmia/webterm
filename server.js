@@ -123,6 +123,62 @@ function tmux(args) {
   });
 }
 
+// Neue tmux-Session anlegen — laeuft noch kein tmux-Server, startet er per
+// `systemd-run --user --scope` in einem eigenen Scope statt in der cgroup der
+// Webterminal-Unit. Sonst stirbt er (samt aller Panes) bei jedem Restart der Unit
+// (KillMode=control-group), und deploy/term-restart bricht zu Recht mit Exit 5 ab.
+// Laeuft der Server schon, forkt er die neue Session selbst — dann bleibt alles,
+// wo er liegt. Ohne erreichbaren User-Bus (oder mit TERM_TMUX_SCOPE=0) faellt es
+// auf den bisherigen Start in der Unit zurueck.
+function tmuxServerRunning() {
+  return tmux(['list-sessions']).then((r) => r.ok);
+}
+
+function runOutsideUnit(argv) {
+  const env = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    LANG: process.env.LANG || 'en_US.UTF-8',
+  };
+  // System-Unit: kein XDG_RUNTIME_DIR in der Umgebung, der User-Bus liegt trotzdem dort.
+  if (!env.XDG_RUNTIME_DIR && typeof process.getuid === 'function') {
+    const dir = `/run/user/${process.getuid()}`;
+    if (fs.existsSync(dir)) env.XDG_RUNTIME_DIR = dir;
+  }
+  return new Promise((resolve) => {
+    execFile('systemd-run', ['--user', '--scope', '--quiet', '--collect',
+      '--description=tmux-Server (Webterminal)', '--', ...argv],
+    { cwd: HOME, env, timeout: 10000 }, (err, stdout, stderr) => {
+      if (err) resolve({ ok: false, out: '', err: stderr || err.message });
+      else resolve({ ok: true, out: stdout, err: '' });
+    });
+  });
+}
+
+async function tmuxNewSession(name) {
+  const args = ['new-session', '-d', '-s', name, '-c', HOME];
+  if (process.env.TERM_TMUX_SCOPE === '0' || (await tmuxServerRunning())) return tmux(args);
+  const r = await runOutsideUnit(['tmux', ...args]);
+  if (r.ok) return r;
+  console.warn(`tmux-Server nicht ausserhalb der Unit startbar (${r.err.trim()}); `
+    + 'starte ihn in der Unit — ein Restart wuerde ihn beenden.');
+  return tmux(args);
+}
+
+// Standard-Session vor dem Attach anlegen, damit ein frisch noetiger tmux-Server
+// nicht erst vom PTY (also in der Unit) gestartet wird. Parallele Verbindungen
+// teilen sich denselben Versuch.
+let standardSessionPending = null;
+function ensureStandardSession() {
+  if (!standardSessionPending) {
+    standardSessionPending = (async () => {
+      if (!(await sessionExists(STANDARD_SESSION))) await tmuxNewSession(STANDARD_SESSION);
+    })().finally(() => { standardSessionPending = null; });
+  }
+  return standardSessionPending;
+}
+
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
 const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse', 'opencode'];
 
@@ -1958,7 +2014,7 @@ async function handleRequest(req, res) {
     if (name === STANDARD_SESSION || (await sessionExists(name))) {
       return sendJson(res, 409, { error: 'Name bereits vergeben' });
     }
-    const r = await tmux(['new-session', '-d', '-s', name, '-c', HOME]);
+    const r = await tmuxNewSession(name);
     if (!r.ok) return sendJson(res, 500, { error: r.err.trim() || 'tmux-Fehler' });
     // WICHTIG: hier KEIN '='-Praefix vor dem Ziel. Anders als bei
     // kill-session/list-sessions lehnt `set-option -t '=name'` das exakt-Match-
@@ -2143,6 +2199,10 @@ wss.on('connection', (ws) => {
           // bereits 'window-size latest' (neuester Client gewinnt), daher keine
           // Option-Mutation noetig. Bei Bedarf global via tmux.conf auf
           // 'largest'/'manual' umstellbar.
+        } else {
+          // Schlaegt das fehl, legt `new-session -A` im PTY sie wie bisher an.
+          await ensureStandardSession();
+          if (seq !== startSeq) return;
         }
         spawnPty(msg.mode === 'session' ? 'session' : 'standard', msg.cols, msg.rows);
         break;
