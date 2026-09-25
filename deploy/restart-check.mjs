@@ -30,6 +30,24 @@ try {
   if (risks.length) {
     console.error(`Restart abgebrochen: ${risks.length} tmux-Prozess(e) liegen in ${group}.`);
     console.error('Sessions zuerst ausserhalb der Webterminal-Unit betreiben bzw. nach gesicherter Arbeit beenden.');
+    // Liegt der tmux-Server selbst in der Unit, hat ihn meist das Webterminal gestartet
+    // (Versionen vor 7cea46e). Heraus kommt man nur mit einem einmaligen Restart, der
+    // diese Sitzungen bewusst beendet; danach startet der neue Code tmux ausserhalb.
+    const serverInside = risks.some(p => p.comm === 'tmux: server' || String(p.pid) === serverPid);
+    const service = process.env.TERM_SERVICE;
+    if (serverInside && service) {
+      const user = process.env.TERM_USER_UNIT === '1';
+      const run = user
+        ? `systemd-run --user --collect sh -c 'sleep 2; systemctl --user restart ${service}'`
+        : `sudo systemd-run --collect sh -c 'sleep 2; systemctl restart ${service}'`;
+      console.error('');
+      console.error('Der tmux-Server selbst liegt in der Unit (vom Webterminal gestartet). Einmalige Umstellung:');
+      console.error('  1. Arbeit in ALLEN tmux-Sitzungen sichern - sie werden beendet.');
+      console.error(`  2. ${run}`);
+      console.error('     (geht auch aus dem Webterminal heraus; die Verbindung bricht dann kurz ab)');
+      console.error('  3. Seite neu laden, dann: deploy/term-restart --check');
+      console.error('Danach startet das Webterminal tmux ausserhalb der Unit; kuenftige Restarts erhalten die Sitzungen.');
+    }
     process.exit(5);
   }
   console.log('Restart-Pruefung: tmux und alle Pane-Prozesse liegen ausserhalb der Service-Gruppe.');

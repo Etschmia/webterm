@@ -35,7 +35,7 @@ for candidate in "$RESTART_DIR/../vendor/node/bin/node" "$(command -v node || tr
 done
 [ -n "$NODE_BIN" ] || { log 'node fuer die Restart-Pruefung nicht gefunden.'; exit 1; }
 GROUP="$(sysctl show -p ControlGroup --value "$SERVICE")"
-"$NODE_BIN" "$RESTART_DIR/restart-check.mjs" "$GROUP"
+TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$NODE_BIN" "$RESTART_DIR/restart-check.mjs" "$GROUP"
 [ "${1:-}" != '--check' ] || exit 0
 # Auch die entkoppelte Phase prueft erneut direkt vor dem Restart.
 if [ "${1:-}" = '--execute' ]; then

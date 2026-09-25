@@ -39,7 +39,9 @@ Muss das Webterminal selbst einen tmux-Server starten (Standard-Session, „+"-K
 startet es ihn per `systemd-run --user --scope` **außerhalb** der Unit (`tmuxNewSession`
 in `server.js`; bei System-Units über `/run/user/<uid>`). Ohne User-Bus oder mit
 `TERM_TMUX_SCOPE=0` fällt es auf den Start in der Unit zurück (Warnung im Log). Ein
-bereits laufender Server wird nicht umgehängt.
+bereits laufender Server wird nicht umgehängt. Liegt er beim Exit 5 selbst in der Unit
+(Bestand vor dieser Änderung), gibt `restart-check.mjs` den einmaligen, bewusst
+sitzungsbeendenden Restart-Befehl mit dem ermittelten Dienstnamen aus.
 
 Servicename: `TERM_SERVICE=<unit>` → `deploy/deploy.env` → Erkennung des laufenden
 Repo-Backends. Ohne eindeutige Ermittlung wird abgebrochen. System-Units benötigen
