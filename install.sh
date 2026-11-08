@@ -276,7 +276,8 @@ install_vendor_node() {
     fi
     ok "Pruefsumme ok (SHASUMS256.txt)."
   else
-    warn "Pruefsumme nicht vergleichbar (kein sha256sum/shasum oder SHASUMS256.txt unerreichbar)."
+    err "Pruefsumme nicht pruefbar (kein sha256sum/shasum oder SHASUMS256.txt unerreichbar) — Download verworfen."
+    rm -rf "$tmp"; return 1
   fi
   info "Entpacken nach vendor/node/ …"
   if ! tar -xf "$tmp/$tarball" -C "$tmp"; then

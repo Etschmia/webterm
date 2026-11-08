@@ -986,9 +986,12 @@ const GIT_FS_CACHE_MAX = 40;
 const gitFsCache = new Map();               // abs -> { at, data }
 const GIT_NONE = { repo: false, branch: '', detached: false, ahead: 0, behind: 0, entries: {} };
 
+// Git darf nicht oberhalb von FS_ROOT nach einem Repo suchen (sonst Log/Show ausserhalb).
+const GIT_ENV = { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(FS_ROOT) };
+
 function gitIn(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+    execFile('git', args, { cwd, env: GIT_ENV, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout) => resolve(err ? null : stdout));
   });
 }
@@ -1138,8 +1141,8 @@ async function gitLog(abs, skip, limit, spec = null, follow = false) {
 // git-Aufruf mit Patch-Ausgabe; bei Ueberlauf an einer Zeilengrenze gekuerzt.
 function gitPatch(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', ...args],
-      { cwd, timeout: 10000, maxBuffer: GIT_SHOW_MAX_BYTES }, (err, stdout) => {
+    execFile('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', '-c', 'core.fsmonitor=false', ...args],
+      { cwd, env: GIT_ENV, timeout: 10000, maxBuffer: GIT_SHOW_MAX_BYTES }, (err, stdout) => {
         const truncated = !!err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
         if (err && !truncated) return resolve(null);
         resolve({ out: truncated ? stdout.slice(0, stdout.lastIndexOf('\n') + 1) : stdout, truncated });

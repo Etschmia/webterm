@@ -1,5 +1,9 @@
 # term-web
 
+> ⚠️ **Sicherheitshinweis:** term-web gibt Zugriff auf eine **volle Shell**. Es authentifiziert
+> nicht selbst — der Schutz (TLS + Zugangsschutz) liegt im vorgeschalteten Caddy. **Nie ohne
+> Zugangsschutz ins Internet stellen.** Siehe [SECURITY.md](SECURITY.md) und „Zugangsschutz" unten.
+
 Web-Terminal — Sidebar + Arbeitsfenster (xterm.js), abgesichert über Caddy
 (TLS + Basic Auth, vorgeschalteter 2FA/SSO-Dienst oder externer Zugangsschutz). Portabel betreibbar unter eigener Domain oder Unterpfad
 — der öffentliche Origin wird über `PUBLIC_ORIGIN` in der `.env` gesetzt.
@@ -68,6 +72,10 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
   — und nur übernommen, wenn die dort genannte Modell-ID zur protokollierten passt. Ergebnisse
   aus Sitzungsdateien werden nach mtime und Größe gecacht; Prozess- und Pane-Abfragen
   bleiben Bestandteil des Pollings.
+- **Datei-Explorer** (rechte Sidebar): Verzeichnisbaum, Editor, Download per Klick und
+  **Upload per Drag & Drop vom Desktop** ins aktuelle Verzeichnis. Der Branch-Chip öffnet
+  Git-Log, Commit-Diff, Datei-Historie sowie Arbeitsverzeichnis- und Staged-Diff als Fenster.
+- **Terminal-Darstellung**: JetBrains Mono wird mitgeliefert, Rendering per WebGL (xterm.js 6).
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
 - **Zugangsschutz** (Zahnrad unten in der Sidebar): zeigt, womit die eigenen Anfragen gerade
@@ -280,21 +288,14 @@ verlassen werden. Konfiguration und Token liegen lokal unter `~/.term-telegram/`
   für öffentliche Erreichbarkeit wird darüber hinaus VPN/mTLS/Identity-Aware Proxy empfohlen.
   Credentials geheim halten. Schreibende Browser-Requests benötigen einen pro Prozess erzeugten
   CSRF-Token. Uploadlimits: Dateien 100 MiB, Clipboard-Bilder 25 MiB.
-- **claude-auto-retry ist seit Claude Code 2.1.234 nur noch Ergänzung**: Usage-Limits wartet
-  die CLI selbst aus („Continue automatically at usage limit", `/config`, ab Werk an) — das war
-  der Hauptzweck des Pakets, deshalb fragt `install.sh` es jetzt mit Default **nein**. Was das
-  Paket weiterhin abdeckt: Retry bei anhaltendem API-Overload (529), Retry bei
-  Safeguard-Fehlalarmen und Wiederaufnahme, wenn der `claude`-Prozess die Wartezeit nicht
-  überlebt (nativ gilt „relaunched/exited during the wait → task will not resume" — etwa bei ungeprüften Prozessabbrüchen). **Beides parallel auf denselben Fall anzusetzen ist keine
-  gute Idee**: der Monitor scrapet das Pane und weiß nichts vom nativen Warten, im Zweifel
-  landet nach dem Reset ein doppeltes „continue" in der Session. Dann entweder in
+- **claude-auto-retry (optional)**: Seit Claude Code 2.1.234 wartet die CLI Usage-Limits selbst
+  aus; `install.sh` fragt das Paket deshalb mit Default **nein**. Es deckt nur noch Overload-
+  (529) und Safeguard-Retries sowie das Überleben eines Prozess-Neustarts ab. Nicht beides auf
+  denselben Fall ansetzen (doppeltes „continue"): entweder in
   `~/.claude-auto-retry/config.json` den Usage-Limit-Pfad abschalten oder in `/config` das
-  native Fortsetzen.
-- **claude-auto-retry-Update-Check**: Das Paket hat keinen eigenen Update-Mechanismus —
-  `./install.sh` richtet dafür optional einen täglichen Cron ein
-  (`deploy/claude-auto-retry-update.sh`, Log unter `~/.claude-auto-retry/logs/update-check.log`).
-  Startet laufende `monitor.js`-Prozesse bei einem Versionswechsel automatisch neu, da deren
-  ES-Module-Code sonst bis zum nächsten Prozessstart auf dem alten Stand bleibt. Das Skript
-  stellt dem PATH das Verzeichnis des gefundenen `node` voran — `npm` ist selbst ein
-  node-Skript, und ohne `node` im dürftigen Cron-PATH scheitert `npm root -g` still, womit der
-  Check ergebnislos durchläuft, statt zu melden.
+  native Fortsetzen. Der Update-Check läuft optional per Cron (`deploy/claude-auto-retry-update.sh`,
+  Log unter `~/.claude-auto-retry/logs/update-check.log`).
+
+## Lizenz
+
+MIT — siehe [LICENSE](LICENSE).
