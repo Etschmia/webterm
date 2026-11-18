@@ -532,6 +532,35 @@ body.col-resizing, body.col-resizing * {
 .entry:hover .entry-rename, .entry-rename:focus-visible { opacity: 1; }
 .entry-rename:hover { color: var(--primary); background: var(--hover); }
 
+/* Ketten-Knopf: Verbindungen der Sitzung. Ohne Verbindung nur bei Hover; mit
+   Verbindung dauerhaft, mit ungelesenen Nachrichten samt Zahl. */
+.entry-link {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 20px; height: 20px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.entry:hover .entry-link, .entry-link:focus-visible, .entry-link.on { opacity: 1; }
+.entry-link:hover { color: var(--primary); background: var(--hover); }
+.entry-link.unread { color: var(--foreground); }
+.entry-link.pending {
+  color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+}
+
 /* ×-Knopf: Session beenden (wie der Stift nur bei Hover sichtbar) */
 .entry-kill {
   flex: 0 0 auto;
@@ -1947,7 +1976,7 @@ body.col-resizing, body.col-resizing * {
   }
   .drawer-backdrop[hidden] { display: none; }
   /* Hover-verborgene Bedienknoepfe (Umbenennen/Beenden) ohne Maus immer zeigen. */
-  .entry-rename, .entry-kill { opacity: 1; }
+  .entry-rename, .entry-kill, .entry-link { opacity: 1; }
 
   /* Arbeitsspalte: Kopfleiste / Terminal / Tastenleiste untereinander. */
   .work { display: flex; flex-direction: column; min-height: 0; }
@@ -2051,6 +2080,36 @@ body.col-resizing, body.col-resizing * {
   .help-overlay, .bug-overlay { padding: 10px; }
   .help-card, .bug-card { max-height: calc(var(--vvh, 100dvh) - 20px); }
 }
+
+/* Verbindungen-Overlay (Ketten-Knopf je Sitzung) — nutzt sonst die tg-*-Styles */
+.lk-card { width: min(600px, 100%); }
+.lk-card .tg-pane { margin-top: 10px; }
+.lk-id {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.lk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.lk-row .bug-input { flex: 1 1 180px; width: auto; min-width: 0; padding: 6px 10px; }
+.lk-row .lk-seats { flex: 0 0 64px; }
+.lk-label { font-size: 12.5px; }
+.lk-code { font-family: var(--font-mono); font-size: 11.5px; }
+.lk-inbox { border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); }
+.lk-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.lk-msg-head { font-size: 11px; color: var(--muted-foreground); margin-bottom: 2px; }
+.lk-msg.own .lk-msg-head { color: var(--primary); }
+.lk-msg-text { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Zugangsschutz-Panel (Zahnrad in der Sidebar) — nutzt sonst die tg-*-Styles */
 .ag-modes { display: flex; gap: 6px; margin: 12px 0 10px; flex-wrap: wrap; }

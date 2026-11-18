@@ -872,7 +872,7 @@ function sessionLabel(s) {
   return looksDefault ? s.name : clean;
 }
 
-function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename, onKill, chips }) {
+function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameValue, onRename, onKill, chips, link, onLink }) {
   const el = document.createElement('div');
   el.className = 'entry' + (active ? ' active' : '');
   const row = document.createElement('div');
@@ -885,6 +885,31 @@ function makeEntry({ label, tooltip, dotClass, badge, active, onClick, renameVal
   name.textContent = label;
   name.title = tooltip || label;
   row.append(dot, name);
+
+  // Verbindungen dieser Sitzung (Agent <-> Agent): Ketten-Knopf, sonst wie der
+  // Stift nur bei Hover sichtbar. Hat die Sitzung Verbindungen, bleibt er
+  // stehen; liegt Ungelesenes im Postfach, zeigt er die Zahl — hervorgehoben,
+  // solange der Agent noch keinen Hinweis bekommen hat.
+  if (onLink) {
+    const lk = document.createElement('button');
+    const info = link || { count: 0, unread: 0, pending: 0 };
+    lk.className = 'entry-link' + (info.count ? ' on' : '') + (info.unread ? ' unread' : '')
+      + (info.pending ? ' pending' : '');
+    const unreadText = info.unread === 1 ? '1 ungelesene Nachricht' : `${info.unread} ungelesene Nachrichten`;
+    lk.title = !info.count ? 'Agenten verbinden'
+      : info.pending ? `${unreadText} aus Verbindungen — noch nicht zugestellt`
+        : info.unread ? `${unreadText} — Hinweis zugestellt, noch nicht gelesen`
+          : info.count === 1 ? '1 Verbindung' : `${info.count} Verbindungen`;
+    lk.setAttribute('aria-label', lk.title);
+    lk.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.8 9.2a3 3 0 0 0 4.2 0l2.1-2.1a3 3 0 0 0-4.2-4.2l-.9.9"/><path d="M9.2 6.8a3 3 0 0 0-4.2 0L2.9 8.9a3 3 0 0 0 4.2 4.2l.9-.9"/></svg>';
+    if (info.unread) {
+      const n = document.createElement('span');
+      n.textContent = String(info.unread);
+      lk.append(n);
+    }
+    lk.addEventListener('click', (e) => { e.stopPropagation(); onLink(); });
+    row.append(lk);
+  }
 
   // Inline-Umbenennen (nur tmux-Sessions): Stift-Knopf oder Doppelklick auf
   // den Namen oeffnet ein Eingabefeld; Enter speichert, Esc/Fokusverlust bricht ab.
@@ -1066,6 +1091,8 @@ function renderSidebar() {
     badge: 'tmux',
     active: stdActive,
     onClick: () => switchTo('standard', null),
+    link: stdSession && stdSession.link,
+    onLink: stdSession ? () => lkOpen(stdSession.name) : null,
   });
   // Copy-Mode auch im Standard-Modus: das Overlay ist modusunabhaengig und
   // hilft genauso, sobald hier eine maus-greifende Anwendung laeuft (Claude
@@ -1090,6 +1117,8 @@ function renderSidebar() {
       renameValue: s.name,
       onRename: (newName) => renameSession(s.name, newName),
       onKill: () => killSession(s.name, label),
+      link: s.link,
+      onLink: () => lkOpen(s.name),
     });
     if (active) entry.append(makeCopyToggle());
     sessionsEl.append(entry);
@@ -3783,6 +3812,326 @@ document.getElementById('tg-close').addEventListener('click', tgClose);
 tgOverlay.addEventListener('click', (e) => { if (e.target === tgOverlay) tgClose(); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !tgOverlay.hidden) { e.stopPropagation(); tgClose(); }
+}, true);
+
+// ------------------------------------------------------------- Verbindungen
+// Ketten-Knopf je Sidebar-Zeile: verbindet den Agenten einer Sitzung mit den
+// Agenten anderer Sitzungen (/api/link/*). Das Overlay zeigt immer EINE
+// Sitzung: ihr Postfach, ihre Verbindungen, das Anlegen neuer. Zugestellt wird
+// ausschliesslich auf Klick — der Server tippt dann eine feste Hinweiszeile in
+// die Sitzung, nie fremden Text.
+const lkOverlay = document.getElementById('lk-overlay');
+const lkBody = document.getElementById('lk-body');
+const lkTitle = document.getElementById('lk-title');
+let lkSession = null;            // Sitzungsname, den das Overlay zeigt
+let lkState = null;              // letzter Stand von /api/link/state
+let lkStateJson = '';            // dessen Serialisierung: nur bei Aenderung neu zeichnen
+const lkHistory = new Map();     // aufgeklappte Verlaeufe: Verbindungs-ID -> Nachrichten
+const lkForm = { peer: '', seats: '2', code: '' }; // Eingaben ueberleben das Neuzeichnen
+let lkTimer = null;
+
+function lkLabelOf(name) {
+  const s = state.sessions.find((x) => x.name === name);
+  if (!s) return name;
+  return s.standard ? 'Standard' : sessionLabel(s);
+}
+
+// Einzahl/Mehrzahl fuer Zaehler ("1 Nachricht", "3 Nachrichten").
+const lkCount = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+function lkApply(data) {
+  lkState = data;
+  const json = JSON.stringify([data, [...lkHistory]]);
+  if (json === lkStateJson) return;
+  lkStateJson = json;
+  lkRender();
+  // Weicht der Zaehler am Ketten-Knopf der Sidebar ab, dort gleich nachziehen
+  // statt bis zum naechsten Sitzungs-Abruf zu warten.
+  const row = state.sessions.find((x) => x.name === data.session);
+  const shown = (row && row.link) || { count: 0, unread: 0, pending: 0 };
+  if (shown.count !== data.count || shown.unread !== data.unread || shown.pending !== data.pending) {
+    refreshSessions();
+  }
+}
+
+async function lkRefresh() {
+  if (!lkSession) return;
+  const session = lkSession;
+  try {
+    const r = await fetch(`${BASE}api/link/state?session=${encodeURIComponent(session)}`, { cache: 'no-store' });
+    if (session !== lkSession) return;
+    if (r.status === 404) {
+      lkClose();
+      setStatus('Die Sitzung gibt es nicht mehr (beendet oder umbenannt).', true, 4000);
+      return;
+    }
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    for (const id of [...lkHistory.keys()]) {
+      if (data.links.some((l) => l.id === id)) await lkLoadHistory(id);
+      else lkHistory.delete(id);
+    }
+    if (session === lkSession) lkApply(data);
+  } catch { /* naechster Takt versucht es erneut */ }
+}
+
+async function lkLoadHistory(id) {
+  try {
+    const r = await fetch(`${BASE}api/link/history?session=${encodeURIComponent(lkSession)}&link=${encodeURIComponent(id)}`,
+      { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    lkHistory.set(id, (await r.json()).messages || []);
+  } catch {
+    if (!lkHistory.has(id)) lkHistory.set(id, []);
+  }
+}
+
+// Schreibender Aufruf; die Antwort ist der neue Stand der Sitzung.
+async function lkPost(route, body) {
+  const r = await protectedFetch(`${BASE}api/link/${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: lkSession, ...body }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Anfrage fehlgeschlagen');
+  lkApply(data);
+  return data;
+}
+
+const lkFail = (e) => setStatus(String(e.message || e), true, 6000);
+
+async function lkCopy(code) {
+  try {
+    await navigator.clipboard.writeText(code);
+    setStatus('Verbindungs-Code in die Zwischenablage kopiert', false, 2500);
+  } catch {
+    setStatus('Kopieren nicht möglich — Code im Feld markieren und kopieren', true, 4000);
+  }
+}
+
+function lkInput(key, cls, attrs) {
+  const el = tgEl(attrs.tag || 'input', cls);
+  delete attrs.tag;
+  Object.assign(el, attrs);
+  el.dataset.lk = key;
+  if (key in lkForm) {
+    el.value = lkForm[key];
+    el.addEventListener('input', () => { lkForm[key] = el.value; });
+  }
+  return el;
+}
+
+const lkTime = (ms) => new Date(ms).toLocaleString('de-DE', {
+  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+function lkRenderLink(l) {
+  const pane = tgEl('div', 'tg-pane lk-link');
+  const others = l.members.filter((m) => !m.self);
+  // Mitglieder heissen serverseitig wie ihre tmux-Sitzung; gezeigt wird das
+  // Label der Sidebar (bei beendeten Sitzungen bleibt der letzte Name).
+  const head = tgEl('div', 'tg-pane-h', others.length
+    ? `Verbunden mit ${others.map((m) => `„${m.gone ? m.name : lkLabelOf(m.name)}“${m.gone ? ' (beendet)' : ''}`).join(', ')}`
+    : 'Wartet auf Beitritt');
+  head.append(tgEl('span', 'lk-id', l.id));
+  pane.append(head);
+  const facts = [lkCount(l.messages, 'Nachricht', 'Nachrichten')];
+  if (l.unread) facts.push(`${l.unread} ungelesen für diese Sitzung`);
+  if (l.seats > 2 || l.invite) facts.push(`${l.members.length} von ${l.seats} Plätzen belegt`);
+  pane.append(tgEl('p', 'tg-p tg-dim', facts.join(' · ')));
+
+  if (l.invite && l.invite.valid) {
+    pane.append(tgEl('p', 'tg-p tg-dim', `Code zum Eintragen in der anderen Sitzung — gültig bis ${lkTime(l.invite.expiresAt)}:`));
+    const row = tgEl('div', 'lk-row');
+    const code = tgEl('input', 'bug-input lk-code');
+    code.readOnly = true;
+    code.value = l.invite.code;
+    code.addEventListener('focus', () => code.select());
+    row.append(code, tgButton('Kopieren', 'tg-secondary', () => lkCopy(l.invite.code)));
+    pane.append(row);
+  } else if (l.invite) {
+    pane.append(tgEl('p', 'tg-p tg-dim', 'Der Code ist abgelaufen.'));
+  }
+
+  const actions = tgEl('div', 'tg-actions');
+  const open = lkHistory.has(l.id);
+  actions.append(tgButton(open ? 'Verlauf schließen' : 'Verlauf', 'tg-secondary', async () => {
+    if (open) lkHistory.delete(l.id);
+    else await lkLoadHistory(l.id);
+    lkApply(lkState);
+  }));
+  if (l.invite && !l.invite.valid) {
+    actions.append(tgButton('Code erneuern', 'tg-secondary', async () => {
+      try {
+        const d = await lkPost('invite', { link: l.id });
+        if (d.created) await lkCopy(d.created.code);
+      } catch (e) { lkFail(e); }
+    }));
+  }
+  actions.append(tgButton('Trennen', 'tg-danger', async () => {
+    if (!window.confirm('Diese Sitzung aus der Verbindung nehmen?\n'
+      + 'Ihr Verlauf ist für diese Sitzung danach nicht mehr abrufbar.')) return;
+    lkHistory.delete(l.id);
+    await lkPost('leave', { link: l.id }).catch(lkFail);
+  }));
+  pane.append(actions);
+
+  if (open) {
+    const list = tgEl('div', 'lk-history');
+    const msgs = lkHistory.get(l.id) || [];
+    if (!msgs.length) list.append(tgEl('div', 'tg-dim lk-msg-head', 'Noch keine Nachrichten.'));
+    for (const m of msgs) {
+      const item = tgEl('div', 'lk-msg' + (m.own ? ' own' : ''));
+      item.append(tgEl('div', 'lk-msg-head', `${m.own ? 'diese Sitzung' : `„${lkLabelOf(m.from)}“`} · ${lkTime(m.at)}`));
+      item.append(tgEl('div', 'lk-msg-text', m.text));
+      list.append(item);
+    }
+    pane.append(list);
+  }
+  return pane;
+}
+
+function lkRender() {
+  const s = lkState;
+  const focused = document.activeElement && lkBody.contains(document.activeElement)
+    ? document.activeElement.dataset.lk : null;
+  const scroll = lkBody.scrollTop;
+  lkTitle.textContent = `Verbindungen — ${lkLabelOf(lkSession)}`;
+  lkBody.replaceChildren();
+  if (!s) {
+    lkBody.append(tgEl('div', 'tg-wait', 'Stand wird geladen …'));
+    return;
+  }
+  lkBody.append(tgEl('div', 'tg-intro',
+    'Verbindet den Agenten dieser Sitzung mit Agenten anderer Sitzungen. Nachrichten liegen im '
+    + 'Postfach, bis du sie zustellst. In die Sitzung tippt das Webterminal dabei nur einen festen '
+    + 'Hinweis — fremder Text kommt beim Agenten nur als Ausgabe des Postfachs an.'));
+
+  if (s.socket !== 'ok') {
+    lkBody.append(tgEl('p', 'tg-err', s.socket === 'busy'
+      ? 'Der Agenten-Zugang gehört einer anderen laufenden Webterminal-Instanz desselben Benutzers — '
+        + 'Agenten dieser Instanz erreichen ihr Postfach nicht.'
+      : 'Der Agenten-Zugang ist nicht verfügbar (siehe Log des Dienstes) — Agenten können ihr Postfach nicht lesen.'));
+  }
+
+  // Postfach: Ungelesenes zustellen.
+  if (s.unread) {
+    const box = tgEl('div', 'tg-pane lk-inbox');
+    box.append(tgEl('div', 'tg-pane-h',
+      `${lkCount(s.unread, 'ungelesene Nachricht', 'ungelesene Nachrichten')} für diese Sitzung`));
+    box.append(tgEl('p', 'tg-p tg-dim', s.pending
+      ? 'Der Agent weiß noch nichts davon. „Zustellen“ tippt einen Hinweis in die Sitzung; '
+        + 'gelesen ist die Nachricht erst, wenn der Agent sein Postfach abruft.'
+      : 'Der Hinweis ist zugestellt; der Agent hat sein Postfach noch nicht abgerufen.'));
+    const row = tgEl('div', 'tg-actions');
+    const btn = tgButton(s.pending ? 'Zustellen' : 'Erneut zustellen', s.pending ? 'bug-add' : 'tg-secondary',
+      () => lkPost('deliver', {}).catch(lkFail));
+    btn.disabled = !s.deliverable;
+    row.append(btn);
+    box.append(row);
+    if (!s.deliverable) box.append(tgEl('p', 'tg-p tg-dim', `Gerade nicht möglich: ${s.deliverHint}`));
+    lkBody.append(box);
+  }
+
+  for (const l of s.links) lkBody.append(lkRenderLink(l));
+
+  // Neue Verbindung: direkt, per erzeugtem Code oder per eingetragenem Code.
+  const add = tgEl('div', 'tg-pane');
+  add.append(tgEl('div', 'tg-pane-h', 'Neue Verbindung'));
+  const peers = state.sessions.filter((x) => x.name !== lkSession);
+  if (peers.length) {
+    add.append(tgEl('p', 'tg-p tg-dim', 'Direkt mit einer Sitzung dieser Installation:'));
+    const row = tgEl('div', 'lk-row');
+    const sel = lkInput('peer', 'bug-input ag-select', { tag: 'select' });
+    for (const p of peers) {
+      const o = tgEl('option', null, lkLabelOf(p.name) + (p.agent ? ` — ${agentName(p)}` : ''));
+      o.value = p.name;
+      sel.append(o);
+    }
+    if (!peers.some((p) => p.name === lkForm.peer)) lkForm.peer = peers[0].name;
+    sel.value = lkForm.peer;
+    sel.addEventListener('change', () => { lkForm.peer = sel.value; });
+    row.append(sel, tgButton('Verbinden', 'bug-add', () => lkPost('connect', { peer: lkForm.peer }).catch(lkFail)));
+    add.append(row);
+  }
+  add.append(tgEl('p', 'tg-p tg-dim', 'Oder einen Code erzeugen und in der anderen Sitzung eintragen:'));
+  const make = tgEl('div', 'lk-row');
+  const seats = lkInput('seats', 'bug-input lk-seats', { type: 'number', min: '2', max: '8', title: 'Plätze (Teilnehmer insgesamt)' });
+  make.append(tgEl('span', 'tg-dim lk-label', 'Plätze'), seats,
+    tgButton('Code erzeugen', 'tg-secondary', async () => {
+      try {
+        const d = await lkPost('create', { seats: Number(lkForm.seats) || 2 });
+        if (d.created) await lkCopy(d.created.code);
+      } catch (e) { lkFail(e); }
+    }));
+  add.append(make);
+  const join = tgEl('div', 'lk-row');
+  const code = lkInput('code', 'bug-input lk-code', { type: 'text', placeholder: 'termlink:local/…', spellcheck: false, autocomplete: 'off' });
+  const doJoin = async () => {
+    try {
+      await lkPost('join', { code: lkForm.code });
+      lkForm.code = '';
+      lkStateJson = '';
+      lkApply(lkState);
+    } catch (e) { lkFail(e); }
+  };
+  code.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doJoin(); } });
+  join.append(code, tgButton('Eintragen', 'tg-secondary', doJoin));
+  add.append(join);
+  lkBody.append(add);
+
+  // Der Agent: womit er arbeitet, und die Einweisung auf Knopfdruck.
+  if (s.links.length) {
+    const how = tgEl('div', 'tg-pane');
+    how.append(tgEl('div', 'tg-pane-h', 'Der Agent in dieser Sitzung'));
+    const p = tgEl('p', 'tg-p tg-dim', 'Er liest und schreibt mit ');
+    p.append(tgEl('code', null, `${s.cli}`), ' (Befehle inbox, send, status, help). '
+      + '„Agent einweisen“ tippt einen Hinweis auf die Anleitung in die Sitzung.');
+    how.append(p);
+    const row = tgEl('div', 'tg-actions');
+    const btn = tgButton('Agent einweisen', 'tg-secondary', async () => {
+      try {
+        await lkPost('deliver', { kind: 'intro' });
+        setStatus('Hinweis auf die Anleitung in die Sitzung getippt', false, 2500);
+      } catch (e) { lkFail(e); }
+    });
+    btn.disabled = !s.deliverable;
+    row.append(btn);
+    how.append(row);
+    if (!s.deliverable) how.append(tgEl('p', 'tg-p tg-dim', `Gerade nicht möglich: ${s.deliverHint}`));
+    lkBody.append(how);
+  }
+
+  lkBody.scrollTop = scroll;
+  if (focused) {
+    const el = lkBody.querySelector(`[data-lk="${focused}"]`);
+    if (el) el.focus();
+  }
+}
+
+function lkOpen(name) {
+  lkSession = name;
+  lkState = null;
+  lkStateJson = '';
+  lkHistory.clear();
+  lkForm.code = '';
+  lkOverlay.hidden = false;
+  lkRender();
+  lkRefresh();
+  if (!lkTimer) lkTimer = setInterval(lkRefresh, 3000);
+}
+
+function lkClose() {
+  lkOverlay.hidden = true;
+  lkSession = null;
+  if (lkTimer) { clearInterval(lkTimer); lkTimer = null; }
+}
+
+document.getElementById('lk-close').addEventListener('click', lkClose);
+lkOverlay.addEventListener('click', (e) => { if (e.target === lkOverlay) lkClose(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !lkOverlay.hidden) { e.stopPropagation(); lkClose(); }
 }, true);
 
 // ------------------------------------------------------------- Zugangsschutz

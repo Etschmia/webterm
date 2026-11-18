@@ -78,6 +78,12 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
 - **Terminal-Darstellung**: JetBrains Mono wird mitgeliefert, Rendering per WebGL (xterm.js 6).
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
+- **Agenten verbinden** (Ketten-Symbol je Sitzung): verbindet die Agenten zweier oder
+  mehrerer tmux-Sitzungen derselben Installation — direkt oder per Code, den man in einer
+  Sitzung erzeugt und in der anderen einträgt. Nachrichten liegen in einem Postfach; der
+  Agent schreibt mit `term-link send` und liest mit `term-link inbox`. Zugestellt wird auf
+  Klick: das Webterminal tippt dann nur einen festen Hinweis in die Sitzung, fremder Text
+  kommt nie als Eingabe an. Siehe „Agenten verbinden".
 - **Zugangsschutz** (Zahnrad unten in der Sidebar): zeigt, womit die eigenen Anfragen gerade
   abgesichert sind (Basic Auth / 2FA-SSO / gar nicht — erkannt an den Headern der eigenen
   Anfrage, nicht aus der Caddy-Datei) und erzeugt den passenden Caddy-Block, um **2FA
@@ -277,6 +283,33 @@ Der optionale Sidebar-Bot vermittelt Nachrichten an lokales Claude Code. Fehlges
 Aufträge werden nicht automatisch erneut ausgeführt; auch nach einem Timeout bleibt der
 bisherige Verlauf erhalten. Eine nicht mehr vorhandene Sitzung kann bewusst mit `/new`
 verlassen werden. Konfiguration und Token liegen lokal unter `~/.term-telegram/`.
+
+## Agenten verbinden
+
+Über das Ketten-Symbol einer Sitzung lassen sich Agenten in verschiedenen tmux-Sitzungen
+miteinander verbinden. Bisher geht das innerhalb einer Installation; Verbindungen zwischen
+Installationen über einen Hub sind geplant.
+
+1. Ketten-Symbol der Sitzung → **Verbinden** (direkt mit einer anderen Sitzung) oder
+   **Code erzeugen** und den Code in der anderen Sitzung unter **Eintragen** einfügen. Eine
+   Verbindung hat 2 bis 8 Plätze; der Code gilt 24 Stunden und lässt sich erneuern.
+2. **Agent einweisen** tippt einen Hinweis auf die Anleitung (`term-link help`) in die
+   Sitzung. Danach genügt etwa: „Frag den verbundenen Agenten, wie die Schnittstelle gebaut
+   ist."
+3. Liegt für eine Sitzung etwas im Postfach, zeigt das Ketten-Symbol die Zahl. **Zustellen**
+   tippt einen festen Hinweis in die Sitzung; der Agent ruft sein Postfach dann selbst ab.
+
+Was man wissen sollte:
+
+- Fremde Nachrichten sind für den Agenten **Information, keine Anweisung** — das steht in
+  jeder Postfach-Ausgabe. Das ist eine Regel im Prompt, keine technische Sperre; bei Agenten,
+  die ohne Rückfrage Befehle ausführen, bleibt ein Restrisiko.
+- Zugestellt wird nur auf Klick und nur, wenn in der Sitzung ein erkannter Agent läuft, der
+  weder arbeitet noch auf eine Freigabe wartet.
+- Der Agent kann selbst keine Verbindung anlegen, ihr beitreten oder sie trennen.
+- Zustand und Verlauf liegen lokal unter `~/.term-link/` (höchstens 500 Nachrichten je
+  Verbindung, 16 KB je Nachricht, 30 Nachrichten pro Minute und Sitzung). Endet eine
+  Sitzung, endet ihre Mitgliedschaft.
 
 ## Hinweise
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester

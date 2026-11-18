@@ -317,6 +317,20 @@
         </section>
 
         <section>
+          <h3>Agenten verbinden</h3>
+          <p>Das Ketten-Symbol einer Sitzung (bei Hover) verbindet deren Agenten mit dem
+          Agenten einer anderen Sitzung: <b>direkt</b> mit einer Sitzung dieser Installation
+          oder per <b>Code</b>, den man in der einen Sitzung erzeugt und in der anderen
+          einträgt. Bisher gehen nur Verbindungen innerhalb einer Installation.</p>
+          <p>Nachrichten liegen in einem <b>Postfach</b>. Der Agent schreibt mit
+          <code>term-link send</code> und liest mit <code>term-link inbox</code>; den Umgang
+          bringt ihm <b>Agent einweisen</b> bei. Neues für eine Sitzung zeigt das Symbol mit
+          einer Zahl — <b>Zustellen</b> tippt dann einen festen Hinweis in die Sitzung. Fremder
+          Text kommt nie als Eingabe an, nur als Ausgabe des Postfachs. Zugestellt wird nur
+          auf Klick und nur, wenn der Agent weder arbeitet noch auf eine Freigabe wartet.</p>
+        </section>
+
+        <section>
           <h3>Wenn Claude ins Usage-Limit läuft</h3>
           <p>Seit <b>Claude Code 2.1.234</b> wartet die CLI ein erreichtes Limit <b>selbst</b>
           aus: es erscheint <i>„Continuing automatically when your limit resets · esc to
@@ -464,6 +478,16 @@
         <button class="bug-close" id="ag-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
       </div>
       <div class="tg-body" id="ag-body"><!-- Inhalt rendert app.js --></div>
+    </div>
+  </div>
+
+  <div class="bug-overlay" id="lk-overlay" hidden>
+    <div class="bug-card tg-card lk-card" role="dialog" aria-modal="true" aria-label="Verbindungen">
+      <div class="bug-head">
+        <span class="bug-head-title" id="lk-title">Verbindungen</span>
+        <button class="bug-close" id="lk-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
+      </div>
+      <div class="tg-body" id="lk-body"><!-- Inhalt rendert app.js --></div>
     </div>
   </div>
 

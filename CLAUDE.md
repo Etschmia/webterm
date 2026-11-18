@@ -185,6 +185,41 @@ Serverprozess — kein Webhook, keine öffentliche Erreichbarkeit nötig.
 - „Löschen" entfernt nur die hiesige Einrichtung — den Bot selbst löscht man bei
   @BotFather (`/deletebot`), das kann die Bot-API nicht.
 
+## Verbindungen zwischen Agent-Sitzungen (`lib/link.js`, `bin/term-link.mjs`)
+
+Das Ketten-Symbol je Sidebar-Zeile (`/api/link/*`) verbindet den Agenten einer tmux-Sitzung
+mit Agenten anderer Sitzungen. **Stand: nur innerhalb einer Installation** (`kind: 'local'`);
+der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Datenmodell
+(`lib/link-store.js`) ist darauf angelegt — dort wechselt später nur der Transport.
+
+- **Bindung an die Sitzung, nicht an den Namen**: Session-Option `@term-link-ep` (wie
+  `@user-named`). Sie übersteht das Umbenennen und stirbt mit der Sitzung. Ein Endpunkt, der in
+  einer **erfolgreichen** tmux-Abfrage fehlt, ist endgültig weg (`reconcile`); bei
+  fehlgeschlagener Abfrage wird nichts abgeglichen.
+- **Zustand** in `~/.term-link/` (0700): `state.json` (0600), der Agenten-Socket `agent.sock`
+  und der Starter `bin/term-link`, den der Server bei jedem Start neu schreibt (ruft
+  `bin/term-link.mjs` mit dem node des Servers auf — der Agent braucht kein node im PATH;
+  der Starter liegt bewusst nicht im PATH). Verzeichnis per `TERM_LINK_DIR` änderbar.
+- **Drei Wege mit verschiedenen Rechten**: Die Sidebar (CSRF-geschützt) legt Verbindungen an
+  und trennt sie. Der Agent kann über den Unix-Socket nur lesen und senden (`inbox`, `send`,
+  `status`, `history`) — nie anlegen oder beitreten. Welche Sitzung fragt, sagt tmux
+  (`$TMUX_PANE` + Socket aus `$TMUX`), nicht der Agent.
+- ⚠️ **Ins Pane geht nur eine feste Hinweiszeile** (`wakeLine`/`introLine`). Was dort getippt
+  wird, hat für den Agenten das Gewicht einer Nutzereingabe; fremder Text kommt deshalb
+  ausschließlich als Ausgabe von `term-link inbox` an (mit Verhaltensregeln und einer
+  Zufallsmarke je Aufruf um jeden Nachrichtentext). Diesen Riegel nicht aufweichen — auch
+  keine Namen oder Betreffzeilen der Gegenstelle in den Hinweis.
+- **Zugestellt wird nur auf Klick**, und nur bei erkanntem Agenten im **aktiven Pane** der
+  Sitzung, der weder arbeitet noch auf Freigabe wartet (`deliverCheck`; getippt wird in genau
+  dieses Pane, adressiert per Pane-ID). Grund: `idle` ist in `agentStatusFromTail` nur der
+  Rückfallwert, und Tippen in einen Freigabe-Dialog könnte ihn beantworten. Eine automatische
+  Zustellung darf erst kommen, wenn der Leerlauf je Tool positiv erkannt wird, und braucht
+  dann ein Limit gegen Agenten-Schleifen.
+- Der Unix-Socket-Pfad ist auf 107 Bytes begrenzt (macOS 103); Node kürzt längere Pfade
+  **still** — deshalb die Prüfung vor dem `listen`.
+- Tests: `test/link-integration.test.js` startet einen eigenen tmux-Server über einen
+  `tmux`-Starter im PATH (`-L <socket>`, `unset TMUX`) — der echte Server bleibt unberührt.
+
 ## Sicherheit: `server.js` authentifiziert nicht selbst
 
 Dahinter liegt eine **volle Shell** unter dem Service-User. Der Schutz liegt vollständig beim

@@ -27,6 +27,8 @@ import {
   telegramBoot, telegramCancelSetup, telegramRemove, telegramSetToken,
   telegramStart, telegramStatus, telegramStop,
 } from './lib/telegram.js';
+import { createLink } from './lib/link.js';
+import { LinkError } from './lib/link-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -179,6 +181,15 @@ function ensureStandardSession() {
   return standardSessionPending;
 }
 
+// Verbindungen zwischen Agent-Sitzungen (Sidebar-Knopf je Zeile, /api/link/*).
+// Zustand, Agenten-Socket und der Starter fuer bin/term-link liegen in
+// ~/.term-link (0700); Logik in lib/link.js.
+const link = createLink({
+  tmux,
+  dir: process.env.TERM_LINK_DIR || path.join(HOME, '.term-link'),
+  cliScript: path.join(__dirname, 'bin', 'term-link.mjs'),
+});
+
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
 const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse', 'opencode'];
 
@@ -201,14 +212,15 @@ function agentFromComm(comm) {
 // pane_current_command taugt dafuer nicht: hinter dem claude-auto-retry-Wrapper
 // meldet es 'bash'/'node'. Verlaesslich ist nur der Prozessname comm irgendwo im
 // Baum unter dem Pane-PID (gleiche Heuristik wie deploy/term-restart).
-// Liefert Map: Session-Name -> { agent, pid }.
+// Liefert Map: Session-Name -> { agent, pid, paneId }.
 async function agentSessions() {
-  const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{session_name}']);
+  const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{pane_id}\t#{session_name}']);
   if (!panes.ok) return new Map();
   const paneSession = new Map();
   for (const line of panes.out.split('\n')) {
-    const [pid, session] = line.split('\t');
-    if (pid && session) paneSession.set(pid, session);
+    const [pid, paneId, ...rest] = line.split('\t');
+    const session = rest.join('\t');
+    if (pid && session) paneSession.set(pid, { session, paneId });
   }
   if (!paneSession.size) return new Map();
 
@@ -230,10 +242,10 @@ async function agentSessions() {
   for (const [pid, agent] of agentPids) {
     let x = pid;
     for (let i = 0; i < 64 && x && x !== '0'; i++) {
-      const session = paneSession.get(x);
-      if (session) {
+      const pane = paneSession.get(x);
+      if (pane) {
         // Pro Session ein Agent-Eintrag (bei mehreren Panes gewinnt der erste).
-        if (!found.has(session)) found.set(session, { agent, pid });
+        if (!found.has(pane.session)) found.set(pane.session, { agent, pid, paneId: pane.paneId });
         break;
       }
       x = parent.get(x);
@@ -692,13 +704,26 @@ function agentStatusFromTail(tail, agent) {
   return 'idle';
 }
 
-// Liefert die aktuell laufenden tmux-Sessions als Array.
+// Liefert die aktuell laufenden tmux-Sessions als Array (fuer den Client).
 async function listSessions() {
+  const sessions = await listSessionsFull();
+  for (const s of sessions) {
+    delete s.tmuxId; delete s.linkEp; delete s.activePane; delete s.agentPane;
+  }
+  return sessions;
+}
+
+// Wie listSessions, aber mit internen Feldern — nur fuer serverseitige Aufrufer:
+// tmuxId (Session-ID "$N"), linkEp (Endpunkt der Verbindungen), activePane
+// (aktives Pane, aus dem auch der Agent-Status gelesen wird) und agentPane
+// (Pane, in dessen Prozessbaum der Agent laeuft).
+async function listSessionsFull() {
   // pane_title als LETZTES Feld: es kann Leerzeichen enthalten (Tabs sind in
   // Titeln unueblich), so bleibt das Splitten der Fixfelder stabil.
   const fmt = [
     '#{session_name}', '#{session_attached}', '#{session_windows}',
     '#{pane_in_mode}', '#{pane_current_command}', '#{@user-named}',
+    '#{session_id}', '#{@term-link-ep}', '#{pane_id}',
     '#{pane_current_path}', '#{pane_title}',
   ].join('\t');
   const [r, agents] = await Promise.all([
@@ -711,10 +736,17 @@ async function listSessions() {
     .filter(Boolean)
     .map((line) => {
       const parts = line.split('\t');
-      const [name, attached, windows, inMode, command, userNamed, path] = parts;
-      const title = parts.slice(7).join('\t'); // Rest = pane_title (robust ggü. Tabs)
+      const [name, attached, windows, inMode, command, userNamed, tmuxId, linkEp, activePane, path] = parts;
+      const title = parts.slice(10).join('\t'); // Rest = pane_title (robust ggü. Tabs)
       return {
         name,
+        tmuxId,
+        linkEp: linkEp || '',
+        activePane,
+        agentPane: (agents.get(name) || {}).paneId || null,
+        // Verbindungen dieser Sitzung: { count, unread, pending } oder null;
+        // wird unten nachgetragen (Chip in der Sidebar).
+        link: null,
         attached: Number(attached) > 0,
         windows: Number(windows) || 0,
         copyMode: inMode === '1',
@@ -749,6 +781,10 @@ async function listSessions() {
         agentStatus: null,
       };
     });
+  // Die Liste stammt aus einer erfolgreichen tmux-Abfrage: damit darf der
+  // Verbindungs-Zustand abgeglichen werden (beendete Sitzungen fallen heraus).
+  link.observe(sessions);
+  for (const s of sessions) s.link = link.summary(s.linkEp);
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
     const st = await agentPaneStatus(s.name, s.title, s.agent);
     s.agentStatus = st.status;
@@ -1789,6 +1825,70 @@ async function handleTelegram(req, res, route) {
 }
 
 // ---------------------------------------------------------------------------
+// Verbindungen zwischen Agent-Sitzungen (/api/link/*) — Knopf je Sidebar-Zeile
+// ---------------------------------------------------------------------------
+// Nur hier entstehen und enden Verbindungen; der Agent im Pane kann ueber
+// seinen Socket lediglich lesen und senden (lib/link.js). Jede Antwort traegt
+// den frischen Stand der Sitzung, damit das Overlay ohne zweiten Abruf
+// neu zeichnen kann.
+
+async function handleLink(req, res, route) {
+  const q = new URL(req.url, 'http://localhost').searchParams;
+  const body = req.method === 'POST' ? await readJsonBody(req) : {};
+  if (!body) return sendJson(res, 400, { error: 'Ungueltige Anfrage' });
+  const wanted = req.method === 'POST' ? body.session : q.get('session');
+  const find = async (name) => (typeof name === 'string' && name
+    ? (await listSessionsFull()).find((s) => s.name === name) : undefined);
+  const row = await find(wanted);
+  if (!row) return sendJson(res, 404, { error: `Session '${wanted || ''}' nicht gefunden` });
+  // Stand nach einer Aenderung neu einlesen (Endpunkt und Zaehler koennen sich
+  // geaendert haben); `extra` nimmt z. B. den frisch erzeugten Code mit.
+  const fresh = async (extra = {}) => {
+    const now = (await find(row.name)) || row;
+    return sendJson(res, 200, { ...link.stateFor(now), ...extra });
+  };
+  try {
+    if (route === '/api/link/state' && req.method === 'GET') {
+      return sendJson(res, 200, link.stateFor(row));
+    }
+    if (route === '/api/link/history' && req.method === 'GET') {
+      return sendJson(res, 200, { messages: link.history(row, q.get('link')) });
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Methode nicht erlaubt' });
+    if (route === '/api/link/create') {
+      const made = await link.create(row, body.seats);
+      return fresh({ created: made });
+    }
+    if (route === '/api/link/join') {
+      await link.join(row, body.code);
+      return fresh();
+    }
+    if (route === '/api/link/connect') {
+      const peer = await find(body.peer);
+      if (!peer) return sendJson(res, 404, { error: `Session '${body.peer || ''}' nicht gefunden` });
+      await link.connect(row, peer);
+      return fresh();
+    }
+    if (route === '/api/link/leave') {
+      link.leave(row, body.link);
+      return fresh();
+    }
+    if (route === '/api/link/invite') {
+      const made = link.renewInvite(row, body.link);
+      return fresh({ created: made });
+    }
+    if (route === '/api/link/deliver') {
+      await link.deliver(row, body.kind === 'intro' ? 'intro' : 'wake');
+      return fresh();
+    }
+  } catch (err) {
+    if (err instanceof LinkError) return sendJson(res, err.status, { error: err.message, code: err.code });
+    throw err;
+  }
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
 // Zugangsschutz (/api/authguard/*) — Zahnrad "Zugangsschutz" in der Sidebar
 // ---------------------------------------------------------------------------
 // Das Panel ist Erklaerung + Snippet-Generator, KEIN Schalter: es aendert
@@ -2062,6 +2162,10 @@ async function handleRequest(req, res) {
     return handleTelegram(req, res, url);
   }
 
+  if (url.startsWith('/api/link/')) {
+    return handleLink(req, res, url);
+  }
+
   if (url.startsWith('/api/authguard/')) {
     return handleAuthGuard(req, res, url);
   }
@@ -2260,3 +2364,6 @@ server.listen(PORT, HOST, () => {
 
 // Konfigurierter Telegram-Bot laeuft nach einem Neustart von selbst wieder an.
 telegramBoot();
+
+// Agenten-Socket und Starter fuer bin/term-link (Verbindungen zwischen Sitzungen).
+link.boot();
