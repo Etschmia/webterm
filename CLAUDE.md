@@ -200,6 +200,8 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
   und der Starter `bin/term-link`, den der Server bei jedem Start neu schreibt (ruft
   `bin/term-link.mjs` mit dem node des Servers auf — der Agent braucht kein node im PATH;
   der Starter liegt bewusst nicht im PATH). Verzeichnis per `TERM_LINK_DIR` änderbar.
+- Die **Standard-Sitzung** bietet die Oberfläche weder als Ausgangspunkt noch als Gegenstelle
+  an: dort läuft nie ein Agent, und „Standard" liest sich in der Auswahl wie eine Voreinstellung.
 - **Drei Wege mit verschiedenen Rechten**: Die Sidebar (CSRF-geschützt) legt Verbindungen an
   und trennt sie. Der Agent kann über den Unix-Socket nur lesen und senden (`inbox`, `send`,
   `status`, `history`) — nie anlegen oder beitreten. Welche Sitzung fragt, sagt tmux

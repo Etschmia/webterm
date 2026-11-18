@@ -1091,8 +1091,8 @@ function renderSidebar() {
     badge: 'tmux',
     active: stdActive,
     onClick: () => switchTo('standard', null),
-    link: stdSession && stdSession.link,
-    onLink: stdSession ? () => lkOpen(stdSession.name) : null,
+    // Bewusst ohne Ketten-Knopf: in der Standard-Sitzung laeuft nie ein Agent
+    // (ein dort gestartetes Tool bekommt seine eigene Sitzung).
   });
   // Copy-Mode auch im Standard-Modus: das Overlay ist modusunabhaengig und
   // hilft genauso, sobald hier eine maus-greifende Anwendung laeuft (Claude
@@ -4039,7 +4039,9 @@ function lkRender() {
   // Neue Verbindung: direkt, per erzeugtem Code oder per eingetragenem Code.
   const add = tgEl('div', 'tg-pane');
   add.append(tgEl('div', 'tg-pane-h', 'Neue Verbindung'));
-  const peers = state.sessions.filter((x) => x.name !== lkSession);
+  // Die Standard-Sitzung wird nicht angeboten: dort laeuft nie ein Agent, und
+  // "Standard" liest sich in dieser Auswahl wie eine Voreinstellung.
+  const peers = state.sessions.filter((x) => x.name !== lkSession && !x.standard);
   if (peers.length) {
     add.append(tgEl('p', 'tg-p tg-dim', 'Direkt mit einer Sitzung dieser Installation:'));
     const row = tgEl('div', 'lk-row');
