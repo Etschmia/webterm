@@ -1855,6 +1855,14 @@ async function handleLink(req, res, route) {
       return sendJson(res, 200, { messages: link.history(row, q.get('link')) });
     }
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Methode nicht erlaubt' });
+    // Die Standard-Sitzung nimmt an keiner Verbindung teil — weder als Ausgangspunkt
+    // noch als Gegenstelle: dort laeuft nie ein Agent (ein dort gestartetes Tool
+    // bekommt seine eigene Sitzung). Trennen und Lesen bleiben erlaubt, falls eine
+    // aeltere Verbindung existiert.
+    const joins = ['/api/link/create', '/api/link/join', '/api/link/connect'].includes(route);
+    if (joins && (row.standard || body.peer === STANDARD_SESSION)) {
+      return sendJson(res, 400, { error: 'Die Standard-Sitzung kann nicht verbunden werden.', code: 'standard_session' });
+    }
     if (route === '/api/link/create') {
       const made = await link.create(row, body.seats);
       return fresh({ created: made });

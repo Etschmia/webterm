@@ -132,6 +132,16 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   assert.notEqual(early.status, 0);
   assert.match(early.stderr, /keine Verbindung/);
 
+  // Die Standard-Sitzung bleibt aussen vor — als Ausgangspunkt wie als Gegenstelle.
+  s.tmux('new-session', '-d', '-s', 'Standard-Webterm', 'sh');
+  const viaPeer = await s.post('/api/link/connect', { session: 'alpha', peer: 'Standard-Webterm' });
+  assert.equal(viaPeer.status, 400);
+  assert.equal(viaPeer.data.code, 'standard_session');
+  assert.equal((await s.post('/api/link/connect', { session: 'Standard-Webterm', peer: 'alpha' })).status, 400);
+  assert.equal((await s.post('/api/link/create', { session: 'Standard-Webterm' })).status, 400);
+  assert.equal((await s.post('/api/link/join', { session: 'Standard-Webterm', code: 'termlink:local/ln_abcdefgh#' + 'x'.repeat(22) })).status, 400);
+  assert.equal((await s.sessionRow('Standard-Webterm')).link, null);
+
   const linked = await s.post('/api/link/connect', { session: 'alpha', peer: 'beta' });
   assert.equal(linked.status, 200);
   assert.deepEqual(linked.data.links[0].members.map((m) => [m.name, m.self]), [['alpha', true], ['beta', false]]);
