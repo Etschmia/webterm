@@ -413,6 +413,10 @@ test('deliverCheck only allows idle agent panes and shellQuote quotes when neede
   assert.equal(deliverCheck({ ...base, agent: null }).ok, false);
   assert.equal(deliverCheck({ ...base, agentStatus: 'working' }).ok, false);
   assert.equal(deliverCheck({ ...base, agentStatus: 'blocked' }).ok, false);
+  // Pane nicht lesbar: kein Leerlauf. Erlaubt ist nur 'idle', nicht "alles andere".
+  assert.match(deliverCheck({ ...base, agentStatus: 'unknown' }).hint, /nicht lesen/);
+  assert.equal(deliverCheck({ ...base, agentStatus: null }).ok, false);
+  assert.equal(deliverCheck({ ...base, agentStatus: 'neu' }).ok, false);
   assert.equal(deliverCheck({ ...base, copyMode: true }).ok, false);
   assert.equal(shellQuote('/home/u/.term-link/bin/term-link'), '/home/u/.term-link/bin/term-link');
   assert.equal(shellQuote("/home/o'neil/x y"), "'/home/o'\\''neil/x y'");

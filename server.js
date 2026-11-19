@@ -641,7 +641,7 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
   return null;
 }
 
-// Agent-Status einer Agent-Session: 'working' | 'blocked' | 'idle'.
+// Agent-Status einer Agent-Session: 'working' | 'blocked' | 'idle' | 'unknown'.
 // Idee von herdr.dev: primaeres Signal bei Claude ist der Spinner, den Claude
 // Code in den pane_title schreibt; kimi setzt stattdessen eine Mondphasen-
 // Glyphe (🌑–🌘) an den Zeilenanfang seiner Statuszeile im Pane (empirisch
@@ -650,17 +650,26 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
 // geprueft. Konservativ wie bei Herdr: 'blocked' nur bei erkanntem Prompt,
 // sonst 'idle'.
 //
+// 'unknown' heisst: das Pane liess sich nicht lesen. Das ist NICHT dasselbe wie
+// ein ruhiger Prompt — dort koennte ein Freigabe-Dialog stehen, den niemand
+// gesehen hat. Die Zustellung von Verbindungs-Hinweisen tippt deshalb nur bei
+// 'idle' (deliverCheck in lib/link.js); der Client bekommt 'unknown' als
+// 'idle' (s. listSessions), fuer Ampel und Benachrichtigung aendert sich nichts.
+//
+// `target` ist die Pane-ID (%N) des aktiven Panes: exakt, anders als ein
+// Sitzungsname, den tmux als Praefix oder Muster deuten wuerde.
+//
 // Liefert { status, tail }: den eingelesenen Pane-Ausschnitt braucht der
 // Aufrufer bei Codex und muse noch einmal (Modell/Effort aus der Statuszeile)
 // — ein zweites capture-pane pro Poll waere reine Verschwendung.
-async function agentPaneStatus(name, title, agent) {
+async function agentPaneStatus(target, title, agent) {
   // Braille-Spinner am Titelanfang = Claude arbeitet (gleiche Erkennung wie
   // die "Claude ist fertig"-Logik im Frontend). Bei kimi steht nichts im Titel.
   if (agent === 'claude' && /^[⠀-⣿]/.test((title || '').trim())) {
     return { status: 'working', tail: '' };
   }
-  const r = await tmux(['capture-pane', '-p', '-t', name]);
-  if (!r.ok) return { status: 'idle', tail: '' };
+  const r = await tmux(['capture-pane', '-p', '-t', target]);
+  if (!r.ok) return { status: 'unknown', tail: '' };
   const tail = r.out.split('\n').slice(-25).join('\n');
   return { status: agentStatusFromTail(tail, agent), tail };
 }
@@ -709,6 +718,9 @@ async function listSessions() {
   const sessions = await listSessionsFull();
   for (const s of sessions) {
     delete s.tmuxId; delete s.linkEp; delete s.activePane; delete s.agentPane;
+    // 'unknown' (Pane nicht lesbar) ist nur serverseitig von Belang; die
+    // Oberflaeche kennt wie bisher working/blocked/idle.
+    if (s.agentStatus === 'unknown') s.agentStatus = 'idle';
   }
   return sessions;
 }
@@ -790,7 +802,8 @@ async function listSessionsFull() {
   link.observe(sessions, linkSnap);
   for (const s of sessions) s.link = link.summary(s.linkEp);
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
-    const st = await agentPaneStatus(s.name, s.title, s.agent);
+    // Ohne Pane-ID (sollte nicht vorkommen) die Sitzung exakt per '=<name>:'.
+    const st = await agentPaneStatus(s.activePane || `=${s.name}:`, s.title, s.agent);
     s.agentStatus = st.status;
     // Nur intern (Codex-Modell/muse-Effort), wird unten wieder entfernt.
     s.paneTail = st.tail;

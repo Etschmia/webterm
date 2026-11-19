@@ -24,7 +24,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Behoben: nur lebende Mitglieder zählen |
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Behoben: nur die Instanz mit dem Socket schreibt |
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
-| N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Offen |
+| N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Behoben: Status `unknown`, Zustellung nur bei `idle` |
 | N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Offen |
 | K1 | Kosmetik | Ratenlimit in der README gilt je Mitgliedschaft, nicht je Sitzung | Behoben: README berichtigt |
 
@@ -194,6 +194,17 @@ ist älter, die Zustellung tippt deshalb neu.
 
 Vorschlag: Bei Capture-Fehler einen eigenen Status zurückgeben und in
 `deliverCheck` ablehnen. Ziel wie bei `/api/capture` exakt adressieren.
+
+Umsetzung: `agentPaneStatus` liefert bei fehlgeschlagenem `capture-pane` den
+Status `unknown`. `deliverCheck` erlaubt die Zustellung nur noch bei `idle`
+und lehnt jeden anderen Wert ab, statt nur `working` und `blocked`
+auszuschließen; ein später hinzukommender Status ist damit von selbst
+gesperrt. Gelesen wird über die Pane-ID des aktiven Panes (`%N`) statt über
+den Sitzungsnamen, den tmux als Präfix oder Muster deutet. Status und Ziel der
+Zustellung beziehen sich so auf dasselbe Pane. Die Oberfläche bekommt
+`unknown` weiterhin als `idle`: Ampel und „fertig“-Benachrichtigung ändern
+sich nicht. Test: `deliverCheck` mit `unknown`, `null` und einem unbekannten
+Wert.
 
 ### N2 — Erstes Agenten-Pane
 
