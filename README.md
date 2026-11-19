@@ -308,8 +308,10 @@ Was man wissen sollte:
   weder arbeitet noch auf eine Freigabe wartet.
 - Der Agent kann selbst keine Verbindung anlegen, ihr beitreten oder sie trennen.
 - Zustand und Verlauf liegen lokal unter `~/.term-link/` (höchstens 500 Nachrichten je
-  Verbindung, 16 KB je Nachricht, 30 Nachrichten pro Minute und Sitzung). Endet eine
-  Sitzung, endet ihre Mitgliedschaft.
+  Verbindung, 16 KB je Nachricht). Endet eine Sitzung, endet ihre Mitgliedschaft.
+- Senden ist auf 30 Nachrichten pro Minute begrenzt — je Mitgliedschaft, also je Sitzung
+  **und** Verbindung: eine Sitzung mit drei Verbindungen kann in jeder davon 30 pro Minute
+  senden. Der Zähler liegt nur im Speicher des Dienstes und beginnt nach dessen Neustart neu.
 
 ## Hinweise
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester

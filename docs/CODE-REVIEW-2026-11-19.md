@@ -8,6 +8,10 @@ ausschliessen). Elf Dateien: `CLAUDE.md`, `README.md`, `bin/term-link.mjs`,
 Ergänzt die [Review vom 08.11.2026](CODE-REVIEW-2026-11-08.md). Nur gelesen; der
 Quelltext ist unverändert.
 
+Die Befunde werden seither einzeln behoben, je Befund ein Commit (Betreff
+`fix(link): <ID> …`). Die Spalte „Stand“ und der Absatz „Umsetzung“ unter dem
+jeweiligen Befund halten fest, was geändert wurde.
+
 Ergebnis: die dokumentierten Geländer (CSRF, feste Hinweiszeile, Socket ohne
 Anlegen/Beitreten, Standard-Sitzung, Rechte, Pfadlänge) sind im Code vorhanden.
 Offen sind eine Lücke bei der Socket-Identität, ein dauerhafter Abgleichfehler
@@ -22,7 +26,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Offen |
 | N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Offen |
 | N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Offen |
-| K1 | Kosmetik | Ratenlimit in der README gilt je Mitgliedschaft, nicht je Sitzung | Offen |
+| K1 | Kosmetik | Ratenlimit in der README gilt je Mitgliedschaft, nicht je Sitzung | Behoben: README berichtigt |
 
 ### H1 — Socket-Identität
 
@@ -145,6 +149,12 @@ leer; das sagt der Kommentar im Store, die README nicht.
 
 Vorschlag: „je Mitgliedschaft“ schreiben oder das Limit am Endpunkt erzwingen,
 und den Neustart erwähnen.
+
+Umsetzung: Die README nennt das Limit jetzt je Mitgliedschaft (Sitzung und
+Verbindung) mit einem Beispiel und sagt, dass der Zähler nur im Speicher liegt
+und nach einem Neustart neu beginnt. Das Verhalten ist unverändert: die Bremse
+soll Schleifen innerhalb einer Verbindung aufhalten, nicht eine Sitzung mit
+mehreren Verbindungen ausbremsen.
 
 ## Geprüft und unauffällig
 
