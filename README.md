@@ -307,6 +307,10 @@ Was man wissen sollte:
 - Zugestellt wird nur auf Klick und nur, wenn in der Sitzung ein erkannter Agent läuft, der
   weder arbeitet noch auf eine Freigabe wartet.
 - Der Agent kann selbst keine Verbindung anlegen, ihr beitreten oder sie trennen.
+- Zu welcher Sitzung ein Aufruf von `term-link` gehört, bestimmt das Webterminal selbst: am
+  Prozess, der den Aufruf absetzt, und dem Pane, in dem er läuft. Ein Agent kann sich so nicht
+  als andere Sitzung ausgeben. Das braucht Linux und `perl` oder `python3`; fehlt beides,
+  bleibt das Postfach abgeschaltet (Hinweis im Verbindungs-Fenster und im Log).
 - Zustand und Verlauf liegen lokal unter `~/.term-link/` (höchstens 500 Nachrichten je
   Verbindung, 16 KB je Nachricht). Endet eine Sitzung, endet ihre Mitgliedschaft.
 - Senden ist auf 30 Nachrichten pro Minute begrenzt — je Mitgliedschaft, also je Sitzung

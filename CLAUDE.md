@@ -215,8 +215,15 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
   sie mit 400 ab.
 - **Drei Wege mit verschiedenen Rechten**: Die Sidebar (CSRF-geschützt) legt Verbindungen an
   und trennt sie. Der Agent kann über den Unix-Socket nur lesen und senden (`inbox`, `send`,
-  `status`, `history`) — nie anlegen oder beitreten. Welche Sitzung fragt, sagt tmux
-  (`$TMUX_PANE` + Socket aus `$TMUX`), nicht der Agent.
+  `status`, `history`) — nie anlegen oder beitreten.
+- ⚠️ **Welche Sitzung fragt, sagt der Kernel, nicht der Aufrufer** (`lib/peer-pid.js`): PID des
+  Prozesses am Socket per `SO_PEERCRED`, von dort den Prozessbaum hinauf zum innersten Pane
+  des tmux-Servers. Was der Aufrufer mitschickt — auch `$TMUX`/`$TMUX_PANE` — zählt nicht;
+  sonst läse jeder Prozess mit Zugriff auf den Socket fremde Postfächer. node kann
+  `SO_PEERCRED` nicht lesen, deshalb ein Helfer in perl oder python3, der den Socket als
+  Deskriptor **3** erbt (0–2 schaltet libuv im Kind auf blockierend, und das Flag teilt sich
+  der Server). Ohne Linux oder Helfer bleibt der Socket **aus** (`socket: 'error'`) — kein
+  Rückfall auf die mitgeschickte Pane-ID einbauen.
 - ⚠️ **Ins Pane geht nur eine feste Hinweiszeile** (`wakeLine`/`introLine`). Was dort getippt
   wird, hat für den Agenten das Gewicht einer Nutzereingabe; fremder Text kommt deshalb
   ausschließlich als Ausgabe von `term-link inbox` an (mit Verhaltensregeln und einer

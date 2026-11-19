@@ -14,12 +14,13 @@ nennt die ID (`fix(link): M4 …`). Die Spalte „Stand“ und der Absatz
 
 Ergebnis: die dokumentierten Geländer (CSRF, feste Hinweiszeile, Socket ohne
 Anlegen/Beitreten, Standard-Sitzung, Rechte, Pfadlänge) sind im Code vorhanden.
-Offen sind eine Lücke bei der Socket-Identität, ein dauerhafter Abgleichfehler
-bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
+Offen waren eine Lücke bei der Socket-Identität, ein dauerhafter Abgleichfehler
+bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken. Alle acht
+Befunde sind inzwischen behoben (Stand der Tabelle); `npm test`: 50/50 grün.
 
 | ID | Stufe | Befund | Stand |
 |---|---|---|---|
-| H1 | Hoch | Agenten-Socket vertraut der mitgeschickten Pane-ID | Offen |
+| H1 | Hoch | Agenten-Socket vertraut der mitgeschickten Pane-ID | Behoben: Absender per `SO_PEERCRED` und Prozessbaum |
 | M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Behoben: veraltete Listen verworfen, `gone` klebt nicht |
 | M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Behoben: nur lebende Mitglieder zählen |
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Behoben: nur die Instanz mit dem Socket schreibt |
@@ -46,6 +47,50 @@ Anlegen, Beitreten und Trennen bietet der Socket nicht an.
 Vorschlag: Peer-PID des Unix-Sockets lesen (Linux `SO_PEERCRED`) und die Pane
 nur akzeptieren, wenn dieser Prozess in ihrem Prozessbaum liegt. `tmux` und
 `pane` aus dem JSON nicht als Identität verwenden.
+
+Umsetzung: Neues Modul `lib/peer-pid.js`. Bei jeder angenommenen Verbindung
+liest das Backend die PID des Absenders per `SO_PEERCRED` und steigt von dort
+über `/proc/<pid>/stat` den Prozessbaum hinauf, bis es den ersten Prozess eines
+Panes erreicht (`tmux list-panes -a`, also nur Panes des eigenen tmux-Servers).
+Dieses innerste Pane bestimmt die Sitzung. Wer in keinem Pane läuft, bekommt
+403 `not_in_pane`. `resolvePane` und die Felder `tmux` und `pane` sind
+entfallen; das CLI schickt sie nicht mehr, und das Backend liest sie nicht.
+Die UID des Absenders wird zusätzlich gegen die des Dienstes geprüft.
+
+node kann `SO_PEERCRED` nicht selbst lesen. Ein Einzeiler in perl, ersatzweise
+python3, bekommt den Socket deshalb als Dateideskriptor 3 vererbt und gibt PID
+und UID aus. Deskriptor 3 statt 0, weil libuv vererbte Deskriptoren 0 bis 2 im
+Kind auf blockierend schaltet und dieses Flag auch für den Socket des Servers
+gälte. Der Aufruf kostet etwa 20 ms je Verbindung.
+
+Fail-closed: Nach dem `listen` verbindet sich das Backend einmal mit sich
+selbst und erwartet die eigene PID. Scheitert das (kein Linux, weder perl noch
+python3, kein Deskriptor), bleibt der Socket aus (`socket: 'error'`, Meldung im
+Log und im Verbindungs-Fenster). Einen Rückfall auf die mitgeschickte Pane-ID
+gibt es nicht.
+
+Grenzen:
+
+- Linux. Auf anderen Systemen ist das Postfach damit abgeschaltet; eine
+  Variante für macOS (`LOCAL_PEERPID`) wäre möglich, ist aber hier nicht
+  prüfbar und deshalb nicht enthalten.
+- Der Aufruf muss im Prozessbaum des Panes liegen. Ein Werkzeug, das Befehle
+  über einen abgekoppelten Hintergrunddienst startet, wird abgewiesen. Für
+  Claude Code ist die Kette am laufenden System nachgeprüft (Shell-Werkzeug
+  bis zum Pane). Für Codex, Grok, Kimi, Muse und Opencode ist das **nicht**
+  einzeln geprüft; scheitert dort `term-link` mit „gehört zu keinem Pane“,
+  ist das die Ursache.
+- Ein Prozess desselben Benutzers mit Zugriff auf den tmux-Socket kann
+  weiterhin in ein fremdes Pane tippen und dort `term-link` ausführen lassen.
+  Das liegt außerhalb dessen, was der Socket entscheiden kann.
+
+Tests: `test/peer-pid.test.js` (fremder Kindprozess, eigene Verbindung, beide
+Helfer einzeln, Ablehnung ohne Helfer oder Deskriptor, Baumsuche). Im
+Integrationstest läuft `term-link` jetzt als Prozess im Pane; neu sind ein
+Aufruf aus `beta` mit der Pane-ID von `alpha` (bekommt das eigene Postfach),
+ein Aufruf von außerhalb jedes Panes und rohe Anfragen am Socket mit `tmux`
+und `pane` im JSON (403), jeweils ohne dass sich das Postfach von `alpha`
+ändert. Gegen den alten Code scheitert dieser Test.
 
 ### M1 — Veraltete Sitzungsliste
 

@@ -2,8 +2,10 @@
 //
 // Wird vom Agenten im tmux-Pane aufgerufen, ueblicherweise ueber den Starter
 // ~/.term-link/bin/term-link (den das Webterminal bei jedem Start schreibt).
-// Spricht ueber den Unix-Socket <dir>/agent.sock mit dem laufenden Backend;
-// welche Sitzung fragt, ermittelt das Backend aus $TMUX und $TMUX_PANE.
+// Spricht ueber den Unix-Socket <dir>/agent.sock mit dem laufenden Backend.
+// Welche Sitzung fragt, ermittelt das Backend selbst: aus der PID dieses
+// Prozesses, die der Kernel ihm nennt, und dem Pane, in dessen Prozessbaum er
+// laeuft. Dieses Werkzeug schickt dazu nichts mit — auch nicht $TMUX_PANE.
 //
 // Verbindungen anlegen, eintragen oder trennen kann dieses Werkzeug bewusst
 // nicht — das geht nur in der Sidebar des Webterminals.
@@ -64,7 +66,7 @@ function call(route, body) {
   if (Buffer.byteLength(SOCK, 'utf8') > (process.platform === 'darwin' ? 103 : 107)) {
     fail(`Der Pfad ${SOCK} ist zu lang für einen Unix-Socket.`, 2);
   }
-  const payload = JSON.stringify({ tmux: process.env.TMUX || '', pane: process.env.TMUX_PANE || '', ...body });
+  const payload = JSON.stringify(body);
   return new Promise((resolve) => {
     const req = http.request({
       socketPath: SOCK, path: route, method: 'POST', timeout: 20_000,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -32,12 +33,14 @@ async function startLinked(t) {
     `#!/bin/sh\nunset TMUX\nexec '${REAL_TMUX}' -L '${sock}' -f /dev/null "$@"\n`, { mode: 0o755 });
   // Agenten-Attrappe: heisst wie ein erkannter Agent (comm = Dateiname) und
   // gibt jede eingegebene Zeile mit "GOT:" zurueck. "block" zeigt einen
-  // Freigabe-Dialog, "clear" raeumt den Bildschirm.
+  // Freigabe-Dialog, "clear" raeumt den Bildschirm, "sh <datei>" fuehrt ein
+  // Skript aus — so, wie ein Agent ein Werkzeug als Kindprozess startet.
   fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
 while IFS= read -r line; do
   case "$line" in
     block) echo 'Do you want to proceed?' ;;
     clear) printf '\\033[2J\\033[H' ;;
+    sh\\ *) eval "$line" ;;
     *) printf 'GOT:%s\\n' "$line" ;;
   esac
 done
@@ -103,15 +106,43 @@ done
   for (let i = 0; i < 50 && !fs.existsSync(path.join(linkDir, 'agent.sock')); i++) {
     await new Promise((r) => setTimeout(r, 50));
   }
-  // term-link so aufrufen, wie es ein Agent im Pane der Sitzung taete.
-  const tmuxSocket = tmux('display-message', '-p', '-t', 'alpha', '#{socket_path}');
-  const paneOf = (session) => tmux('display-message', '-p', '-t', session, '#{pane_id}');
-  const cli = (session, args, { input, tmuxEnv } = {}) => spawnSync(path.join(linkDir, 'bin', 'term-link'), args, {
-    env: { ...env, TMUX: tmuxEnv ?? `${tmuxSocket},1,0`, TMUX_PANE: session ? paneOf(session) : '' },
-    encoding: 'utf8', input,
+  // term-link so aufrufen, wie es ein Agent taete: als Prozess IM Pane der
+  // Sitzung. Das Backend erkennt die Sitzung am Prozessbaum des Aufrufers, nicht
+  // an dessen Umgebung — ein Aufruf aus dem Testprozess gehoerte zu keinem Pane.
+  // Der Aufruf steht in einem Skript; Ausgabe und Ergebnis landen in Dateien.
+  const wrapper = path.join(linkDir, 'bin', 'term-link');
+  const runDir = path.join(root, 'run');
+  fs.mkdirSync(runDir);
+  let runs = 0;
+  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  const paneOf = (session) => tmux('display-message', '-p', '-t', `=${session}:`, '#{pane_id}');
+  const cli = (session, args, { input = '', vars = '' } = {}) => {
+    const file = path.join(runDir, `c${++runs}`);
+    fs.writeFileSync(`${file}.in`, input);
+    fs.writeFileSync(`${file}.sh`, `${vars} ${shellQuote(wrapper)} ${args.map(shellQuote).join(' ')} `
+      + `< ${file}.in > ${file}.out 2> ${file}.err\necho $? > ${file}.tmp\nmv ${file}.tmp ${file}.rc\n`);
+    tmux('send-keys', '-t', `=${session}:`, '-l', `sh ${file}.sh`);
+    tmux('send-keys', '-t', `=${session}:`, 'Enter');
+    for (let i = 0; i < 600 && !fs.existsSync(`${file}.rc`); i++) pause(25);
+    assert.ok(fs.existsSync(`${file}.rc`), `term-link ${args.join(' ')} in ${session}: keine Antwort`);
+    const read = (ext) => fs.readFileSync(`${file}.${ext}`, 'utf8');
+    return { status: Number(read('rc')), stdout: read('out'), stderr: read('err') };
+  };
+  // Derselbe Aufruf von AUSSERHALB jedes Panes, mit beliebiger Umgebung.
+  const outside = (args, vars = {}) => spawnSync(wrapper, args, { env: { ...env, ...vars }, encoding: 'utf8', input: '' });
+  // Und roh am Socket vorbei am CLI, mit beliebigem JSON.
+  const rawCall = (route, body) => new Promise((resolve, reject) => {
+    const req = http.request({ socketPath: path.join(linkDir, 'agent.sock'), path: route, method: 'POST' }, (res) => {
+      let text = '';
+      res.on('data', (d) => { text += d; });
+      res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(text) }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
   });
+  const tmuxSocket = tmux('display-message', '-p', '-t', '=alpha:', '#{socket_path}');
   const sessionRow = async (name) => (await get('/api/sessions')).sessions.find((s) => s.name === name);
-  return { base, root, home, linkDir, tmux, post, get, cli, sessionRow, errors: () => errors };
+  return { base, root, home, linkDir, tmux, tmuxSocket, paneOf, post, get, cli, outside, rawCall, sessionRow, errors: () => errors };
 }
 
 test('linked sessions exchange messages; only a fixed hint is typed into the pane', { timeout: 30000, skip: !REAL_TMUX }, async (t) => {
@@ -157,6 +188,25 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   const sent = s.cli('beta', ['send', '-'], { input: body });
   assert.equal(sent.status, 0, sent.stderr);
   assert.match(sent.stdout, /Gesendet über ln_[\w-]+ an „alpha“/);
+  assert.deepEqual((await s.sessionRow('alpha')).link, { count: 1, unread: 1, pending: 1 });
+
+  // Wer fragt, sagt der Kernel — nicht der Aufrufer. beta gibt sich als alpha aus
+  // ($TMUX_PANE): es bekommt trotzdem sein eigenes, leeres Postfach.
+  const claim = { TMUX: `${s.tmuxSocket},1,0`, TMUX_PANE: s.paneOf('alpha') };
+  const posing = s.cli('beta', ['inbox'], { vars: `TMUX='${claim.TMUX}' TMUX_PANE='${claim.TMUX_PANE}'` });
+  assert.equal(posing.status, 0, posing.stderr);
+  assert.match(posing.stdout, /Keine neuen Nachrichten/);
+  // Ein Prozess ausserhalb jedes Panes bekommt nichts, was immer er mitschickt.
+  const stranger = s.outside(['inbox'], claim);
+  assert.notEqual(stranger.status, 0);
+  assert.match(stranger.stderr, /gehört zu\s+keinem Pane/);
+  assert.equal(stranger.stdout, '');
+  for (const route of ['/inbox', '/status', '/history', '/send']) {
+    const raw = await s.rawCall(route, { tmux: claim.TMUX, pane: claim.TMUX_PANE, text: 'als alpha' });
+    assert.equal(raw.status, 403, route);
+    assert.equal(raw.data.error.code, 'not_in_pane');
+  }
+  // alphas Postfach ist unberuehrt.
   assert.deepEqual((await s.sessionRow('alpha')).link, { count: 1, unread: 1, pending: 1 });
 
   // Zustellen geht nur in eine Agent-Sitzung, die nicht auf Freigabe wartet.
@@ -207,11 +257,8 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   const history = await s.get(`/api/link/history?session=alpha&link=${linkId}`);
   assert.deepEqual(history.messages.map((m) => m.own), [false, true]);
 
-  // Ein Pane eines anderen tmux-Servers wird abgewiesen, ebenso ein Aufruf ohne tmux.
-  const foreign = s.cli('alpha', ['inbox'], { tmuxEnv: '/tmp/fremder-socket,1,0' });
-  assert.notEqual(foreign.status, 0);
-  assert.match(foreign.stderr, /anderen tmux-Server/);
-  assert.match(s.cli(null, ['inbox'], { tmuxEnv: '' }).stderr, /nur in einem tmux-Pane/);
+  // Ohne jede tmux-Umgebung von aussen: dieselbe Absage.
+  assert.match(s.outside(['status'], { TMUX: '', TMUX_PANE: '' }).stderr, /nur aus einem tmux-Pane/);
 
   // Zweite Verbindung per Code; danach braucht `send` die Angabe --link.
   const made = await s.post('/api/link/create', { session: 'alpha', seats: 3 });
