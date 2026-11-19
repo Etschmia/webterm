@@ -227,10 +227,11 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
 - ⚠️ **Ins Pane geht nur eine feste Hinweiszeile** (`wakeLine`/`introLine`). Was dort getippt
   wird, hat für den Agenten das Gewicht einer Nutzereingabe; fremder Text kommt deshalb
   ausschließlich als Ausgabe von `term-link inbox` an (mit Verhaltensregeln und einer
-  Zufallsmarke je Aufruf um jeden Nachrichtentext). Die Marke schützt das Modell, nicht das
-  Terminal: alles, was das CLI vom Backend druckt, geht deshalb durch `lib/link-text.js`
-  (Steuerzeichen sichtbar ersetzt) — sonst führte xterm.js Statusabfragen und OSC 52 aus. Diesen Riegel nicht aufweichen — auch
+  Zufallsmarke je Aufruf um jeden Nachrichtentext). Diesen Riegel nicht aufweichen — auch
   keine Namen oder Betreffzeilen der Gegenstelle in den Hinweis.
+- Die Zufallsmarke schützt das Modell, nicht das Terminal: alles, was das CLI vom Backend
+  druckt, geht deshalb durch `lib/link-text.js` (Steuerzeichen sichtbar ersetzt) — sonst
+  führte xterm.js Statusabfragen und OSC 52 aus dem Text eines fremden Agenten aus.
 - **Zugestellt wird nur auf Klick**, und nur bei erkanntem Agenten im **aktiven Pane** der
   Sitzung, der weder arbeitet noch auf Freigabe wartet (`deliverCheck`; getippt wird in genau
   dieses Pane, adressiert per Pane-ID). Grund: `idle` ist in `agentStatusFromTail` nur der
