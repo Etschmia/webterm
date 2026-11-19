@@ -726,6 +726,9 @@ async function listSessionsFull() {
     '#{session_id}', '#{@term-link-ep}', '#{pane_id}',
     '#{pane_current_path}', '#{pane_title}',
   ].join('\t');
+  // Stand der Endpunkte VOR der Abfrage: bekommt waehrenddessen eine Sitzung
+  // ihren Endpunkt, ist diese Liste fuer den Abgleich unten zu alt (lib/link.js).
+  const linkSnap = link.snapshot();
   const [r, agents] = await Promise.all([
     tmux(['list-sessions', '-F', fmt]),
     agentSessions(),
@@ -782,8 +785,9 @@ async function listSessionsFull() {
       };
     });
   // Die Liste stammt aus einer erfolgreichen tmux-Abfrage: damit darf der
-  // Verbindungs-Zustand abgeglichen werden (beendete Sitzungen fallen heraus).
-  link.observe(sessions);
+  // Verbindungs-Zustand abgeglichen werden (beendete Sitzungen fallen heraus) —
+  // ausser sie ist inzwischen ueberholt, s. linkSnap.
+  link.observe(sessions, linkSnap);
   for (const s of sessions) s.link = link.summary(s.linkEp);
   await Promise.all(sessions.filter((s) => s.agent).map(async (s) => {
     const st = await agentPaneStatus(s.name, s.title, s.agent);

@@ -144,9 +144,12 @@ test('reconcile marks vanished endpoints, renames members and drops dead links',
   store.reconcile(new Map([['ep_a', 'alpha neu']]));
   assert.equal(store.view('ep_a')[0].members[1].gone, true);
   code(() => store.send({ endpoint: 'ep_a', text: 'niemand da' }), 'no_recipients');
-  // Ein verschwundener Endpunkt kommt nicht zurueck, auch wenn die Kennung wieder auftaucht.
-  store.reconcile(new Map([['ep_a', 'alpha neu'], ['ep_b', 'beta']]));
-  assert.equal(store.view('ep_a')[0].members[1].gone, true);
+  // Taucht die Kennung in einer spaeteren Liste wieder auf, lebt die Sitzung: der
+  // Vermerk stammte aus einer veralteten Liste und wird zurueckgenommen.
+  store.reconcile(new Map([['ep_a', 'alpha neu'], ['ep_b', 'beta zurück']]));
+  assert.deepEqual(store.view('ep_a')[0].members.map((m) => [m.name, m.gone]),
+    [['alpha neu', false], ['beta zurück', false]]);
+  assert.deepEqual(store.send({ endpoint: 'ep_a', text: 'wieder da' }).recipients, ['beta zurück']);
 
   store.reconcile(new Map());
   assert.deepEqual(store.view('ep_a'), []);

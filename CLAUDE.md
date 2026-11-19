@@ -194,8 +194,12 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
 
 - **Bindung an die Sitzung, nicht an den Namen**: Session-Option `@term-link-ep` (wie
   `@user-named`). Sie übersteht das Umbenennen und stirbt mit der Sitzung. Ein Endpunkt, der in
-  einer **erfolgreichen** tmux-Abfrage fehlt, ist endgültig weg (`reconcile`); bei
-  fehlgeschlagener Abfrage wird nichts abgeglichen.
+  einer **erfolgreichen und aktuellen** tmux-Abfrage fehlt, gilt als beendet (`reconcile`);
+  bei fehlgeschlagener Abfrage wird nichts abgeglichen. „Aktuell“ heißt: Wer eine Liste
+  abgleicht, holt **vor** dem tmux-Aufruf `link.snapshot()` und gibt den Wert `observe` mit —
+  eine Liste, die vor dem Setzen eines Endpunkts gestartet wurde, enthielte ihn nicht und
+  erklärte eine laufende Sitzung für beendet. `gone` klebt nicht: nennt eine spätere Liste
+  den Endpunkt wieder, wird der Vermerk zurückgenommen.
 - **Zustand** in `~/.term-link/` (0700): `state.json` (0600), der Agenten-Socket `agent.sock`
   und der Starter `bin/term-link`, den der Server bei jedem Start neu schreibt (ruft
   `bin/term-link.mjs` mit dem node des Servers auf — der Agent braucht kein node im PATH;

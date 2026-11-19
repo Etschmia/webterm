@@ -20,7 +20,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | ID | Stufe | Befund | Stand |
 |---|---|---|---|
 | H1 | Hoch | Agenten-Socket vertraut der mitgeschickten Pane-ID | Offen |
-| M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Offen |
+| M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Behoben: veraltete Listen verworfen, `gone` klebt nicht |
 | M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Behoben: nur lebende Mitglieder zählen |
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Offen |
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
@@ -67,6 +67,30 @@ Vorschlag: Schnappschüsse verwerfen, die vor der letzten Endpunkt-Änderung
 gestartet wurden (Generation oder eine Sperre um Liste, `ensureEndpoint` und
 Speichern). `gone` nicht kleben lassen, wenn eine neuere erfolgreiche Liste
 den Endpunkt wieder enthält.
+
+Umsetzung, drei Teile:
+
+- `lib/link.js` zählt jede Endpunkt-Änderung in `epGen`, einmal vor und einmal
+  nach dem `set-option`. Wer eine Liste abgleichen will, holt vor dem
+  tmux-Aufruf `link.snapshot()` und gibt den Wert `observe` mit; `listLive`
+  und `listSessionsFull` tun das. Hat sich der Stand seither geändert oder
+  fehlt er, wird die Liste wie eine fehlgeschlagene Abfrage behandelt und
+  nicht abgeglichen.
+- `ensureEndpoint` läuft nacheinander und fragt tmux vor dem Setzen nach dem
+  Endpunkt (`show-options -qv`). Die Zeile aus der Sitzungsliste kann selbst
+  veraltet sein: zwei Anfragen für dieselbe Sitzung (Doppelklick, zwei Tabs)
+  hätten sonst zwei Kennungen vergeben, und die Mitgliedschaft der ersten wäre
+  beim nächsten Abgleich beendet gewesen. Das stand nicht im Befund, ist aber
+  dieselbe Fehlerklasse.
+- `reconcile` nimmt `gone` zurück, wenn eine spätere Liste den Endpunkt wieder
+  nennt. Die Kennung ist zufällig und wird nie neu vergeben; taucht sie wieder
+  auf, lebt die Sitzung. Damit erholt sich auch ein Zustand, der vor dieser
+  Korrektur falsch vermerkt wurde. Eine Verbindung, die schon gelöscht wurde,
+  weil alle Mitglieder als beendet galten, kommt dadurch nicht zurück.
+
+Tests: `a session list that started before an endpoint was set is not
+reconciled`, `two requests for the same session share one endpoint`, und der
+Store-Test erwartet jetzt, dass ein wieder auftauchender Endpunkt lebt.
 
 ### M2 — Plätze und beendete Mitglieder
 

@@ -273,6 +273,81 @@ test('an over-long socket path disables the agent socket instead of listening on
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 
+// tmux-Attrappe fuer createLink: kennt nur die Session-Option der Endpunkte.
+// `gate` haelt set-option an, bis der Test es freigibt.
+function fakeTmux() {
+  const options = new Map(); // Session-ID -> Endpunkt
+  const calls = [];
+  const state = { options, calls, gate: null };
+  state.tmux = async (args) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'show-options') return { ok: true, out: (options.get(args[3]) || '') + '\n', err: '' };
+    if (args[0] === 'set-option') {
+      if (state.gate) await state.gate;
+      options.set(args[2], args[4]);
+      return { ok: true, out: '', err: '' };
+    }
+    return { ok: false, out: '', err: 'nicht nachgebildet' };
+  };
+  // Zeilen, wie sie eine Sitzungsliste JETZT liefern wuerde.
+  state.rows = () => [['$1', 'alpha'], ['$2', 'beta']]
+    .map(([tmuxId, name]) => ({ tmuxId, name, linkEp: options.get(tmuxId) || '' }));
+  return state;
+}
+
+function tempLink(t, tmux) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'term-link-unit-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = createLink({ tmux, dir, cliScript: '/nirgendwo/term-link.mjs', log: { warn: () => {}, error: () => {} } });
+  t.after(() => link.close());
+  return link;
+}
+
+test('a session list that started before an endpoint was set is not reconciled', async (t) => {
+  const fake = fakeTmux();
+  const link = tempLink(t, fake.tmux);
+  const members = () => link.stateFor(fake.rows()[0]).links[0].members.map((m) => [m.name, m.gone]);
+
+  // Eine Liste startet, waehrenddessen entstehen Endpunkte und Verbindung, dann
+  // kommt die Liste zurueck — ohne die neuen Endpunkte.
+  const stale = fake.rows();
+  const snap = link.snapshot();
+  const [alpha, beta] = fake.rows();
+  await link.connect(alpha, beta);
+  assert.equal(link.observe(stale, snap), false);
+  assert.deepEqual(members(), [['alpha', false], ['beta', false]]);
+  // Ebenso eine Liste, die WAEHREND des set-option startet, und eine ohne Stand.
+  let release;
+  fake.gate = new Promise((resolve) => { release = resolve; });
+  fake.options.delete('$2');
+  const pending = link.create({ tmuxId: '$2', name: 'beta', linkEp: '' }, 2);
+  await new Promise((resolve) => setImmediate(resolve));
+  const during = link.snapshot();
+  const seen = fake.rows();
+  release();
+  fake.gate = null;
+  await pending;
+  assert.equal(link.observe(seen, during), false);
+  assert.equal(link.observe(seen), false);
+
+  // Eine Liste von danach gleicht ab: der alte Endpunkt von beta ist wirklich weg.
+  assert.equal(link.observe(fake.rows(), link.snapshot()), true);
+  assert.deepEqual(members(), [['alpha', false], ['beta', true]]);
+});
+
+test('two requests for the same session share one endpoint', async (t) => {
+  const fake = fakeTmux();
+  const link = tempLink(t, fake.tmux);
+  // Beide Zeilen stammen aus Listen von vor dem ersten Endpunkt (Doppelklick, zwei Tabs).
+  const [first] = fake.rows();
+  const [second] = fake.rows();
+  const made = await Promise.all([link.create(first, 2), link.create(second, 3)]);
+  assert.equal(first.linkEp, second.linkEp);
+  assert.equal(fake.calls.filter((c) => c.startsWith('set-option')).length, 1);
+  assert.equal(link.observe(fake.rows(), link.snapshot()), true);
+  assert.deepEqual(link.stateFor(fake.rows()[0]).links.map((l) => l.id).sort(), made.map((m) => m.id).sort());
+});
+
 test('deliverCheck only allows idle agent panes and shellQuote quotes when needed', () => {
   const base = { agent: 'claude', agentStatus: 'idle', copyMode: false, agentPane: '%3', activePane: '%3' };
   assert.equal(deliverCheck(base).ok, true);
