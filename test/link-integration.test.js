@@ -295,17 +295,25 @@ function fakeTmux() {
   return state;
 }
 
-function tempLink(t, tmux) {
+function tempDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'term-link-unit-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+// Instanz mit eigenem Agenten-Socket: nur die darf den Stand aendern.
+async function tempLink(t, tmux, dir = tempDir(t)) {
   const link = createLink({ tmux, dir, cliScript: '/nirgendwo/term-link.mjs', log: { warn: () => {}, error: () => {} } });
   t.after(() => link.close());
+  await link.boot();
   return link;
 }
 
+const linkCode = (expected) => (err) => err.code === expected;
+
 test('a session list that started before an endpoint was set is not reconciled', async (t) => {
   const fake = fakeTmux();
-  const link = tempLink(t, fake.tmux);
+  const link = await tempLink(t, fake.tmux);
   const members = () => link.stateFor(fake.rows()[0]).links[0].members.map((m) => [m.name, m.gone]);
 
   // Eine Liste startet, waehrenddessen entstehen Endpunkte und Verbindung, dann
@@ -337,7 +345,7 @@ test('a session list that started before an endpoint was set is not reconciled',
 
 test('two requests for the same session share one endpoint', async (t) => {
   const fake = fakeTmux();
-  const link = tempLink(t, fake.tmux);
+  const link = await tempLink(t, fake.tmux);
   // Beide Zeilen stammen aus Listen von vor dem ersten Endpunkt (Doppelklick, zwei Tabs).
   const [first] = fake.rows();
   const [second] = fake.rows();
@@ -346,6 +354,55 @@ test('two requests for the same session share one endpoint', async (t) => {
   assert.equal(fake.calls.filter((c) => c.startsWith('set-option')).length, 1);
   assert.equal(link.observe(fake.rows(), link.snapshot()), true);
   assert.deepEqual(link.stateFor(fake.rows()[0]).links.map((l) => l.id).sort(), made.map((m) => m.id).sort());
+});
+
+test('only the instance that owns the agent socket changes the shared state', async (t) => {
+  const fake = fakeTmux();
+  const dir = tempDir(t);
+  const stateFile = path.join(dir, 'state.json');
+  const [alpha, beta] = fake.rows();
+
+  // Vor dem Start des Sockets aendert niemand etwas — auch nicht die Session-Option.
+  const early = createLink({ tmux: fake.tmux, dir, cliScript: '/nirgendwo/term-link.mjs', log: { warn: () => {}, error: () => {} } });
+  await assert.rejects(early.create({ ...alpha }, 2), linkCode('not_owner'));
+  assert.equal(fake.calls.length, 0);
+
+  const first = await tempLink(t, fake.tmux, dir);
+  const second = await tempLink(t, fake.tmux, dir);
+  assert.equal(first.stateFor(alpha).socket, 'ok');
+  assert.equal(second.stateFor(alpha).socket, 'busy');
+
+  // Die zweite Instanz lehnt jede Aenderung ab und schreibt nichts.
+  await assert.rejects(second.connect({ ...alpha }, { ...beta }), linkCode('not_owner'));
+  await assert.rejects(second.create({ ...alpha }, 2), linkCode('not_owner'));
+  await assert.rejects(second.join({ ...alpha }, 'termlink:local/ln_abcdefgh#' + 'x'.repeat(22)), linkCode('not_owner'));
+  assert.equal(fs.existsSync(stateFile), false);
+  assert.equal(fake.calls.length, 0);
+
+  await first.connect(alpha, beta);
+  const id = first.stateFor(alpha).links[0].id;
+  const written = fs.readFileSync(stateFile, 'utf8');
+
+  // Sie zeigt den Stand der ersten an, sobald sie die naechste Sitzungsliste sieht …
+  assert.deepEqual(second.stateFor(alpha).links, []);
+  assert.equal(second.observe(fake.rows(), second.snapshot()), false);
+  assert.deepEqual(second.stateFor(alpha).links.map((l) => l.id), [id]);
+  assert.deepEqual(second.summary(alpha.linkEp), { count: 1, unread: 0, pending: 0 });
+  // … gleicht aber nicht ab: eine Liste ohne die Sitzungen laesst alles stehen.
+  assert.equal(second.observe([], second.snapshot()), false);
+  assert.deepEqual(second.stateFor(alpha).links[0].members.map((m) => m.gone), [false, false]);
+  assert.throws(() => second.leave(alpha, id), linkCode('not_owner'));
+  assert.throws(() => second.renewInvite(alpha, id), linkCode('not_owner'));
+  await assert.rejects(second.deliver({ ...alpha, agent: 'claude', agentStatus: 'idle', agentPane: '%1', activePane: '%1' }, 'intro'),
+    linkCode('not_owner'));
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), written);
+
+  // Verliert die erste Instanz ihre Socket-Datei, schreibt auch sie nicht mehr.
+  fs.unlinkSync(path.join(dir, 'agent.sock'));
+  assert.throws(() => first.leave(alpha, id), linkCode('not_owner'));
+  assert.equal(first.observe([], first.snapshot()), false);
+  assert.equal(first.stateFor(alpha).socket, 'error');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), written);
 });
 
 test('deliverCheck only allows idle agent panes and shellQuote quotes when needed', () => {

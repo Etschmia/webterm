@@ -204,6 +204,11 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
   und der Starter `bin/term-link`, den der Server bei jedem Start neu schreibt (ruft
   `bin/term-link.mjs` mit dem node des Servers auf — der Agent braucht kein node im PATH;
   der Starter liegt bewusst nicht im PATH). Verzeichnis per `TERM_LINK_DIR` änderbar.
+- **Es schreibt nur die Instanz, der der Socket gehört** (`owner` in `lib/link.js`).
+  `state.json` wird immer als Ganzes geschrieben; eine zweite Instanz mit demselben
+  Verzeichnis zeigt den Stand deshalb nur an (liest ihn bei Änderung neu) und lehnt alles
+  Ändernde mit 503 `not_owner` ab — auch den Abgleich. Testinstanzen bekommen ein eigenes
+  `HOME` oder `TERM_LINK_DIR`.
 - Die **Standard-Sitzung** nimmt an keiner Verbindung teil — weder als Ausgangspunkt noch als
   Gegenstelle: dort läuft nie ein Agent, und „Standard" liest sich in der Auswahl wie eine
   Voreinstellung. Die Oberfläche bietet sie nicht an, `/api/link/create|join|connect` lehnen

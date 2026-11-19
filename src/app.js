@@ -4012,9 +4012,11 @@ function lkRender() {
 
   if (s.socket !== 'ok') {
     lkBody.append(tgEl('p', 'tg-err', s.socket === 'busy'
-      ? 'Der Agenten-Zugang gehört einer anderen laufenden Webterminal-Instanz desselben Benutzers — '
-        + 'Agenten dieser Instanz erreichen ihr Postfach nicht.'
-      : 'Der Agenten-Zugang ist nicht verfügbar (siehe Log des Dienstes) — Agenten können ihr Postfach nicht lesen.'));
+      ? 'Verbindungen verwaltet eine andere laufende Webterminal-Instanz desselben Benutzers. Diese '
+        + 'Instanz zeigt sie nur an: Ändern und Zustellen gehen hier nicht, und Agenten dieser Instanz '
+        + 'erreichen ihr Postfach nicht.'
+      : 'Der Agenten-Zugang ist nicht verfügbar (siehe Log des Dienstes) — Agenten können ihr Postfach '
+        + 'nicht lesen, und Verbindungen lassen sich hier nicht ändern.'));
   }
 
   // Postfach: Ungelesenes zustellen.

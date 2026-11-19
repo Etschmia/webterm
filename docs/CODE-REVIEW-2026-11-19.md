@@ -22,7 +22,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | H1 | Hoch | Agenten-Socket vertraut der mitgeschickten Pane-ID | Offen |
 | M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Behoben: veraltete Listen verworfen, `gone` klebt nicht |
 | M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Behoben: nur lebende Mitglieder zählen |
-| M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Offen |
+| M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Behoben: nur die Instanz mit dem Socket schreibt |
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
 | N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Offen |
 | N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Offen |
@@ -128,6 +128,29 @@ dass Agenten dieser Instanz ihr Postfach nicht erreichen.
 Vorschlag: Solange `socketState` nicht `ok` ist, ändernde `/api/link/`-Routen
 ablehnen und beim Abgleich nicht speichern. Alternativ vor jedem Schreiben
 exklusiv sperren und neu laden. Einen lebendigen Socket nicht ersetzen.
+
+Umsetzung: Es schreibt genau die Instanz, der der Agenten-Socket gehört
+(`owner` in `lib/link.js`). Ohne ihn lehnen `create`, `join`, `connect`,
+`leave`, `renewInvite`, `deliver` und die Aufrufe am Socket mit 503
+`not_owner` ab, und zwar vor dem ersten tmux-Aufruf: auch die Session-Option
+setzt nur die schreibende Instanz. `observe` gleicht dann nicht ab und
+speichert nicht, sondern liest über `store.refresh()` den Stand der anderen
+Instanz neu, sobald sich `state.json` geändert hat. Die zweite Instanz zeigt
+also den aktuellen Stand an, statt mit ihrer Kopie vom Start weiterzuarbeiten.
+Das gilt für jeden Zustand außer `ok`, auch für die kurze Zeit vor dem Start
+des Sockets und für `error`.
+
+`owner` prüft außerdem Gerät und Inode der Socket-Datei gegen die beim
+`listen` gemerkten Werte. Starten zwei Instanzen gleichzeitig, sehen beide
+keinen lebenden Socket, und die zweite ersetzt die Datei der ersten; die erste
+bemerkt das beim nächsten Zugriff, schließt ihren Socket und schreibt nicht
+mehr. Einen lebenden Socket ersetzt `boot` weiterhin nicht.
+
+Nicht umgesetzt: Die Instanz ohne Socket übernimmt ihn nicht von selbst, wenn
+die andere endet. Sie bleibt bis zu ihrem Neustart bei der Anzeige. Die
+Meldung in der Oberfläche und im Fehlertext nennt den Ausweg (`TERM_LINK_DIR`
+für ein eigenes Verzeichnis). Test: `only the instance that owns the agent
+socket changes the shared state`.
 
 ### M4 — Steuerzeichen im Nachrichtentext
 
