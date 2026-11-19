@@ -152,6 +152,41 @@ test('reconcile marks vanished endpoints, renames members and drops dead links',
   assert.deepEqual(store.view('ep_a'), []);
 });
 
+test('a seat held by an ended session becomes free again', (t) => {
+  const { store } = tempStore(t);
+  const group = store.create({ endpoint: 'ep_a', name: 'alpha', seats: 3 });
+  store.join({ endpoint: 'ep_b', name: 'beta', code: group.code });
+  store.join({ endpoint: 'ep_c', name: 'gamma', code: group.code });
+  code(() => store.join({ endpoint: 'ep_d', name: 'delta', code: group.code }), 'link_full');
+  code(() => store.renewInvite({ endpoint: 'ep_a', linkId: group.id }), 'link_full');
+  assert.equal(store.view('ep_a')[0].invite, null);
+  assert.equal(store.view('ep_a')[0].taken, 3);
+
+  // gamma endet: die Zeile bleibt ("beendet"), der Platz ist wieder frei.
+  store.reconcile(new Map([['ep_a', 'alpha'], ['ep_b', 'beta']]));
+  let view = store.view('ep_a')[0];
+  assert.deepEqual(view.members.map((m) => [m.name, m.gone]), [['alpha', false], ['beta', false], ['gamma', true]]);
+  assert.equal(view.taken, 2);
+  assert.equal(view.invite.valid, true);
+  const renewed = store.renewInvite({ endpoint: 'ep_a', linkId: group.id });
+
+  // delta uebernimmt den Platz und loest die "beendet"-Zeile ab; danach ist wieder voll.
+  store.join({ endpoint: 'ep_d', name: 'delta', code: renewed.code });
+  view = store.view('ep_a')[0];
+  assert.deepEqual(view.members.map((m) => [m.name, m.gone]), [['alpha', false], ['beta', false], ['delta', false]]);
+  assert.equal(view.taken, 3);
+  assert.equal(view.invite, null);
+  code(() => store.join({ endpoint: 'ep_e', name: 'epsilon', code: renewed.code }), 'link_full');
+  assert.deepEqual(store.send({ endpoint: 'ep_d', text: 'da' }).recipients, ['alpha', 'beta']);
+
+  // Auch eine Zweier-Verbindung per Code: endet die Gegenstelle, kann eine andere eintreten.
+  const pair = store.create({ endpoint: 'ep_a', name: 'alpha' });
+  store.join({ endpoint: 'ep_x', name: 'xi', code: pair.code });
+  store.reconcile(new Map([['ep_a', 'alpha'], ['ep_b', 'beta'], ['ep_d', 'delta']]));
+  store.join({ endpoint: 'ep_b', name: 'beta', code: pair.code });
+  assert.deepEqual(store.view('ep_a').find((l) => l.id === pair.id).members.map((m) => m.name), ['alpha', 'beta']);
+});
+
 test('leaving removes the member and deletes the link once nobody alive remains', (t) => {
   const { store } = tempStore(t);
   const made = store.create({ endpoint: 'ep_a', name: 'alpha' });

@@ -21,7 +21,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 |---|---|---|---|
 | H1 | Hoch | Agenten-Socket vertraut der mitgeschickten Pane-ID | Offen |
 | M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Offen |
-| M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Offen |
+| M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Behoben: nur lebende Mitglieder zählen |
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Offen |
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
 | N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Offen |
@@ -80,6 +80,15 @@ dieselbe Zahl (`Mitglieder von Plätzen`).
 
 Vorschlag: Nur Mitglieder mit `gone !== true` auf `seats` anrechnen. Die
 `gone`-Zeile für die Anzeige „beendet“ behalten.
+
+Umsetzung: `seatsTaken` in `lib/link-store.js` zählt nur Mitglieder ohne
+`gone`; `join`, `renewInvite`, `inviteValid` und die Einladung in `view`
+rechnen damit. Die `gone`-Zeile bleibt für die Anzeige stehen, bis jemand den
+Platz übernimmt: `join` löst dann die älteste „beendet“-Zeile ab. Eine
+Verbindung hat so nie mehr Zeilen als Plätze, auch wenn über die Zeit viele
+Sitzungen kommen und gehen. `view` liefert die belegten Plätze als `taken`,
+die Oberfläche zeigt diese Zahl (mit Rückfall auf die eigene Zählung bei einem
+älteren Backend). Test: `a seat held by an ended session becomes free again`.
 
 ### M3 — Zweite Instanz
 

@@ -3938,7 +3938,9 @@ function lkRenderLink(l) {
   pane.append(head);
   const facts = [lkCount(l.messages, 'Nachricht', 'Nachrichten')];
   if (l.unread) facts.push(`${l.unread} ungelesen für diese Sitzung`);
-  if (l.seats > 2 || l.invite) facts.push(`${l.members.length} von ${l.seats} Plätzen belegt`);
+  // Beendete Mitglieder belegen keinen Platz mehr (`taken` fehlt bei einem aelteren Backend).
+  const taken = Number.isInteger(l.taken) ? l.taken : l.members.filter((m) => !m.gone).length;
+  if (l.seats > 2 || l.invite) facts.push(`${taken} von ${l.seats} Plätzen belegt`);
   pane.append(tgEl('p', 'tg-p tg-dim', facts.join(' · ')));
 
   if (l.invite && l.invite.valid) {
