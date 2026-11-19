@@ -25,7 +25,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Behoben: nur die Instanz mit dem Socket schreibt |
 | M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
 | N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Behoben: Status `unknown`, Zustellung nur bei `idle` |
-| N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Offen |
+| N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Behoben: Agent im aktiven Pane hat Vorrang |
 | K1 | Kosmetik | Ratenlimit in der README gilt je Mitgliedschaft, nicht je Sitzung | Behoben: README berichtigt |
 
 ### H1 — Socket-Identität
@@ -218,6 +218,15 @@ erreicht nur den sichtbaren Agenten nicht.
 
 Vorschlag: Gibt es mehrere Agenten-Panes, dasjenige nehmen, dessen Pane-ID das
 aktive Pane der Sitzung ist.
+
+Umsetzung: `agentSessions` liefert je Sitzung alle Panes mit Agent statt nur
+des ersten. `agentOfSession` wählt den Agenten im aktiven Pane und fällt auf
+den ersten zurück, wenn dort keiner läuft. Davon hängen `agent`, `agentPid`
+und `agentPane` der Zeile ab: Name, Modell-Chip, Status und Ziel der
+Zustellung beschreiben jetzt denselben, sichtbaren Agenten. Läuft der Agent
+nur in einem Hintergrund-Pane, lehnt `deliverCheck` wie bisher ab. Der
+Integrationstest öffnet ein zweites Fenster mit einem Agenten und erwartet den
+Hinweis dort; ohne die Korrektur scheitert er mit „nicht im aktiven Pane“.
 
 ### K1 — Ratenlimit in der README
 

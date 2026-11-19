@@ -212,7 +212,8 @@ function agentFromComm(comm) {
 // pane_current_command taugt dafuer nicht: hinter dem claude-auto-retry-Wrapper
 // meldet es 'bash'/'node'. Verlaesslich ist nur der Prozessname comm irgendwo im
 // Baum unter dem Pane-PID (gleiche Heuristik wie deploy/term-restart).
-// Liefert Map: Session-Name -> { agent, pid, paneId }.
+// Liefert Map: Session-Name -> [{ agent, pid, paneId }, …], ein Eintrag je Pane
+// mit Agent. Welcher davon fuer die Sitzung gilt, entscheidet agentOfSession.
 async function agentSessions() {
   const panes = await tmux(['list-panes', '-a', '-F', '#{pane_pid}\t#{pane_id}\t#{session_name}']);
   if (!panes.ok) return new Map();
@@ -244,14 +245,26 @@ async function agentSessions() {
     for (let i = 0; i < 64 && x && x !== '0'; i++) {
       const pane = paneSession.get(x);
       if (pane) {
-        // Pro Session ein Agent-Eintrag (bei mehreren Panes gewinnt der erste).
-        if (!found.has(pane.session)) found.set(pane.session, { agent, pid, paneId: pane.paneId });
+        // Je Pane ein Eintrag (bei mehreren Agenten im selben Pane gewinnt der erste).
+        const list = found.get(pane.session) || [];
+        if (!list.some((e) => e.paneId === pane.paneId)) list.push({ agent, pid, paneId: pane.paneId });
+        found.set(pane.session, list);
         break;
       }
       x = parent.get(x);
     }
   }
   return found;
+}
+
+// Der Agent, der fuer eine Sitzung gilt: bei mehreren Agenten-Panes der im
+// AKTIVEN Pane. Von dort stammen auch Status und Kopiermodus, und dorthin tippt
+// die Zustellung der Verbindungs-Hinweise (deliverCheck in lib/link.js) — mit
+// "der erste gefundene" scheiterte sie, obwohl der sichtbare Agent bereit war.
+// Laeuft im aktiven Pane keiner, bleibt es beim ersten.
+function agentOfSession(list, activePane) {
+  if (!list || !list.length) return {};
+  return list.find((e) => e.paneId === activePane) || list[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -753,12 +766,13 @@ async function listSessionsFull() {
       const parts = line.split('\t');
       const [name, attached, windows, inMode, command, userNamed, tmuxId, linkEp, activePane, path] = parts;
       const title = parts.slice(10).join('\t'); // Rest = pane_title (robust ggü. Tabs)
+      const found = agentOfSession(agents.get(name), activePane);
       return {
         name,
         tmuxId,
         linkEp: linkEp || '',
         activePane,
-        agentPane: (agents.get(name) || {}).paneId || null,
+        agentPane: found.paneId || null,
         // Verbindungen dieser Sitzung: { count, unread, pending } oder null;
         // wird unten nachgetragen (Chip in der Sidebar).
         link: null,
@@ -770,10 +784,10 @@ async function listSessionsFull() {
         // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi'|'codex'|
         // 'grok'|'muse'|'opencode')? Steuert das Sidebar-Label
         // ("<Verzeichnis> — Claude"), das nach dem Beenden wieder verschwindet.
-        agent: (agents.get(name) || {}).agent || null,
+        agent: found.agent || null,
         // PID des Agenten — nur intern (Modell-/Effort-Lookup), wird unten
         // wieder entfernt und geht nicht an den Client.
-        agentPid: (agents.get(name) || {}).pid || null,
+        agentPid: found.pid || null,
         // Modell + Effort der Agent-Session (Chip-Zeile); null = unbekannt.
         model: null,
         modelLabel: '',

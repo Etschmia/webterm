@@ -111,7 +111,7 @@ done
     encoding: 'utf8', input,
   });
   const sessionRow = async (name) => (await get('/api/sessions')).sessions.find((s) => s.name === name);
-  return { base, home, linkDir, tmux, post, get, cli, sessionRow, errors: () => errors };
+  return { base, root, home, linkDir, tmux, post, get, cli, sessionRow, errors: () => errors };
 }
 
 test('linked sessions exchange messages; only a fixed hint is typed into the pane', { timeout: 30000, skip: !REAL_TMUX }, async (t) => {
@@ -231,6 +231,18 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   assert.equal(elsewhere.status, 409);
   assert.match(elsewhere.data.error, /nicht im aktiven Pane/);
   s.tmux('kill-window', '-t', 'alpha');
+
+  // Zwei Agenten-Panes: es gilt der im aktiven Pane, nicht der zuerst gefundene.
+  const firstPane = s.tmux('display-message', '-p', '-t', 'alpha', '#{pane_id}');
+  s.tmux('new-window', '-t', 'alpha', path.join(s.root, 'bin', 'claude'));
+  const frontPane = s.tmux('display-message', '-p', '-t', 'alpha', '#{pane_id}');
+  assert.notEqual(frontPane, firstPane);
+  const front = await s.post('/api/link/deliver', { session: 'alpha' });
+  assert.equal(front.status, 200, JSON.stringify(front.data));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.match(s.tmux('capture-pane', '-p', '-J', '-t', frontPane), /GOT:Hinweis vom Webterminal: Für diese Sitzung/);
+  s.tmux('kill-window', '-t', 'alpha');
+  assert.equal(s.tmux('display-message', '-p', '-t', 'alpha', '#{pane_id}'), firstPane);
 
   // Einweisung: ebenfalls nur eine feste Zeile.
   assert.equal((await s.post('/api/link/deliver', { session: 'alpha', kind: 'intro' })).status, 200);
