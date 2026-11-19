@@ -8,9 +8,9 @@ ausschliessen). Elf Dateien: `CLAUDE.md`, `README.md`, `bin/term-link.mjs`,
 Ergänzt die [Review vom 08.11.2026](CODE-REVIEW-2026-11-08.md). Nur gelesen; der
 Quelltext ist unverändert.
 
-Die Befunde werden seither einzeln behoben, je Befund ein Commit (Betreff
-`fix(link): <ID> …`). Die Spalte „Stand“ und der Absatz „Umsetzung“ unter dem
-jeweiligen Befund halten fest, was geändert wurde.
+Die Befunde werden seither einzeln behoben, je Befund ein Commit; der Betreff
+nennt die ID (`fix(link): M4 …`). Die Spalte „Stand“ und der Absatz
+„Umsetzung“ unter dem jeweiligen Befund halten fest, was geändert wurde.
 
 Ergebnis: die dokumentierten Geländer (CSRF, feste Hinweiszeile, Socket ohne
 Anlegen/Beitreten, Standard-Sitzung, Rechte, Pfadlänge) sind im Code vorhanden.
@@ -23,7 +23,7 @@ bei überlappenden tmux-Abfragen und mehrere engere Korrektheitslücken.
 | M1 | Mittel | Veraltete Sitzungsliste markiert neue Endpunkte dauerhaft als beendet | Offen |
 | M2 | Mittel | Beendete Mitglieder belegen Plätze, die niemand freigeben kann | Offen |
 | M3 | Mittel | Zweite Instanz ohne Socket schreibt trotzdem `state.json` | Offen |
-| M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Offen |
+| M4 | Mittel | Nachrichtentext geht ungesteuert ins Terminal | Behoben: Steuerzeichen sichtbar ersetzt |
 | N1 | Niedrig | Fehlgeschlagenes `capture-pane` gilt als Leerlauf und erlaubt Zustellung | Offen |
 | N2 | Niedrig | Bei mehreren Agenten-Panes gewinnt nicht das aktive | Offen |
 | K1 | Kosmetik | Ratenlimit in der README gilt je Mitgliedschaft, nicht je Sitzung | Behoben: README berichtigt |
@@ -112,6 +112,19 @@ Hinweiszeile per `send-keys` enthält den Text weiterhin nicht.
 Vorschlag: C0/C1 im Text vor dem Drucken neutralisieren, Zeilenumbruch und
 Tabulator behalten. Dieselbe Regel für jede Ausgabe von `text` und für den
 ungesäuberten Sitzungsnamen in `status`.
+
+Umsetzung: Neues Modul `lib/link-text.js` ohne Abhängigkeiten. `printable`
+ersetzt jedes C0- und C1-Zeichen sowie DEL sichtbar (ESC wird `␛`, C1 wird
+`�`), statt es zu entfernen — der Agent sieht, dass dort etwas stand.
+Zeilenumbruch und Tabulator bleiben, CRLF wird LF; ein einzelnes CR wird
+ersetzt, weil es die Zeile im Terminal überschreiben würde. `printableLine`
+nimmt für einzeilige Werte zusätzlich Umbruch und Tabulator heraus.
+`bin/term-link.mjs` schickt damit alles, was vom Backend kommt, durch eine der
+beiden Funktionen: Nachrichtentext, Absender, Verbindungs-IDs, Sitzungsname in
+`status`, Empfänger in `send` und Fehlermeldungen. Gespeichert wird der Text
+weiterhin unverändert; die Oberfläche setzt ihn über `textContent`. Tests:
+`test/link-text.test.js` und im Integrationstest eine Nachricht mit
+Statusabfrage, OSC 52, 8-Bit-CSI und CR für `inbox` und `history`.
 
 ### N1 — Capture-Fehler gilt als Leerlauf
 

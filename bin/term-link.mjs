@@ -12,6 +12,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { printable, printableLine } from '../lib/link-text.js';
 
 const DIR = process.env.TERM_LINK_DIR || path.join(process.env.HOME || os.homedir(), '.term-link');
 const SOCK = path.join(DIR, 'agent.sock');
@@ -49,8 +50,12 @@ Verbindungen anlegen, eintragen oder trennen kann nur der Nutzer in der Sidebar.
 ${RULES}
 `;
 
+// Alles, was vom Backend kommt (Texte, Namen, Kennungen, Fehlermeldungen), geht
+// nur ueber printable()/printableLine() auf das Terminal — s. lib/link-text.js.
+const line = printableLine;
+
 function fail(message, code = 1) {
-  process.stderr.write(`term-link: ${message}\n`);
+  process.stderr.write(`term-link: ${printable(message)}\n`);
   process.exit(code);
 }
 
@@ -118,12 +123,13 @@ const stamp = (ms) => new Date(ms).toLocaleString('de-DE', {
 
 // Nachrichtentext zwischen Marken mit einer Zufallskennung je Aufruf: ein
 // fremder Text kann die Endmarke so nicht vortaeuschen und danach "eigene"
-// Anweisungen unterschieben.
+// Anweisungen unterschieben. Steuerzeichen im Text werden sichtbar ersetzt:
+// die Marke schuetzt das Modell, nicht das Terminal, das die Bytes ausfuehrt.
 function printMessages(messages, mark) {
   for (const m of messages) {
-    const who = m.own ? 'du selbst' : `von „${m.from}“`;
-    process.stdout.write(`\n<<nachricht ${mark} · Verbindung ${m.link} · ${who} · ${stamp(m.at)}>>\n`
-      + `${m.text}\n<<ende ${mark}>>\n`);
+    const who = m.own ? 'du selbst' : `von „${line(m.from)}“`;
+    process.stdout.write(`\n<<nachricht ${mark} · Verbindung ${line(m.link)} · ${who} · ${stamp(m.at)}>>\n`
+      + `${printable(m.text)}\n<<ende ${mark}>>\n`);
   }
 }
 
@@ -140,16 +146,16 @@ async function main() {
   if (cmd === 'status') {
     const d = await call('/status', {});
     if (!d.links.length) {
-      process.stdout.write(`Sitzung „${d.session}“ hat keine Verbindung. Verbindungen legt der Nutzer in der `
+      process.stdout.write(`Sitzung „${line(d.session)}“ hat keine Verbindung. Verbindungen legt der Nutzer in der `
         + 'Sidebar des Webterminals an.\n');
       return;
     }
-    process.stdout.write(`Sitzung „${d.session}“ — ${d.links.length} Verbindung(en):\n`);
+    process.stdout.write(`Sitzung „${line(d.session)}“ — ${d.links.length} Verbindung(en):\n`);
     for (const l of d.links) {
       const others = l.members.filter((m) => !m.self)
-        .map((m) => `„${m.name}“${m.gone ? ' (beendet)' : ''}`);
-      process.stdout.write(`  ${l.id}  mit ${others.length ? others.join(', ') : '(noch niemand beigetreten)'}`
-        + `  ·  ${l.unread} ungelesen\n`);
+        .map((m) => `„${line(m.name)}“${m.gone ? ' (beendet)' : ''}`);
+      process.stdout.write(`  ${line(l.id)}  mit ${others.length ? others.join(', ') : '(noch niemand beigetreten)'}`
+        + `  ·  ${Number(l.unread) || 0} ungelesen\n`);
     }
     return;
   }
@@ -185,7 +191,7 @@ async function main() {
     if (text === '-' || (!text && !process.stdin.isTTY)) text = await readStdin();
     if (!text.trim()) fail('Kein Text. Aufruf: term-link send "<Text>"  oder  term-link send - <<\'EOF\' … EOF');
     const d = await call('/send', { link: opts.link, text });
-    process.stdout.write(`Gesendet über ${d.id} an ${d.recipients.map((n) => `„${n}“`).join(', ')}. `
+    process.stdout.write(`Gesendet über ${line(d.id)} an ${d.recipients.map((n) => `„${line(n)}“`).join(', ')}. `
       + 'Zugestellt wird, sobald der Nutzer der Gegenstelle es im Webterminal auslöst.\n');
     return;
   }
