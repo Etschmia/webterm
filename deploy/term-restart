@@ -29,11 +29,13 @@ if [ "$USER_UNIT" -eq 1 ] && [ "$USER_BUS_OK" -eq 0 ]; then
   log 'User-Bus nicht erreichbar; aus einer Login-Sitzung erneut versuchen.'; exit 4
 fi
 sysctl(){ if [ "$USER_UNIT" -eq 1 ]; then systemctl --user "$@"; else systemctl "$@"; fi; }
-NODE_BIN=""
-for candidate in "$RESTART_DIR/../vendor/node/bin/node" "$(command -v node || true)" "$HOME/.local/bin/node" /usr/local/bin/node /usr/bin/node; do
-  if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi
-done
-[ -n "$NODE_BIN" ] || { log 'node fuer die Restart-Pruefung nicht gefunden.'; exit 1; }
+# node: was deploy/update schon gefunden hat (TERM_NODE_BIN), sonst dieselbe
+# Suche wie dort — einschliesslich nvm. Der Dienst selbst hat meist nur den
+# kargen systemd-PATH; eine eigene, kuerzere Suche liesse den Restart genau dann
+# scheitern, wenn das Update aus der Sidebar gestartet wurde.
+NODE_BIN="${TERM_NODE_BIN:-}"
+[ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ] || NODE_BIN="$(term_find_cmd node || true)"
+[ -n "$NODE_BIN" ] || { log 'node fuer die Restart-Pruefung nicht gefunden (vendor/node, PATH, ~/.local/bin, ~/.volta, /usr/local/bin, /usr/bin, ~/.nvm geprueft).'; exit 1; }
 GROUP="$(sysctl show -p ControlGroup --value "$SERVICE")"
 TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$NODE_BIN" "$RESTART_DIR/restart-check.mjs" "$GROUP"
 [ "${1:-}" != '--check' ] || exit 0

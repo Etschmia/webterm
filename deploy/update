@@ -71,28 +71,11 @@ case "${1:-}" in
   *)          log "Unbekanntes Argument: $1"; usage; exit 2 ;;
 esac
 
-# node/npm-Suche wie install.sh: projekt-lokales vendor/node hat Vorrang (manche
-# Maschinen halten node bewusst aus dem PATH). Fuer vendor/node muss npm-Config/
+# node/npm-Suche: term_find_cmd aus lib-service.sh (vendor/node vor PATH, zuletzt
+# nvm) — dieselbe wie in deploy/term-restart. Fuer vendor/node muss npm-Config/
 # -Cache ins Projekt umgeleitet werden (ein ~/.npmrc stoert ein bun-Nachbarprojekt).
-find_cmd(){
-  local name="$1" p latest
-  if [ -x "$SCRIPT_DIR/vendor/node/bin/$name" ]; then printf '%s' "$SCRIPT_DIR/vendor/node/bin/$name"; return 0; fi
-  if p="$(command -v "$name" 2>/dev/null)"; then printf '%s' "$p"; return 0; fi
-  for p in "$HOME/.local/bin/$name" "$HOME/.volta/bin/$name" \
-           "/usr/local/bin/$name" "/usr/bin/$name" "/opt/homebrew/bin/$name"; do
-    [ -x "$p" ] && { printf '%s' "$p"; return 0; }
-  done
-  if [ -d "$HOME/.nvm/versions/node" ]; then
-    latest="$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n1)"
-    if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/$name" ]; then
-      printf '%s' "$HOME/.nvm/versions/node/$latest/bin/$name"; return 0
-    fi
-  fi
-  return 1
-}
-
-NPM_BIN="$(find_cmd npm || true)";  [ -n "$NPM_BIN" ]  || die "npm nicht gefunden (PATH/vendor/node/nvm geprueft)."
-NODE_BIN="$(find_cmd node || true)"
+NPM_BIN="$(term_find_cmd npm || true)";  [ -n "$NPM_BIN" ]  || die "npm nicht gefunden (PATH/vendor/node/nvm geprueft)."
+NODE_BIN="$(term_find_cmd node || true)"
 USING_VENDOR_NODE=0
 case "$NODE_BIN" in "$SCRIPT_DIR/vendor/node/bin/"*) USING_VENDOR_NODE=1 ;; esac
 NODE_DIR=""; [ -n "$NODE_BIN" ] && NODE_DIR="$(dirname "$NODE_BIN")"
@@ -371,7 +354,9 @@ if [ "$SERVICE_ACTIVE" -eq 1 ]; then
     exit 4
   elif [ "$NEED_RESTART" -eq 1 ]; then
     log "-> gepruefter Restart via deploy/term-restart (Abbruch bei gefaehrdeten tmux-Sitzungen) …"
-    TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" "$SCRIPT_DIR/deploy/term-restart"
+    # Das hier gefundene node mitgeben: der Restart-Helfer soll nicht ein zweites
+    # Mal suchen und dabei zu einem anderen Ergebnis kommen.
+    TERM_SERVICE="$SERVICE" TERM_USER_UNIT="$USER_UNIT" TERM_NODE_BIN="$NODE_BIN" "$SCRIPT_DIR/deploy/term-restart"
     # Der entkoppelte Helfer prueft die cgroup erneut direkt vor dem Restart.
   else
     log "Fertig. Falls sich das Frontend geaendert hat: im Browser den Tab neu laden."

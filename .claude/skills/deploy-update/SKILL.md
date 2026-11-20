@@ -26,6 +26,15 @@ es ist Installer/Konfigurator und startet einen *laufenden* Dienst per `enable -
   der Manifeste auf bewegliche Tags. Scheitern beide Transporte, endet das Update mit Fehler.
 - `npm install` läuft nur bei geändertem Lockfile-Hash. Lokale Config/Cache bleiben bei
   einer projektlokalen Node-Installation gekapselt.
+- **Eine node-Suche für `update` und `term-restart`** (`term_find_cmd` in
+  `deploy/lib-service.sh`): `vendor/node` → PATH → `~/.local/bin`, `~/.volta/bin`,
+  `/usr/local/bin`, `/usr/bin` → neueste Version unter `~/.nvm`. `update` gibt sein node
+  zusätzlich als `TERM_NODE_BIN` an `term-restart` weiter. Grund (Vorfall 20.11.2026): Das
+  Update-Icon startet `deploy/update` in der Umgebung des Dienstes, deren PATH ein node
+  unter nvm nicht kennt. `term-restart` suchte früher kürzer als `update` — der Lauf kam
+  bis nach dem Build und scheiterte dann mit Exit 1 am Restart (neues Frontend gegen altes
+  Backend, 404 auf neue Routen). In einer Login-Shell fiel das nie auf. Die beiden Skripte
+  nie wieder getrennt suchen lassen.
 - **Servicename wird ermittelt, nicht mehr hart `term-server`** (`deploy/lib-service.sh`,
   von `update` **und** `term-restart` gesourct): explizit `TERM_SERVICE` → `deploy/deploy.env`
   (gitignored, von `install.sh` angelegt) → Auto-Erkennung des laufenden

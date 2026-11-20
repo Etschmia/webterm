@@ -21,10 +21,37 @@
 # Rueckgabewert: 0 = Unit-Name ermittelt, 1 = kein Backend-Prozess, 2 = Prozess
 # gefunden, aber keiner systemd-Unit zuzuordnen.
 #
+# term_find_cmd <node|npm> sucht das Programm fuer beide Skripte gleich (s. u.).
+#
 # Keine Seiteneffekte beim Sourcen ausser dem Setzen von TERM_REPO_DIR/DEPLOY_ENV.
 
 TERM_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_ENV="$TERM_REPO_DIR/deploy/deploy.env"
+
+# Sucht node/npm fuer die Deploy-Skripte; Pfad -> stdout, 1 = nichts gefunden.
+# Reihenfolge wie in install.sh: projekt-lokales vendor/node (manche Maschinen
+# halten node bewusst aus dem PATH), dann PATH, uebliche Orte, zuletzt nvm.
+# EINE Suche fuer update UND term-restart: startet das Update-Icon der Sidebar
+# deploy/update, erbt es die Umgebung des Dienstes — und dessen PATH kennt ein
+# node unter ~/.nvm oder ~/.volta nicht. Suchte term-restart anders als update,
+# kaeme der Lauf bis nach dem Build und scheiterte erst am Restart: neues
+# Frontend gegen altes Backend (Vorfall 20.11.2026).
+term_find_cmd(){
+  local name="$1" p latest
+  if [ -x "$TERM_REPO_DIR/vendor/node/bin/$name" ]; then printf '%s' "$TERM_REPO_DIR/vendor/node/bin/$name"; return 0; fi
+  if p="$(command -v "$name" 2>/dev/null)" && [ -x "$p" ]; then printf '%s' "$p"; return 0; fi
+  for p in "$HOME/.local/bin/$name" "$HOME/.volta/bin/$name" \
+           "/usr/local/bin/$name" "/usr/bin/$name" "/opt/homebrew/bin/$name"; do
+    [ -x "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    latest="$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n1)"
+    if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/$name" ]; then
+      printf '%s' "$HOME/.nvm/versions/node/$latest/bin/$name"; return 0
+    fi
+  fi
+  return 1
+}
 
 # PID eines laufenden `node <repo>/server.js` DIESES Repos (leer, wenn keiner).
 # Match ueber die absolute server.js aus der cmdline; als Fallback server.js +
