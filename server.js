@@ -181,13 +181,18 @@ function ensureStandardSession() {
   return standardSessionPending;
 }
 
-// Verbindungen zwischen Agent-Sitzungen (Sidebar-Knopf je Zeile, /api/link/*).
-// Zustand, Agenten-Socket und der Starter fuer bin/term-link liegen in
-// ~/.term-link (0700); Logik in lib/link.js.
+// Verbindungen zwischen Agent-Sitzungen (Sidebar-Knopf je Zeile, /api/link/*;
+// Einstellung "aus / nur lokal / mit Hub" unter /api/vernetzung/*).
+// Zustand, Einstellung, Agenten-Socket und der Starter fuer bin/term-link liegen
+// in ~/.term-link (0700); Logik in lib/link.js. Verbindungen zu anderen
+// Installationen laufen ausgehend ueber einen Hub (lib/link-hub.js) — dieser
+// Server bleibt dafuer an Loopback gebunden.
 const link = createLink({
   tmux,
   dir: process.env.TERM_LINK_DIR || path.join(HOME, '.term-link'),
   cliScript: path.join(__dirname, 'bin', 'term-link.mjs'),
+  // Nur fuer Tests: http-Hub auf dem eigenen Rechner zulassen.
+  insecureHub: process.env.TERM_LINK_INSECURE_HUB === '1',
 });
 
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
@@ -1895,11 +1900,12 @@ async function handleLink(req, res, route) {
       return sendJson(res, 400, { error: 'Die Standard-Sitzung kann nicht verbunden werden.', code: 'standard_session' });
     }
     if (route === '/api/link/create') {
-      const made = await link.create(row, body.seats);
+      const made = await link.create(row, body.seats, body.via === 'hub' ? 'hub' : 'local');
       return fresh({ created: made });
     }
     if (route === '/api/link/join') {
-      await link.join(row, body.code);
+      // `confirm`: vom Nutzer bestaetigter Rechnername eines fremden Hubs (409 hub_confirm).
+      await link.join(row, body.code, typeof body.confirm === 'string' ? body.confirm : undefined);
       return fresh();
     }
     if (route === '/api/link/connect') {
@@ -1909,19 +1915,64 @@ async function handleLink(req, res, route) {
       return fresh();
     }
     if (route === '/api/link/leave') {
-      link.leave(row, body.link);
+      await link.leave(row, body.link, body.force === true);
       return fresh();
     }
     if (route === '/api/link/invite') {
-      const made = link.renewInvite(row, body.link);
+      const made = await link.renewInvite(row, body.link);
       return fresh({ created: made });
+    }
+    if (route === '/api/link/invite-withdraw') {
+      await link.withdrawInvite(row, body.link);
+      return fresh();
+    }
+    if (route === '/api/link/admit' || route === '/api/link/reject') {
+      await link.decide(row, body.link, body.member, route === '/api/link/admit');
+      return fresh();
     }
     if (route === '/api/link/deliver') {
       await link.deliver(row, body.kind === 'intro' ? 'intro' : 'wake');
       return fresh();
     }
   } catch (err) {
-    if (err instanceof LinkError) return sendJson(res, err.status, { error: err.message, code: err.code });
+    if (err instanceof LinkError) return sendJson(res, err.status, { error: err.message, code: err.code, ...(err.data || {}) });
+    throw err;
+  }
+  return sendJson(res, 404, { error: 'Unbekannte Route' });
+}
+
+// ---------------------------------------------------------------------------
+// Vernetzung (/api/vernetzung/*) — Sidebar-Zeile "Vernetzung"
+// ---------------------------------------------------------------------------
+// Die Einstellung der Installation: Verbindungen aus, nur lokal oder mit Hub
+// (Adresse und Zugangsschluessel des eigenen Hubs). Dazu die Liste aller
+// Mitgliedschaften ueber Hubs — auch die beendeter Sitzungen, aus denen man
+// nur hier noch austreten kann. Der Zugangsschluessel geht nur HINEIN: keine
+// Antwort enthaelt ihn.
+
+async function handleVernetzung(req, res, route) {
+  try {
+    if (route === '/api/vernetzung/status' && req.method === 'GET') {
+      return sendJson(res, 200, link.settings());
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Methode nicht erlaubt' });
+    const body = await readJsonBody(req, 8 * 1024);
+    if (!body) return sendJson(res, 400, { error: 'Ungueltige Anfrage' });
+    if (route === '/api/vernetzung/config') {
+      return sendJson(res, 200, await link.configure({
+        mode: body.mode,
+        hub: typeof body.hub === 'string' ? body.hub : undefined,
+        key: typeof body.key === 'string' ? body.key : undefined,
+      }));
+    }
+    if (route === '/api/vernetzung/check') {
+      return sendJson(res, 200, await link.recheck());
+    }
+    if (route === '/api/vernetzung/leave') {
+      return sendJson(res, 200, await link.leaveMembership(body.key, body.force === true));
+    }
+  } catch (err) {
+    if (err instanceof LinkError) return sendJson(res, err.status, { error: err.message, code: err.code, ...(err.data || {}) });
     throw err;
   }
   return sendJson(res, 404, { error: 'Unbekannte Route' });
@@ -2087,7 +2138,8 @@ async function handleRequest(req, res) {
     // den (kurzen) Hostnamen. Das Frontend erkennt so einen uninformativen
     // Default-Titel und faellt in dem Fall auf den Session-Namen zurueck.
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ sessions, host: os.hostname() }));
+    // linkMode: bei 'off' zeigt die Sidebar kein Ketten-Symbol (Zeile "Vernetzung").
+    res.end(JSON.stringify({ sessions, host: os.hostname(), linkMode: link.mode() }));
     return;
   }
 
@@ -2203,6 +2255,10 @@ async function handleRequest(req, res) {
 
   if (url.startsWith('/api/link/')) {
     return handleLink(req, res, url);
+  }
+
+  if (url.startsWith('/api/vernetzung/')) {
+    return handleVernetzung(req, res, url);
   }
 
   if (url.startsWith('/api/authguard/')) {

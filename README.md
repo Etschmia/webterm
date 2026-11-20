@@ -78,9 +78,10 @@ woraus `server.js` die erlaubten WS-Origins ableitet.
 - **Terminal-Darstellung**: JetBrains Mono wird mitgeliefert, Rendering per WebGL (xterm.js 6).
 - **Links-Bereich** (unten, abgegrenzt): erkennt URLs im Terminal-Inhalt und zeigt sie
   anklickbar (öffnen in neuem Tab). Nur sichtbar, wenn URLs vorhanden sind.
-- **Agenten verbinden** (Ketten-Symbol je Sitzung): verbindet die Agenten zweier oder
-  mehrerer tmux-Sitzungen derselben Installation — direkt oder per Code, den man in einer
-  Sitzung erzeugt und in der anderen einträgt. Nachrichten liegen in einem Postfach; der
+- **Agenten verbinden** (Ketten-Symbol je Sitzung, einzuschalten unter **Vernetzung** in der
+  Sidebar): verbindet die Agenten zweier oder mehrerer tmux-Sitzungen — innerhalb der
+  Installation direkt oder per Code, zwischen verschiedenen Installationen über einen
+  eigenen **Hub**, Ende-zu-Ende-verschlüsselt. Nachrichten liegen in einem Postfach; der
   Agent schreibt mit `term-link send` und liest mit `term-link inbox`. Zugestellt wird auf
   Klick: das Webterminal tippt dann nur einen festen Hinweis in die Sitzung, fremder Text
   kommt nie als Eingabe an. Siehe „Agenten verbinden".
@@ -287,8 +288,22 @@ verlassen werden. Konfiguration und Token liegen lokal unter `~/.term-telegram/`
 ## Agenten verbinden
 
 Über das Ketten-Symbol einer Sitzung lassen sich Agenten in verschiedenen tmux-Sitzungen
-miteinander verbinden. Bisher geht das innerhalb einer Installation; Verbindungen zwischen
-Installationen über einen Hub sind geplant.
+miteinander verbinden — innerhalb einer Installation und, über einen Hub, zwischen
+verschiedenen Installationen.
+
+Eingeschaltet wird das in der Sidebar unter **Vernetzung** (zwischen „Telegram" und
+„Zugangsschutz"). Drei Zustände:
+
+| Zustand | Bedeutung |
+|---|---|
+| **aus** (ab Werk) | Keine Verbindungen; die Sidebar zeigt kein Ketten-Symbol. |
+| **nur lokal** | Sitzungen dieser Installation lassen sich verbinden. Nach außen geht nichts. |
+| **mit Hub** | Zusätzlich Verbindungen zu anderen Installationen über einen Hub. |
+
+`install.sh` fragt das im letzten Schritt ab („eigener Hub" oder keiner). Die Einstellung liegt
+in `~/.term-link/config.json` (0600) und wirkt ohne Neustart.
+
+### Innerhalb einer Installation
 
 1. Ketten-Symbol der Sitzung → **Verbinden** (direkt mit einer anderen Sitzung) oder
    **Code erzeugen** und den Code in der anderen Sitzung unter **Eintragen** einfügen. Eine
@@ -312,10 +327,54 @@ Was man wissen sollte:
   als andere Sitzung ausgeben. Das braucht Linux und `perl` oder `python3`; fehlt beides,
   bleibt das Postfach abgeschaltet (Hinweis im Verbindungs-Fenster und im Log).
 - Zustand und Verlauf liegen lokal unter `~/.term-link/` (höchstens 500 Nachrichten je
-  Verbindung, 16 KB je Nachricht). Endet eine Sitzung, endet ihre Mitgliedschaft.
+  Verbindung, 16 KB je Nachricht). Endet eine Sitzung, endet ihre Mitgliedschaft in lokalen
+  Verbindungen.
 - Senden ist auf 30 Nachrichten pro Minute begrenzt — je Mitgliedschaft, also je Sitzung
   **und** Verbindung: eine Sitzung mit drei Verbindungen kann in jeder davon 30 pro Minute
   senden. Der Zähler liegt nur im Speicher des Dienstes und beginnt nach dessen Neustart neu.
+
+### Zwischen Installationen: über einen Hub
+
+Zwei Webterminals erreichen einander nicht direkt — jedes ist nur hinter seinem eigenen
+Zugangsschutz erreichbar. Sie treffen sich deshalb über einen **Hub**: einen kleinen Dienst, bei
+dem beide per Long-Poll nach Nachrichten fragen. Das Webterminal ist dabei nur Client; von außen
+erreichbar sein muss es dafür nicht, und an Caddy ändert sich nichts.
+
+Der Hub ist das eigenständige Projekt [Vernetzung](https://github.com/Etschmia/Vernetzung). Es
+gibt keinen voreingestellten Hub: Man betreibt einen eigenen oder nutzt den eines Partners.
+
+**Beitreten** (braucht nur die Adresse des Hubs):
+
+1. Sidebar → **Vernetzung** → „mit Hub", Adresse eintragen, speichern.
+2. Den erhaltenen Einladungslink (`https://<hub>/l/ln_…#…`) vollständig im Ketten-Symbol der
+   Sitzung einfügen.
+3. Wer eingeladen hat, sieht das Gesuch im Ketten-Symbol seiner Sitzung und bestätigt es per
+   Klick. Erst dann wird der Schlüssel übergeben.
+
+**Anlegen** braucht zusätzlich einen **Zugangsschlüssel** (`vnk_…`), den der Betreiber des Hubs
+unter `/admin` → „Verbindungen" erzeugt. Er wird ebenfalls unter **Vernetzung** eingetragen;
+danach bietet das Ketten-Symbol „Einladungslink erzeugen".
+
+Was man wissen sollte:
+
+- **Ende-zu-Ende-verschlüsselt.** Der Hub lagert nur Chiffrat. Texte und Namen kann sein
+  Betreiber nicht lesen, das Geheimnis des Einladungslinks (der Teil hinter `#`) erreicht ihn
+  nie. Er sieht, welche Installation wann mit welcher Verbindung spricht, und kann Nachrichten
+  zurückhalten oder Verbindungen löschen.
+- **Einladungen gehören auf einen vertraulichen Weg.** Wer den Link in seinen 24 Stunden in die
+  Hand bekommt, kann ein Gesuch stellen; die Schranke ist der Klick des Einladenden. Der
+  angezeigte Name ist eine Selbstauskunft.
+- **Ein fremder Hub nur nach Rückfrage.** Läuft eine Einladung über einen anderen als den
+  eingetragenen Hub, nennt das Webterminal dessen Rechnernamen und fragt nach.
+- **Kein Austritt von selbst.** Endet eine Sitzung, bleibt ihr Platz auf dem Hub bestehen, bis
+  man unter **Vernetzung** austritt oder der Hub ihn nach 30 Tagen ohne Abfrage räumt. Für
+  beendete Sitzungen fragt das Webterminal nicht mehr ab.
+- **Hub-Adresse:** nur `https://`, Weiterleitungen folgt das Webterminal nicht. Ein Hub im
+  eigenen Netz ist erlaubt.
+- Grenzen des Hubs: 2 bis 8 Plätze, 30 Nachrichten pro Minute und Mitglied, Aufbewahrung
+  unabgeholter Nachrichten höchstens 7 Tage. Der Verlauf liegt nur in den Installationen.
+- Wer nach dem Austritt eines Mitglieds sichergehen will, legt eine neue Verbindung an: Einen
+  Schlüsselwechsel beim Austritt gibt es noch nicht.
 
 ## Hinweise
 - **Fenstergröße bei mehreren tmux-Clients**: tmux-Default ist `window-size latest` (neuester

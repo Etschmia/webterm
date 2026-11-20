@@ -76,6 +76,14 @@
         <span class="tg-state" id="tg-state" hidden></span>
       </button>
 
+      <button class="tg-row" id="vn-row" title="Vernetzung – Stand wird geladen …">
+        <span class="theme-label">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.8 9.2a3 3 0 0 0 4.2 0l2.1-2.1a3 3 0 0 0-4.2-4.2l-.9.9"/><path d="M9.2 6.8a3 3 0 0 0-4.2 0L2.9 8.9a3 3 0 0 0 4.2 4.2l.9-.9"/></svg>
+          <span id="vn-row-label">Vernetzung</span>
+        </span>
+        <span class="tg-state" id="vn-state" hidden></span>
+      </button>
+
       <button class="tg-row" id="ag-row" title="Zugangsschutz – wird geprüft …">
         <span class="theme-label">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5"/></svg>
@@ -318,16 +326,60 @@
 
         <section>
           <h3>Agenten verbinden</h3>
+          <p>Eingeschaltet wird das in der Sidebar unter <b>Vernetzung</b>: <b>aus</b>
+          (Standard), <b>nur lokal</b> oder <b>mit Hub</b>. Solange es aus ist, zeigt die
+          Sidebar kein Ketten-Symbol.</p>
           <p>Das Ketten-Symbol einer Sitzung (bei Hover) verbindet deren Agenten mit dem
           Agenten einer anderen Sitzung: <b>direkt</b> mit einer Sitzung dieser Installation
           oder per <b>Code</b>, den man in der einen Sitzung erzeugt und in der anderen
-          einträgt. Bisher gehen nur Verbindungen innerhalb einer Installation.</p>
+          einträgt.</p>
           <p>Nachrichten liegen in einem <b>Postfach</b>. Der Agent schreibt mit
           <code>term-link send</code> und liest mit <code>term-link inbox</code>; den Umgang
           bringt ihm <b>Agent einweisen</b> bei. Neues für eine Sitzung zeigt das Symbol mit
           einer Zahl — <b>Zustellen</b> tippt dann einen festen Hinweis in die Sitzung. Fremder
           Text kommt nie als Eingabe an, nur als Ausgabe des Postfachs. Zugestellt wird nur
           auf Klick und nur, wenn der Agent weder arbeitet noch auf eine Freigabe wartet.</p>
+        </section>
+
+        <section>
+          <h3>Agenten anderer Installationen verbinden (Hub)</h3>
+          <p>Zwei Webterminals erreichen einander nicht direkt — jedes ist nur hinter seinem
+          eigenen Zugangsschutz erreichbar. Sie treffen sich deshalb über einen <b>Hub</b>:
+          einen kleinen Dienst, bei dem beide nach Nachrichten fragen. Der Hub lagert nur
+          <b>verschlüsselte</b> Umschläge. Texte und Namen kann sein Betreiber nicht lesen; er
+          sieht, welche Installation wann mit welcher Verbindung spricht.</p>
+          <p><b>Beitreten:</b> Unter <b>Vernetzung</b> „mit Hub“ wählen und die Adresse des
+          Hubs eintragen. Den erhaltenen Einladungslink (<code>https://…/l/ln_…#…</code>)
+          vollständig im Ketten-Symbol der Sitzung einfügen. Wer eingeladen hat, sieht das
+          Gesuch dort und bestätigt es per Klick — erst dann wird der Schlüssel übergeben.
+          Einladungen gelten 24 Stunden und gehören auf einen vertraulichen Weg.</p>
+          <p><b>Anlegen:</b> Dafür braucht es zusätzlich einen <b>Zugangsschlüssel</b>
+          (<code>vnk_…</code>), den der Betreiber des Hubs ausgibt. Er kommt ebenfalls unter
+          <b>Vernetzung</b> hinein. Danach erzeugt das Ketten-Symbol einen Einladungslink.</p>
+          <p><b>Austreten:</b> „Austreten“ im Ketten-Symbol. Endet eine Sitzung, bleibt ihr
+          Platz auf dem Hub bestehen, bis du unter <b>Vernetzung</b> austrittst oder der Hub
+          ihn nach 30 Tagen ohne Abfrage räumt.</p>
+          <p><b>Eigenen Hub einrichten.</b> Der Hub ist das eigenständige Projekt
+          <b>Vernetzung</b> (<code>github.com/Etschmia/Vernetzung</code>). Er braucht Node.js
+          ab 22.18 und sonst nichts; die Datenbank ist eine SQLite-Datei.</p>
+          <ol>
+            <li>Auf einem Server mit eigener Domain:
+            <code>git clone https://github.com/Etschmia/Vernetzung.git</code>, dann
+            <code>npm install</code>.</li>
+            <li>Starten mit der öffentlichen Adresse:
+            <code>VERNETZUNG_PUBLIC_URL=https://hub.example.org npm start</code> (Port über
+            <code>PORT</code>, Standard 8787). Für den Dauerbetrieb als systemd-Dienst.</li>
+            <li>Einen Reverse-Proxy mit <b>HTTPS</b> davorsetzen (Caddy, nginx). Er muss
+            Antwortzeiten von gut 60 Sekunden zulassen — die Installationen warten per
+            Long-Poll auf Post.</li>
+            <li>Beim ersten Start gibt der Hub einmalig ein Betreiber-Passwort aus. Damit
+            unter <code>/admin</code> anmelden, Bereich <b>Verbindungen</b> öffnen und einen
+            <b>Zugangsschlüssel</b> erzeugen.</li>
+            <li>Hier unter <b>Vernetzung</b> die Adresse und den Schlüssel eintragen. Wer nur
+            beitreten soll, braucht allein die Adresse.</li>
+          </ol>
+          <p>Die Hub-Adresse muss mit <code>https://</code> beginnen; Weiterleitungen folgt
+          das Webterminal nicht. Ein Hub im eigenen Netz ist erlaubt.</p>
         </section>
 
         <section>
@@ -478,6 +530,16 @@
         <button class="bug-close" id="ag-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
       </div>
       <div class="tg-body" id="ag-body"><!-- Inhalt rendert app.js --></div>
+    </div>
+  </div>
+
+  <div class="bug-overlay" id="vn-overlay" hidden>
+    <div class="bug-card tg-card lk-card" role="dialog" aria-modal="true" aria-label="Vernetzung">
+      <div class="bug-head">
+        <span class="bug-head-title">Vernetzung</span>
+        <button class="bug-close" id="vn-close" title="Schließen (Esc)" aria-label="Schließen">×</button>
+      </div>
+      <div class="tg-body" id="vn-body"><!-- Inhalt rendert app.js --></div>
     </div>
   </div>
 

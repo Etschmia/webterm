@@ -1118,7 +1118,7 @@ function renderSidebar() {
       onRename: (newName) => renameSession(s.name, newName),
       onKill: () => killSession(s.name, label),
       link: s.link,
-      onLink: () => lkOpen(s.name),
+      onLink: state.linkMode === 'off' ? null : () => lkOpen(s.name),
     });
     if (active) entry.append(makeCopyToggle());
     sessionsEl.append(entry);
@@ -1218,6 +1218,9 @@ async function refreshSessions() {
     const data = await r.json();
     state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
     if (typeof data.host === 'string') state.host = data.host;
+    // Zustand der Vernetzung: bei 'off' zeigt die Sidebar kein Ketten-Symbol.
+    // Ein aelteres Backend nennt ihn nicht — dann bleibt das Symbol wie bisher.
+    state.linkMode = typeof data.linkMode === 'string' ? data.linkMode : null;
   } catch {
     state.sessions = [];
   }
@@ -3827,7 +3830,7 @@ let lkSession = null;            // Sitzungsname, den das Overlay zeigt
 let lkState = null;              // letzter Stand von /api/link/state
 let lkStateJson = '';            // dessen Serialisierung: nur bei Aenderung neu zeichnen
 const lkHistory = new Map();     // aufgeklappte Verlaeufe: Verbindungs-ID -> Nachrichten
-const lkForm = { peer: '', seats: '2', code: '' }; // Eingaben ueberleben das Neuzeichnen
+const lkForm = { peer: '', seats: '2', hubSeats: '2', code: '' }; // Eingaben ueberleben das Neuzeichnen
 let lkTimer = null;
 
 function lkLabelOf(name) {
@@ -3894,19 +3897,49 @@ async function lkPost(route, body) {
     body: JSON.stringify({ session: lkSession, ...body }),
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || 'Anfrage fehlgeschlagen');
+  if (!r.ok) {
+    const err = new Error(data.error || 'Anfrage fehlgeschlagen');
+    err.data = data; // Fehlercode und Zusatzangaben (z. B. Rechnername eines fremden Hubs)
+    throw err;
+  }
   lkApply(data);
   return data;
 }
 
 const lkFail = (e) => setStatus(String(e.message || e), true, 6000);
 
-async function lkCopy(code) {
+async function lkCopy(code, what = 'Verbindungs-Code') {
   try {
     await navigator.clipboard.writeText(code);
-    setStatus('Verbindungs-Code in die Zwischenablage kopiert', false, 2500);
+    setStatus(`${what} in die Zwischenablage kopiert`, false, 2500);
   } catch {
-    setStatus('Kopieren nicht möglich — Code im Feld markieren und kopieren', true, 4000);
+    setStatus('Kopieren nicht möglich — Text im Feld markieren und kopieren', true, 4000);
+  }
+}
+
+const lkHost = (hub) => { try { return new URL(hub).host; } catch { return String(hub || ''); } };
+
+// Warum eine Verbindung ueber einen Hub hier als beendet gilt.
+const LK_ENDED = {
+  declined: 'Das Beitrittsgesuch wurde abgelehnt.',
+  invite_renewed: 'Die Einladung wurde erneuert, bevor über das Gesuch entschieden war — bitte den neuen Link verwenden.',
+  invite_withdrawn: 'Die Einladung wurde zurückgezogen, bevor über das Gesuch entschieden war.',
+  request_expired: 'Über das Beitrittsgesuch hat niemand entschieden; es ist verfallen.',
+  removed: 'Der Hub führt diese Verbindung nicht mehr (gelöscht, abgelaufen oder alle anderen ausgetreten).',
+  key_failed: 'Die Schlüsselübergabe ist gescheitert — die Verbindung ist nicht nutzbar.',
+};
+
+// Austritt aus einer Hub-Verbindung. Ist der Hub nicht erreichbar, bietet der
+// Server an, die Mitgliedschaft nur hier zu entfernen (`canForce`).
+async function lkLeaveHub(post, question) {
+  if (question && !window.confirm(question)) return;
+  try {
+    await post(false);
+  } catch (e) {
+    if (!(e.data && e.data.canForce)) throw e;
+    if (!window.confirm(`${e.message}\n\nNur hier entfernen? Auf dem Hub bleibt der Platz dann belegt, `
+      + 'bis der Hub ihn von selbst räumt (nach 30 Tagen ohne Abfrage).')) return;
+    await post(true);
   }
 }
 
@@ -3928,64 +3961,133 @@ const lkTime = (ms) => new Date(ms).toLocaleString('de-DE', {
 
 function lkRenderLink(l) {
   const pane = tgEl('div', 'tg-pane lk-link');
-  const others = l.members.filter((m) => !m.self);
-  // Mitglieder heissen serverseitig wie ihre tmux-Sitzung; gezeigt wird das
-  // Label der Sidebar (bei beendeten Sitzungen bleibt der letzte Name).
-  const head = tgEl('div', 'tg-pane-h', others.length
-    ? `Verbunden mit ${others.map((m) => `„${m.gone ? m.name : lkLabelOf(m.name)}“${m.gone ? ' (beendet)' : ''}`).join(', ')}`
-    : 'Wartet auf Beitritt');
+  const onHub = l.kind === 'hub';
+  const status = onHub ? l.status : 'active';
+  // Lokale Mitglieder heissen serverseitig wie ihre tmux-Sitzung; gezeigt wird das
+  // Label der Sidebar (bei beendeten Sitzungen bleibt der letzte Name). Mitglieder
+  // anderer Installationen tragen den Namen, den sie selbst mitgeteilt haben —
+  // hier darf kein gleichnamiges lokales Label einspringen.
+  const nameOf = (m) => (m.remote || m.gone ? m.name : lkLabelOf(m.name));
+  const others = l.members.filter((m) => !m.self && !m.waiting);
+  const head = tgEl('div', 'tg-pane-h',
+    status === 'pending' ? 'Beitritt angefragt — wartet auf Bestätigung'
+      : status === 'ended' ? 'Verbindung beendet'
+        : others.length
+          ? `Verbunden mit ${others.map((m) => `„${nameOf(m)}“${m.gone ? ' (beendet)' : ''}`).join(', ')}`
+          : 'Wartet auf Beitritt');
   head.append(tgEl('span', 'lk-id', l.id));
   pane.append(head);
-  const facts = [lkCount(l.messages, 'Nachricht', 'Nachrichten')];
+  const facts = [];
+  if (onHub) facts.push(`über den Hub ${lkHost(l.hub)}`);
+  if (status !== 'pending') facts.push(lkCount(l.messages, 'Nachricht', 'Nachrichten'));
   if (l.unread) facts.push(`${l.unread} ungelesen für diese Sitzung`);
   // Beendete Mitglieder belegen keinen Platz mehr (`taken` fehlt bei einem aelteren Backend).
   const taken = Number.isInteger(l.taken) ? l.taken : l.members.filter((m) => !m.gone).length;
-  if (l.seats > 2 || l.invite) facts.push(`${taken} von ${l.seats} Plätzen belegt`);
+  if (status === 'active' && (l.seats > 2 || l.invite)) facts.push(`${taken} von ${l.seats} Plätzen belegt`);
   pane.append(tgEl('p', 'tg-p tg-dim', facts.join(' · ')));
 
+  if (status === 'pending') {
+    pane.append(tgEl('p', 'tg-p tg-dim',
+      'Wer eingeladen hat, sieht das Gesuch in seinem Webterminal und muss es bestätigen. '
+      + 'Erst dann wird der Schlüssel übergeben, und die Verbindung steht.'));
+  }
+  if (status === 'ended') pane.append(tgEl('p', 'tg-err', LK_ENDED[l.ended] || 'Die Verbindung besteht nicht mehr.'));
+  else if (onHub && lkState.mode !== 'hub') {
+    pane.append(tgEl('p', 'tg-err', 'Ruht: Unter „Vernetzung“ ist „mit Hub“ nicht gewählt — solange kommt hier nichts an, '
+      + 'und der Agent kann nicht senden.'));
+  }
+  if (onHub && l.lost) {
+    pane.append(tgEl('p', 'tg-p tg-dim', `${lkCount(l.lost, 'Nachricht ging', 'Nachrichten gingen')} verloren `
+      + '(auf dem Hub abgelaufen oder nicht lesbar).'));
+  }
+
+  // Beitrittsgesuche: nur wer eingeladen hat, entscheidet — per Klick.
+  for (const r of (onHub && l.requests) || []) {
+    const box = tgEl('div', 'lk-request');
+    box.append(tgEl('div', 'lk-request-h', `„${r.name}“ möchte beitreten`));
+    box.append(tgEl('p', 'tg-p tg-dim', `Gesuch von ${lkTime(r.at)}. Der Name ist eine Selbstauskunft: `
+      + 'Ein Gesuch kann stellen, wer den Einladungslink hat. Nimm nur an, wen du erwartest.'));
+    const row = tgEl('div', 'tg-actions');
+    row.append(
+      tgButton('Annehmen', 'bug-add', () => lkPost('admit', { link: l.id, member: r.id }).catch(lkFail)),
+      tgButton('Ablehnen', 'tg-danger', () => lkPost('reject', { link: l.id, member: r.id }).catch(lkFail)));
+    box.append(row);
+    pane.append(box);
+  }
+
   if (l.invite && l.invite.valid) {
-    pane.append(tgEl('p', 'tg-p tg-dim', `Code zum Eintragen in der anderen Sitzung — gültig bis ${lkTime(l.invite.expiresAt)}:`));
+    pane.append(tgEl('p', 'tg-p tg-dim', onHub
+      ? `Einladungslink für die andere Installation — gültig bis ${lkTime(l.invite.expiresAt)}. Vertraulich `
+        + 'weitergeben: Wer ihn hat, kann ein Beitrittsgesuch stellen.'
+      : `Code zum Eintragen in der anderen Sitzung — gültig bis ${lkTime(l.invite.expiresAt)}:`));
     const row = tgEl('div', 'lk-row');
     const code = tgEl('input', 'bug-input lk-code');
     code.readOnly = true;
     code.value = l.invite.code;
     code.addEventListener('focus', () => code.select());
-    row.append(code, tgButton('Kopieren', 'tg-secondary', () => lkCopy(l.invite.code)));
+    row.append(code, tgButton('Kopieren', 'tg-secondary',
+      () => lkCopy(l.invite.code, onHub ? 'Einladungslink' : 'Verbindungs-Code')));
     pane.append(row);
   } else if (l.invite) {
-    pane.append(tgEl('p', 'tg-p tg-dim', 'Der Code ist abgelaufen.'));
+    pane.append(tgEl('p', 'tg-p tg-dim', onHub ? 'Die Einladung ist abgelaufen.' : 'Der Code ist abgelaufen.'));
+  } else if (onHub && l.inviteElsewhere) {
+    pane.append(tgEl('p', 'tg-p tg-dim', 'Ein anderes Mitglied hat gerade eine Einladung offen.'));
   }
 
   const actions = tgEl('div', 'tg-actions');
   const open = lkHistory.has(l.id);
-  actions.append(tgButton(open ? 'Verlauf schließen' : 'Verlauf', 'tg-secondary', async () => {
-    if (open) lkHistory.delete(l.id);
-    else await lkLoadHistory(l.id);
-    lkApply(lkState);
-  }));
-  if (l.invite && !l.invite.valid) {
-    actions.append(tgButton('Code erneuern', 'tg-secondary', async () => {
-      try {
-        const d = await lkPost('invite', { link: l.id });
-        if (d.created) await lkCopy(d.created.code);
-      } catch (e) { lkFail(e); }
+  if (status !== 'pending') {
+    actions.append(tgButton(open ? 'Verlauf schließen' : 'Verlauf', 'tg-secondary', async () => {
+      if (open) lkHistory.delete(l.id);
+      else await lkLoadHistory(l.id);
+      lkApply(lkState);
     }));
   }
-  actions.append(tgButton('Trennen', 'tg-danger', async () => {
-    if (!window.confirm('Diese Sitzung aus der Verbindung nehmen?\n'
-      + 'Ihr Verlauf ist für diese Sitzung danach nicht mehr abrufbar.')) return;
-    lkHistory.delete(l.id);
-    await lkPost('leave', { link: l.id }).catch(lkFail);
-  }));
+  const renew = async () => {
+    try {
+      const d = await lkPost('invite', { link: l.id });
+      if (d.created) await lkCopy(d.created.code, onHub ? 'Einladungslink' : 'Verbindungs-Code');
+    } catch (e) { lkFail(e); }
+  };
+  if (onHub) {
+    if (l.invite && l.invite.valid) {
+      actions.append(tgButton('Einladung zurückziehen', 'tg-secondary',
+        () => lkPost('invite-withdraw', { link: l.id }).catch(lkFail)));
+    } else if (l.canInvite) {
+      actions.append(tgButton(l.invite ? 'Einladung erneuern' : 'Neue Einladung', 'tg-secondary', renew));
+    }
+  } else if (l.invite && !l.invite.valid) {
+    actions.append(tgButton('Code erneuern', 'tg-secondary', renew));
+  }
+  if (onHub) {
+    const label = status === 'pending' ? 'Gesuch zurückziehen' : status === 'ended' ? 'Entfernen' : 'Austreten';
+    actions.append(tgButton(label, 'tg-danger', async () => {
+      const ask = status === 'active'
+        ? 'Aus dieser Verbindung austreten?\nDer Platz auf dem Hub wird frei, und der Verlauf ist für diese Sitzung danach nicht mehr abrufbar.'
+        : null;
+      try {
+        await lkLeaveHub((force) => lkPost('leave', { link: l.id, force }), ask);
+        lkHistory.delete(l.id);
+      } catch (e) { lkFail(e); }
+    }));
+  } else {
+    actions.append(tgButton('Trennen', 'tg-danger', async () => {
+      if (!window.confirm('Diese Sitzung aus der Verbindung nehmen?\n'
+        + 'Ihr Verlauf ist für diese Sitzung danach nicht mehr abrufbar.')) return;
+      lkHistory.delete(l.id);
+      await lkPost('leave', { link: l.id }).catch(lkFail);
+    }));
+  }
   pane.append(actions);
 
-  if (open) {
+  if (open && status !== 'pending') {
     const list = tgEl('div', 'lk-history');
     const msgs = lkHistory.get(l.id) || [];
     if (!msgs.length) list.append(tgEl('div', 'tg-dim lk-msg-head', 'Noch keine Nachrichten.'));
     for (const m of msgs) {
       const item = tgEl('div', 'lk-msg' + (m.own ? ' own' : ''));
-      item.append(tgEl('div', 'lk-msg-head', `${m.own ? 'diese Sitzung' : `„${lkLabelOf(m.from)}“`} · ${lkTime(m.at)}`));
+      const from = onHub ? m.from : lkLabelOf(m.from);
+      item.append(tgEl('div', 'lk-msg-head', `${m.own ? 'diese Sitzung' : `„${from}“`} · ${lkTime(m.at)}`));
       item.append(tgEl('div', 'lk-msg-text', m.text));
       list.append(item);
     }
@@ -4006,7 +4108,8 @@ function lkRender() {
     return;
   }
   lkBody.append(tgEl('div', 'tg-intro',
-    'Verbindet den Agenten dieser Sitzung mit Agenten anderer Sitzungen. Nachrichten liegen im '
+    'Verbindet den Agenten dieser Sitzung mit Agenten anderer Sitzungen'
+    + (s.mode === 'hub' ? ' — auch anderer Installationen, über einen Hub' : '') + '. Nachrichten liegen im '
     + 'Postfach, bis du sie zustellst. In die Sitzung tippt das Webterminal dabei nur einen festen '
     + 'Hinweis — fremder Text kommt beim Agenten nur als Ausgabe des Postfachs an.'));
 
@@ -4061,7 +4164,9 @@ function lkRender() {
     row.append(sel, tgButton('Verbinden', 'bug-add', () => lkPost('connect', { peer: lkForm.peer }).catch(lkFail)));
     add.append(row);
   }
-  add.append(tgEl('p', 'tg-p tg-dim', 'Oder einen Code erzeugen und in der anderen Sitzung eintragen:'));
+  add.append(tgEl('p', 'tg-p tg-dim', peers.length
+    ? 'Oder einen Code erzeugen und in einer anderen Sitzung dieser Installation eintragen:'
+    : 'Einen Code erzeugen und in einer anderen Sitzung dieser Installation eintragen:'));
   const make = tgEl('div', 'lk-row');
   const seats = lkInput('seats', 'bug-input lk-seats', { type: 'number', min: '2', max: '8', title: 'Plätze (Teilnehmer insgesamt)' });
   make.append(tgEl('span', 'tg-dim lk-label', 'Plätze'), seats,
@@ -4072,15 +4177,55 @@ function lkRender() {
       } catch (e) { lkFail(e); }
     }));
   add.append(make);
+  // Ueber den Hub: fuer Sitzungen anderer Installationen. Anlegen braucht den
+  // Zugangsschluessel des Hubs, beitreten nur den Einladungslink.
+  const viaHub = s.mode === 'hub' && s.hub;
+  if (viaHub) {
+    add.append(tgEl('p', 'tg-p tg-dim',
+      `Mit einer Sitzung einer anderen Installation, über den Hub ${s.hub.host}:`));
+    const row = tgEl('div', 'lk-row');
+    const hubSeats = lkInput('hubSeats', 'bug-input lk-seats', { type: 'number', min: '2', max: '8', title: 'Plätze (Teilnehmer insgesamt)' });
+    const btn = tgButton('Einladungslink erzeugen', 'tg-secondary', async () => {
+      try {
+        const d = await lkPost('create', { seats: Number(lkForm.hubSeats) || 2, via: 'hub' });
+        if (d.created) await lkCopy(d.created.code, 'Einladungslink');
+      } catch (e) { lkFail(e); }
+    });
+    btn.disabled = !s.hub.canCreate;
+    row.append(tgEl('span', 'tg-dim lk-label', 'Plätze'), hubSeats, btn);
+    add.append(row);
+    if (!s.hub.canCreate) {
+      add.append(tgEl('p', 'tg-p tg-dim', 'Zum Anlegen fehlt der Zugangsschlüssel des Hubs (Sidebar → '
+        + 'Vernetzung). Beitreten geht ohne ihn.'));
+    }
+  }
+  add.append(tgEl('p', 'tg-p tg-dim', viaHub
+    ? 'Oder einen erhaltenen Code bzw. Einladungslink eintragen (vollständig, mit dem Teil hinter „#“):'
+    : 'Oder einen erhaltenen Code eintragen:'));
   const join = tgEl('div', 'lk-row');
-  const code = lkInput('code', 'bug-input lk-code', { type: 'text', placeholder: 'termlink:local/…', spellcheck: false, autocomplete: 'off' });
+  const code = lkInput('code', 'bug-input lk-code', {
+    type: 'text', placeholder: viaHub ? 'termlink:local/…  oder  https://…/l/ln_…#…' : 'termlink:local/…',
+    spellcheck: false, autocomplete: 'off',
+  });
   const doJoin = async () => {
+    const entered = lkForm.code;
+    const done = () => { lkForm.code = ''; lkStateJson = ''; lkApply(lkState); };
     try {
-      await lkPost('join', { code: lkForm.code });
-      lkForm.code = '';
-      lkStateJson = '';
-      lkApply(lkState);
-    } catch (e) { lkFail(e); }
+      await lkPost('join', { code: entered });
+      done();
+    } catch (e) {
+      // Einladung ueber einen anderen als den eingetragenen Hub: erst fragen.
+      if (!(e.data && e.data.code === 'hub_confirm' && e.data.host)) return lkFail(e);
+      const host = e.data.host;
+      if (!window.confirm(`Diese Einladung läuft über den Hub „${host}“ — nicht über den hier eingetragenen.\n\n`
+        + `Mit dem Beitritt verbindet sich dieses Webterminal mit ${host} und fragt dort regelmäßig nach `
+        + 'Nachrichten. Der Betreiber des Hubs sieht, dass und wann — Inhalte und Namen sieht er nicht.\n\n'
+        + 'Beitreten?')) return;
+      try {
+        await lkPost('join', { code: entered, confirm: host });
+        done();
+      } catch (e2) { lkFail(e2); }
+    }
   };
   code.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doJoin(); } });
   join.append(code, tgButton('Eintragen', 'tg-secondary', doJoin));
@@ -4138,6 +4283,290 @@ document.getElementById('lk-close').addEventListener('click', lkClose);
 lkOverlay.addEventListener('click', (e) => { if (e.target === lkOverlay) lkClose(); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !lkOverlay.hidden) { e.stopPropagation(); lkClose(); }
+}, true);
+
+// ---------------------------------------------------------------- Vernetzung
+// Sidebar-Zeile "Vernetzung": die Einstellung der Installation fuer die
+// Verbindungen zwischen Agent-Sitzungen (/api/vernetzung/*). Drei Zustaende:
+// aus (kein Ketten-Symbol), nur lokal, mit Hub. Der Hub ist ein eigener
+// Dienst, ueber den Installationen verschluesselte Nachrichten austauschen;
+// hier stehen seine Adresse und der Zugangsschluessel. Der Schluessel geht nur
+// zum Server: zurueck kommt lediglich, DASS einer gespeichert ist.
+const vnRow = document.getElementById('vn-row');
+const vnStateEl = document.getElementById('vn-state');
+const vnOverlay = document.getElementById('vn-overlay');
+const vnBody = document.getElementById('vn-body');
+let vnStatus = null;   // letzter Stand von /api/vernetzung/status
+let vnForm = null;     // Eingaben im offenen Dialog: { mode, hub, key, dropKey }
+let vnError = '';
+let vnShown = '';      // Stand (serialisiert), den der Dialog gerade zeigt
+
+const VN_MODES = [
+  ['off', 'Aus', 'Keine Verbindungen. Die Sidebar zeigt kein Ketten-Symbol.'],
+  ['local', 'Nur lokal', 'Sitzungen dieser Installation lassen sich verbinden. Nach außen geht nichts.'],
+  ['hub', 'Mit Hub', 'Zusätzlich Verbindungen zu Sitzungen anderer Installationen — über einen Hub, '
+    + 'der nur verschlüsselte Nachrichten lagert.'],
+];
+
+// Hub, bei dem die Abfrage gerade scheitert (oder null).
+const vnTrouble = (s) => (s.mode === 'hub' ? (s.hubs || []).find((h) => h.error) || null : null);
+
+function vnRenderRow() {
+  const s = vnStatus;
+  vnStateEl.classList.remove('ok', 'warn', 'err');
+  if (!s) {
+    vnStateEl.hidden = true;
+    vnRow.title = 'Vernetzung – Stand wird geladen …';
+    return;
+  }
+  if (s.unavailable) {
+    vnStateEl.hidden = true;
+    vnRow.title = 'Vernetzung: Das laufende Backend kennt diese Einstellung noch nicht — nach einem '
+      + 'Neustart des Dienstes (deploy/term-restart) steht sie zur Verfügung.';
+    return;
+  }
+  vnStateEl.hidden = false;
+  const bad = vnTrouble(s);
+  if (s.mode === 'off') {
+    vnStateEl.textContent = 'aus';
+    vnRow.title = 'Vernetzung ist aus — Klick, um Agenten deiner Sitzungen miteinander zu verbinden.';
+  } else if (s.mode === 'local') {
+    vnStateEl.textContent = 'nur lokal';
+    vnStateEl.classList.add('ok');
+    vnRow.title = 'Vernetzung: Sitzungen dieser Installation lassen sich über das Ketten-Symbol verbinden.';
+  } else if (bad) {
+    vnStateEl.textContent = 'Hub gestört';
+    vnStateEl.classList.add('err');
+    vnRow.title = `Vernetzung mit Hub — ${bad.error}`;
+  } else {
+    vnStateEl.textContent = 'mit Hub';
+    vnStateEl.classList.add('ok');
+    vnRow.title = `Vernetzung mit Hub ${s.host}${s.hasKey ? '' : ' (ohne Zugangsschlüssel: nur beitreten)'}.`;
+  }
+}
+
+async function vnRefresh() {
+  try {
+    const r = await fetch(`${BASE}api/vernetzung/status`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    vnStatus = await r.json();
+  } catch {
+    // Kein /api/vernetzung im Backend = aelteres server.js (Frontend neu gebaut,
+    // Dienst noch nicht neu gestartet).
+    vnStatus = { unavailable: true };
+  }
+  vnRenderRow();
+  // Den offenen Dialog nur bei geaendertem Stand neu zeichnen: sonst verloere
+  // ein gerade angesteuerter Knopf alle paar Sekunden seinen Platz.
+  if (!vnOverlay.hidden && JSON.stringify(vnStatus) !== vnShown) vnRenderBody();
+}
+
+async function vnPost(route, body) {
+  const r = await protectedFetch(`${BASE}api/vernetzung/${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const err = new Error(data.error || 'Anfrage fehlgeschlagen');
+    err.data = data;
+    throw err;
+  }
+  vnStatus = data;
+  vnRenderRow();
+  // Das Ketten-Symbol haengt am Zustand: Sitzungsliste gleich nachziehen.
+  refreshSessions();
+  return data;
+}
+
+function vnRenderBody() {
+  const s = vnStatus;
+  const focused = document.activeElement && vnBody.contains(document.activeElement)
+    ? document.activeElement.dataset.vn : null;
+  const scroll = vnBody.scrollTop;
+  vnShown = JSON.stringify(s);
+  vnBody.replaceChildren();
+  if (!s) { vnBody.append(tgEl('div', 'tg-wait', 'Stand wird geladen …')); return; }
+  if (s.unavailable) {
+    vnBody.append(tgEl('p', 'tg-p',
+      'Das laufende Backend kennt diese Einstellung noch nicht — das Frontend ist neuer als der Dienst. '
+      + 'Nach einem Neustart (im Terminal: deploy/term-restart) lässt sich die Vernetzung hier einstellen.'));
+    return;
+  }
+  if (!vnForm) vnForm = { mode: s.mode, hub: s.hub || '', key: '', dropKey: false };
+  const f = vnForm;
+
+  vnBody.append(tgEl('div', 'tg-intro',
+    'Verbindet die Agenten deiner Sitzungen miteinander: Sie tauschen Nachrichten über ein Postfach aus, '
+    + 'das du in der Sidebar am Ketten-Symbol der Sitzung bedienst. Mit einem Hub geht das auch zwischen '
+    + 'verschiedenen Webterminal-Installationen — Ende-zu-Ende-verschlüsselt.'));
+
+  if (s.socket !== 'ok') {
+    vnBody.append(tgEl('p', 'tg-err', s.socket === 'busy'
+      ? 'Verbindungen verwaltet eine andere laufende Webterminal-Instanz desselben Benutzers — hier lässt sich nichts ändern.'
+      : 'Der Agenten-Zugang ist nicht verfügbar (siehe Log des Dienstes) — die Einstellung lässt sich hier nicht ändern.'));
+  }
+
+  const pane = tgEl('div', 'tg-pane');
+  pane.append(tgEl('div', 'tg-pane-h', 'Zustand'));
+  const modes = tgEl('div', 'ag-modes');
+  for (const [key, label] of VN_MODES) {
+    const b = tgEl('button', 'ag-mode' + (f.mode === key ? ' active' : ''), label);
+    b.type = 'button';
+    b.addEventListener('click', () => { f.mode = key; vnError = ''; vnRenderBody(); });
+    modes.append(b);
+  }
+  pane.append(modes);
+  pane.append(tgEl('p', 'tg-p tg-dim', VN_MODES.find((m) => m[0] === f.mode)[2]));
+
+  if (f.mode === 'hub') {
+    const hub = agField('Adresse des Hubs', f.hub, 'https://hub.example.org', (v) => { f.hub = v; });
+    hub.querySelector('input').dataset.vn = 'hub';
+    pane.append(hub);
+    const sameHub = f.hub.replace(/\/+$/, '') === (s.hub || '');
+    const stored = s.hasKey && sameHub && !f.dropKey;
+    const key = agField('Zugangsschlüssel (nur zum Anlegen von Verbindungen nötig)', f.key,
+      stored ? 'gespeichert — leer lassen, um ihn zu behalten' : 'vnk_…', (v) => { f.key = v; });
+    const keyInput = key.querySelector('input');
+    keyInput.type = 'password';
+    keyInput.autocomplete = 'off';
+    keyInput.dataset.vn = 'key';
+    pane.append(key);
+    if (stored) {
+      const drop = tgEl('button', 'vn-drop', 'Gespeicherten Schlüssel entfernen');
+      drop.type = 'button';
+      drop.addEventListener('click', () => { f.dropKey = true; f.key = ''; vnRenderBody(); });
+      pane.append(drop);
+    }
+    pane.append(tgEl('p', 'tg-p tg-dim',
+      'Den Zugangsschlüssel gibt der Betreiber des Hubs aus. Ohne ihn kannst du Einladungen anderer annehmen, '
+      + 'aber keine eigenen Verbindungen über den Hub anlegen. Wie man einen eigenen Hub einrichtet, steht unter '
+      + '„Hilfe & Tipps“ → „Agenten anderer Installationen verbinden“.'));
+  } else if (s.memberships && s.memberships.length && f.mode !== s.mode) {
+    pane.append(tgEl('p', 'tg-p tg-dim',
+      'Verbindungen über einen Hub bleiben bestehen, ruhen aber: Solange „mit Hub“ nicht gewählt ist, '
+      + 'fragt dieses Webterminal keinen Hub ab.'));
+  }
+  if (vnError) pane.append(tgEl('p', 'tg-err', vnError));
+
+  const actions = tgEl('div', 'tg-actions');
+  const save = tgButton('Speichern', 'bug-add', async () => {
+    vnError = '';
+    try {
+      const body = { mode: f.mode };
+      if (f.mode === 'hub') {
+        body.hub = f.hub;
+        if (f.key) body.key = f.key;
+        else if (f.dropKey) body.key = '';
+      }
+      await vnPost('config', body);
+      vnForm = null;
+      setStatus('Vernetzung gespeichert', false, 2500);
+    } catch (e) { vnError = String(e.message || e); }
+    vnRenderBody();
+  });
+  save.disabled = s.socket !== 'ok';
+  actions.append(save);
+  pane.append(actions);
+  vnBody.append(pane);
+
+  // Stand des eingetragenen Hubs.
+  if (s.mode === 'hub') {
+    const box = tgEl('div', 'tg-pane');
+    box.append(tgEl('div', 'tg-pane-h', `Hub ${s.host}`));
+    const bad = vnTrouble(s);
+    const info = s.keyInfo && s.keyInfo.hub === s.hub ? s.keyInfo : null;
+    if (bad) box.append(tgEl('p', 'tg-err', bad.error));
+    else if (info) box.append(tgEl('p', 'tg-p tg-dim', `Erreichbar, zuletzt geprüft ${lkTime(info.at)}.`));
+    if (info && info.key) {
+      box.append(tgEl('p', 'tg-p tg-dim', `Zugangsschlüssel „${info.key.label}“`
+        + (info.key.max != null ? `: ${info.key.active ?? 0} von ${info.key.max} Verbindungen aktiv.` : '.')));
+    } else if (!s.hasKey) {
+      box.append(tgEl('p', 'tg-p tg-dim', 'Kein Zugangsschlüssel eingetragen — beitreten geht, anlegen nicht.'));
+    }
+    const row = tgEl('div', 'tg-actions');
+    row.append(tgButton('Jetzt prüfen', 'tg-secondary', async () => {
+      try {
+        await vnPost('check', {});
+        setStatus('Hub erreichbar', false, 2500);
+      } catch (e) { setStatus(String(e.message || e), true, 6000); }
+      vnRenderBody();
+    }));
+    box.append(row);
+    vnBody.append(box);
+  }
+
+  // Alle Mitgliedschaften ueber Hubs — auch die beendeter Sitzungen: aus denen
+  // kommt man nur hier noch heraus, das Webterminal tritt nie von selbst aus.
+  if (s.memberships && s.memberships.length) {
+    const box = tgEl('div', 'tg-pane');
+    box.append(tgEl('div', 'tg-pane-h', 'Verbindungen über Hubs'));
+    box.append(tgEl('p', 'tg-p tg-dim',
+      'Endet eine Sitzung, bleibt ihr Platz auf dem Hub bestehen, bis du hier austrittst oder der Hub ihn '
+      + 'nach 30 Tagen ohne Abfrage räumt.'));
+    for (const m of s.memberships) {
+      const row = tgEl('div', 'lk-row vn-member');
+      const what = m.status === 'ended' ? 'beendet'
+        : s.mode !== 'hub' ? 'ruht (kein Hub eingeschaltet)'
+          : m.sessionGone ? 'ruht (Sitzung beendet)'
+            : m.status === 'pending' ? 'Beitritt angefragt' : 'aktiv';
+      const text = tgEl('div', 'vn-member-text');
+      text.append(tgEl('div', null, `Sitzung „${m.sessionGone ? m.session : lkLabelOf(m.session)}“`
+        + (m.sessionGone ? ' (beendet)' : '')));
+      text.append(tgEl('div', 'tg-dim', `${m.id} · ${lkHost(m.hub)} · ${what}`));
+      row.append(text, tgButton(m.status === 'ended' ? 'Entfernen' : 'Austreten', 'tg-danger', async () => {
+        try {
+          await lkLeaveHub((force) => vnPost('leave', { key: m.key, force }),
+            m.status === 'active' ? 'Aus dieser Verbindung austreten?' : null);
+        } catch (e) { setStatus(String(e.message || e), true, 6000); }
+        vnRenderBody();
+      }));
+      box.append(row);
+    }
+    vnBody.append(box);
+  }
+
+  vnBody.scrollTop = scroll;
+  if (focused) {
+    const el = vnBody.querySelector(`[data-vn="${focused}"]`);
+    if (el) el.focus();
+  }
+}
+
+let vnTimer = null;
+function vnOpen() {
+  vnForm = null;
+  vnError = '';
+  vnOverlay.hidden = false;
+  // Das Formular entsteht aus dem FRISCHEN Stand, nicht aus dem zuletzt
+  // gesehenen: der kann aelter sein als eine Aenderung in einem anderen Tab.
+  vnBody.replaceChildren(tgEl('div', 'tg-wait', 'Stand wird geladen …'));
+  vnShown = '';
+  vnRefresh();
+  // Kein Neuzeichnen im Takt, solange jemand tippt.
+  if (!vnTimer) vnTimer = setInterval(vnRefreshQuiet, 5000);
+}
+
+// Stand holen; den Dialog nur neu zeichnen, wenn gerade nichts eingegeben wird.
+async function vnRefreshQuiet() {
+  const editing = !vnOverlay.hidden && vnBody.contains(document.activeElement)
+    && ['INPUT', 'SELECT'].includes(document.activeElement.tagName);
+  if (editing) return;
+  await vnRefresh();
+}
+
+function vnClose() {
+  vnOverlay.hidden = true;
+  vnForm = null;
+  if (vnTimer) { clearInterval(vnTimer); vnTimer = null; }
+}
+
+vnRow.addEventListener('click', vnOpen);
+document.getElementById('vn-close').addEventListener('click', vnClose);
+vnOverlay.addEventListener('click', (e) => { if (e.target === vnOverlay) vnClose(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !vnOverlay.hidden) { e.stopPropagation(); vnClose(); }
 }, true);
 
 // ------------------------------------------------------------- Zugangsschutz
@@ -4681,3 +5110,8 @@ loadBugs();
 // beschleunigt bei Bedarf selbst auf 2,5 s waehrend der Verknuepfung).
 tgRefresh();
 setInterval(tgRefresh, 15000);
+
+// Vernetzung-Zeile: Zustand initial und im ruhigen Takt (zeigt u. a., wenn der
+// Hub nicht mehr antwortet).
+vnRefresh();
+setInterval(() => { if (vnOverlay.hidden) vnRefresh(); }, 30000);

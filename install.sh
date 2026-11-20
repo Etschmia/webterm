@@ -315,7 +315,7 @@ note "Projekt: $SCRIPT_DIR"
 # --------------------------------------------------------------------------
 # 1. Port pruefen
 # --------------------------------------------------------------------------
-step "1/6  Port pruefen"
+step "1/7  Port pruefen"
 PORT="$(get_env PORT)"; PORT="${PORT:-$DEFAULT_PORT}"
 while port_in_use "$PORT"; do
   warn "Port $PORT ist bereits belegt:"
@@ -338,7 +338,7 @@ set_env HOST "127.0.0.1"
 # --------------------------------------------------------------------------
 # 2. npm/node finden und bauen
 # --------------------------------------------------------------------------
-step "2/6  npm/node finden und bauen"
+step "2/7  npm/node finden und bauen"
 NPM_BIN="$(find_cmd npm || true)"
 NODE_BIN="$(find_cmd node || true)"
 # Ohne node/npm gibt es weder Build noch systemd-Unit — und bun ist kein Ersatz
@@ -402,7 +402,7 @@ fi
 # --------------------------------------------------------------------------
 # 3. tmux + claude-auto-retry
 # --------------------------------------------------------------------------
-step "3/6  tmux & claude-auto-retry"
+step "3/7  tmux & claude-auto-retry"
 HAVE_TMUX=0
 if command -v tmux >/dev/null 2>&1; then
   HAVE_TMUX=1
@@ -498,7 +498,7 @@ fi
 # --------------------------------------------------------------------------
 # 4. ~/.tmux.conf: Maus-Unterstuetzung + git-Status in der Statuszeile
 # --------------------------------------------------------------------------
-step "4/6  tmux-Konfiguration (Maus + git-Status)"
+step "4/7  tmux-Konfiguration (Maus + git-Status)"
 
 # 4a) git-status.sh nach ~/.tmux/ ausrollen — die Statuszeile ruft es dort per
 #     fixem Pfad auf. Quelle liegt im Repo (deploy/git-status.sh); Zielverzeichnis
@@ -586,7 +586,7 @@ fi
 # --------------------------------------------------------------------------
 # 5. Caddy-Datei
 # --------------------------------------------------------------------------
-step "5/6  Caddy-Konfiguration"
+step "5/7  Caddy-Konfiguration"
 HAVE_CADDY=0
 command -v caddy >/dev/null 2>&1 && HAVE_CADDY=1
 
@@ -731,7 +731,7 @@ fi
 # --------------------------------------------------------------------------
 # 6. systemd-Unit
 # --------------------------------------------------------------------------
-step "6/6  systemd-Service"
+step "6/7  systemd-Service"
 if [ -z "$NODE_BIN" ]; then
   warn "node-Pfad unbekannt — systemd-Unit kann nicht zuverlaessig erzeugt werden."
   note "Installiere node bzw. setze den Pfad und fuehre das Skript erneut aus."
@@ -900,6 +900,58 @@ EOF
       printf '%s\n' "Manuelle Installation:"
       note "    sudo cp '$UNIT_OUT' /etc/systemd/system/${SERVICE_NAME}.service"
       note "    sudo systemctl daemon-reload && sudo systemctl enable --now $SERVICE_NAME"
+    fi
+  fi
+fi
+
+# --------------------------------------------------------------------------
+# 7. Vernetzung: Agenten verbinden (optional)
+# --------------------------------------------------------------------------
+# Schreibt ~/.term-link/config.json (0600) ueber deploy/link-config.mjs — dieselben
+# Regeln wie das Panel "Vernetzung" in der Sidebar. Der laufende Dienst liest die
+# Datei bei Aenderung neu; ein Neustart ist dafuer nicht noetig.
+step "7/7  Vernetzung (Agenten verbinden)"
+LINK_DIR="$(get_env TERM_LINK_DIR)"
+LINK_DIR="${LINK_DIR:-$HOME/.term-link}"
+LINK_CFG="$SCRIPT_DIR/deploy/link-config.mjs"
+note "Agenten verschiedener Sitzungen koennen einander Nachrichten schicken. Zwischen"
+note "verschiedenen Webterminal-Installationen geht das ueber einen eigenen Hub (Projekt"
+note "\"Vernetzung\"); er lagert nur verschluesselte Nachrichten. Einrichtung: Hilfe & Tipps."
+if [ -z "$NODE_BIN" ]; then
+  warn "Ohne node uebersprungen. Spaeter in der Sidebar unter \"Vernetzung\" einstellen."
+else
+  LINK_NOW="$("$NODE_BIN" "$LINK_CFG" --dir "$LINK_DIR" show 2>/dev/null || true)"
+  LINK_MODE="${LINK_NOW%%$'\t'*}"
+  if [ -n "$LINK_MODE" ] && [ "$LINK_MODE" != "none" ]; then
+    ok "Einstellung vorhanden ($LINK_MODE) — bleibt unveraendert. Aendern: Sidebar -> Vernetzung."
+  elif [ "$INTERACTIVE" -eq 0 ]; then
+    "$NODE_BIN" "$LINK_CFG" --dir "$LINK_DIR" off && ok "Vernetzung ist aus (einschaltbar in der Sidebar unter \"Vernetzung\")."
+  else
+    printf '%s\n' "  1) Kein Hub — Vernetzung bleibt aus (in der Sidebar jederzeit einschaltbar, auch nur lokal)"
+    printf '%s\n' "  2) Eigener Hub — Adresse jetzt eintragen"
+    LINK_CHOICE="$(ask_value 'Auswahl (1/2)' '1')"
+    LINK_DONE=0
+    if [ "$LINK_CHOICE" = "2" ]; then
+      while true; do
+        LINK_HUB="$(ask_value 'Adresse des Hubs (https://…, leer = doch keiner)')"
+        [ -z "$LINK_HUB" ] && break
+        if LINK_HUB_OK="$("$NODE_BIN" "$LINK_CFG" check-hub "$LINK_HUB" 2>/dev/tty)"; then
+          note "Der Zugangsschluessel (vnk_…) wird nur zum Anlegen von Verbindungen gebraucht;"
+          note "beitreten geht ohne. Leer lassen, wenn du (noch) keinen hast."
+          printf 'Zugangsschluessel (Eingabe unsichtbar): ' > /dev/tty
+          read -rs LINK_KEY < /dev/tty || LINK_KEY=""; printf '\n' > /dev/tty
+          if printf '%s' "$LINK_KEY" | "$NODE_BIN" "$LINK_CFG" --dir "$LINK_DIR" hub "$LINK_HUB_OK" 2>/dev/tty; then
+            ok "Vernetzung mit Hub $LINK_HUB_OK eingetragen."
+            note "    Ob der Hub antwortet und den Schluessel kennt, zeigt die Sidebar unter \"Vernetzung\"."
+            LINK_DONE=1
+            break
+          fi
+        fi
+      done
+      unset LINK_KEY
+    fi
+    if [ "$LINK_DONE" -eq 0 ]; then
+      "$NODE_BIN" "$LINK_CFG" --dir "$LINK_DIR" off && ok "Vernetzung ist aus (einschaltbar in der Sidebar unter \"Vernetzung\")."
     fi
   fi
 fi

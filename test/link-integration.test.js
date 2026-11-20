@@ -13,7 +13,7 @@ const REAL_TMUX = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' 
 // Backend plus EIGENER tmux-Server: ein `tmux`-Starter vorn im PATH lenkt jeden
 // Aufruf des Backends auf einen Test-Socket (-L) und entfernt $TMUX — der echte
 // tmux-Server des Entwicklers wird nie beruehrt.
-async function startLinked(t) {
+async function startLinked(t, { mode = 'local' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'term-link-it-'));
   const repo = path.resolve(import.meta.dirname, '..');
   const app = path.join(root, 'app');
@@ -28,6 +28,10 @@ async function startLinked(t) {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(home);
   fs.mkdirSync(bin);
+  // Verbindungen sind ab Werk aus; diese Tests arbeiten mit lokalen (wie nach
+  // der Wahl "nur lokal" im Panel "Vernetzung").
+  fs.mkdirSync(path.join(home, '.term-link'), { mode: 0o700 });
+  fs.writeFileSync(path.join(home, '.term-link', 'config.json'), JSON.stringify({ mode }), { mode: 0o600 });
   const sock = `termlink-it-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   fs.writeFileSync(path.join(bin, 'tmux'),
     `#!/bin/sh\nunset TMUX\nexec '${REAL_TMUX}' -L '${sock}' -f /dev/null "$@"\n`, { mode: 0o755 });
@@ -157,6 +161,19 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   assert.equal((await s.post('/api/link/connect', { session: 'alpha', peer: 'gibtsnicht' })).status, 404);
   assert.equal((await s.sessionRow('alpha')).link, null);
 
+  // Die Einstellung "Vernetzung": aus heisst kein Ketten-Symbol (linkMode) und keine neue Verbindung.
+  assert.equal((await s.get('/api/vernetzung/status')).mode, 'local');
+  assert.equal((await fetch(s.base + '/api/vernetzung/config', { method: 'POST', body: '{"mode":"off"}' })).status, 403);
+  assert.equal((await s.post('/api/vernetzung/config', { mode: 'off' })).data.mode, 'off');
+  assert.equal((await s.get('/api/sessions')).linkMode, 'off');
+  const refused = await s.post('/api/link/connect', { session: 'alpha', peer: 'beta' });
+  assert.deepEqual([refused.status, refused.data.code], [409, 'link_off']);
+  const noHub = await s.post('/api/vernetzung/config', { mode: 'hub', hub: 'http://hub.example.org' });
+  assert.deepEqual([noHub.status, noHub.data.code], [400, 'hub_scheme']);
+  assert.equal((await s.post('/api/vernetzung/config', { mode: 'local' })).data.mode, 'local');
+  assert.equal((await s.get('/api/sessions')).linkMode, 'local');
+  assert.equal(fs.statSync(path.join(s.linkDir, 'config.json')).mode & 0o777, 0o600);
+
   // Der Agent kann selbst nichts anlegen und hat vor dem Verbinden kein Postfach.
   assert.match(s.cli('beta', ['status']).stdout, /hat keine Verbindung/);
   const early = s.cli('beta', ['send', 'zu früh']);
@@ -264,7 +281,9 @@ test('linked sessions exchange messages; only a fixed hint is typed into the pan
   const made = await s.post('/api/link/create', { session: 'alpha', seats: 3 });
   assert.equal(made.status, 200);
   const code = made.data.created.code;
-  assert.equal((await s.post('/api/link/join', { session: 'beta', code: 'https://hub.example.org/l/x#y' })).status, 400);
+  // Ein Einladungslink eines Hubs: bei "nur lokal" geht nichts nach draussen.
+  const viaHub = await s.post('/api/link/join', { session: 'beta', code: 'https://hub.example.org/l/x#y' });
+  assert.deepEqual([viaHub.status, viaHub.data.code], [409, 'hub_off']);
   assert.equal((await s.post('/api/link/join', { session: 'beta', code })).status, 200);
   const ambiguous = s.cli('beta', ['send', 'wohin']);
   assert.notEqual(ambiguous.status, 0);
@@ -361,7 +380,9 @@ function tempDir(t) {
 }
 
 // Instanz mit eigenem Agenten-Socket: nur die darf den Stand aendern.
-async function tempLink(t, tmux, dir = tempDir(t)) {
+// `mode: null` laesst die Einstellung weg (Zustand wie frisch installiert).
+async function tempLink(t, tmux, dir = tempDir(t), { mode = 'local' } = {}) {
+  if (mode) fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode }), { mode: 0o600 });
   const link = createLink({ tmux, dir, cliScript: '/nirgendwo/term-link.mjs', log: { warn: () => {}, error: () => {} } });
   t.after(() => link.close());
   await link.boot();
@@ -450,18 +471,64 @@ test('only the instance that owns the agent socket changes the shared state', as
   // … gleicht aber nicht ab: eine Liste ohne die Sitzungen laesst alles stehen.
   assert.equal(second.observe([], second.snapshot()), false);
   assert.deepEqual(second.stateFor(alpha).links[0].members.map((m) => m.gone), [false, false]);
-  assert.throws(() => second.leave(alpha, id), linkCode('not_owner'));
-  assert.throws(() => second.renewInvite(alpha, id), linkCode('not_owner'));
+  await assert.rejects(second.leave(alpha, id), linkCode('not_owner'));
+  await assert.rejects(second.renewInvite(alpha, id), linkCode('not_owner'));
+  await assert.rejects(second.configure({ mode: 'off' }), linkCode('not_owner'));
   await assert.rejects(second.deliver({ ...alpha, agent: 'claude', agentStatus: 'idle', agentPane: '%1', activePane: '%1' }, 'intro'),
     linkCode('not_owner'));
   assert.equal(fs.readFileSync(stateFile, 'utf8'), written);
 
   // Verliert die erste Instanz ihre Socket-Datei, schreibt auch sie nicht mehr.
   fs.unlinkSync(path.join(dir, 'agent.sock'));
-  assert.throws(() => first.leave(alpha, id), linkCode('not_owner'));
+  await assert.rejects(first.leave(alpha, id), linkCode('not_owner'));
   assert.equal(first.observe([], first.snapshot()), false);
   assert.equal(first.stateFor(alpha).socket, 'error');
   assert.equal(fs.readFileSync(stateFile, 'utf8'), written);
+});
+
+test('links are off until switched on; the hub setting is checked before it is stored', async (t) => {
+  const fake = fakeTmux();
+  const dir = tempDir(t);
+  const link = await tempLink(t, fake.tmux, dir, { mode: null });
+  const [alpha, beta] = fake.rows();
+
+  // Frisch installiert: aus. Nichts entsteht, auch kein Endpunkt an der Sitzung.
+  assert.equal(link.mode(), 'off');
+  await assert.rejects(link.connect({ ...alpha }, { ...beta }), linkCode('link_off'));
+  await assert.rejects(link.create({ ...alpha }, 2), linkCode('link_off'));
+  await assert.rejects(link.join({ ...alpha }, 'termlink:local/ln_abcdefgh#' + 'x'.repeat(22)), linkCode('link_off'));
+  assert.equal(fake.calls.length, 0);
+
+  // Nur lokal: lokale Verbindungen gehen, ein Einladungslink eines Hubs nicht.
+  assert.equal((await link.configure({ mode: 'local' })).mode, 'local');
+  await link.connect(alpha, beta);
+  assert.equal(link.stateFor(alpha).hub, null);
+  await assert.rejects(link.create({ ...alpha }, 2, 'hub'), linkCode('hub_off'));
+  await assert.rejects(link.join({ ...alpha }, `https://hub.example.org/l/ln_abcdefgh1234#${'A'.repeat(43)}`), linkCode('hub_off'));
+
+  // Mit Hub: gespeichert wird nur, was der Hub bestaetigt. Hier antwortet keiner.
+  await assert.rejects(link.configure({ mode: 'hub', hub: '' }), linkCode('hub_missing'));
+  await assert.rejects(link.configure({ mode: 'hub', hub: 'http://hub.example.org' }), linkCode('hub_scheme'));
+  await assert.rejects(link.configure({ mode: 'hub', hub: 'https://127.0.0.1:1', key: 'kein-schluessel' }), linkCode('key_invalid'));
+  await assert.rejects(link.configure({ mode: 'hub', hub: 'https://127.0.0.1:1', key: `vnk_${'k'.repeat(32)}` }),
+    linkCode('hub_unreachable'));
+  assert.equal(link.mode(), 'local');
+  const shown = link.settings();
+  assert.deepEqual([shown.mode, shown.hub, shown.hasKey, shown.socket], ['local', '', false, 'ok']);
+  assert.ok(!JSON.stringify(shown).includes('vnk_'), 'der Zugangsschlüssel verlässt den Server nie');
+
+  // Wieder aus: Bestehendes bleibt lesbar und trennbar, Neues entsteht nicht.
+  await link.configure({ mode: 'off' });
+  const id = link.stateFor(alpha).links[0].id;
+  await assert.rejects(link.connect({ ...alpha }, { ...beta }), linkCode('link_off'));
+  await link.leave(alpha, id);
+  assert.deepEqual(link.stateFor(alpha).links, []);
+  // Bestand von vor dieser Einstellung (Verbindungen, aber keine config.json): lokal.
+  const old = tempDir(t);
+  fs.writeFileSync(path.join(old, 'state.json'), JSON.stringify({ version: 1, links: {
+    ln_bestand00: { id: 'ln_bestand00', kind: 'local', createdAt: 1, seats: 2, seq: 0, invite: null, members: [], messages: [] },
+  } }));
+  assert.equal((await tempLink(t, fakeTmux().tmux, old, { mode: null })).mode(), 'local');
 });
 
 test('deliverCheck only allows idle agent panes and shellQuote quotes when needed', () => {

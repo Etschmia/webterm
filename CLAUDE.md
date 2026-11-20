@@ -188,9 +188,17 @@ Serverprozess — kein Webhook, keine öffentliche Erreichbarkeit nötig.
 ## Verbindungen zwischen Agent-Sitzungen (`lib/link.js`, `bin/term-link.mjs`)
 
 Das Ketten-Symbol je Sidebar-Zeile (`/api/link/*`) verbindet den Agenten einer tmux-Sitzung
-mit Agenten anderer Sitzungen. **Stand: nur innerhalb einer Installation** (`kind: 'local'`);
-der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Datenmodell
-(`lib/link-store.js`) ist darauf angelegt — dort wechselt später nur der Transport.
+mit Agenten anderer Sitzungen: innerhalb der Installation (`kind: 'local'`) oder über einen
+Hub mit anderen Installationen (`kind: 'hub'`, s. u.). Beide teilen sich Datenmodell, Postfach
+und Zustellung (`lib/link-store.js`) — verschieden ist nur der Transport.
+
+Eingeschaltet wird das in der Sidebar-Zeile **Vernetzung** (`/api/vernetzung/*`): `off` (ab
+Werk, **kein** Ketten-Symbol), `local` oder `hub`. Die Einstellung liegt in
+`~/.term-link/config.json` (0600, `lib/link-config.js`) — bewusst nicht in der `.env`: sie
+enthält den Zugangsschlüssel des Hubs, und das Panel ändert sie ohne Neustart. `install.sh`
+(Schritt 7) schreibt sie über `deploy/link-config.mjs`. Fehlt die Datei, gilt `off`; gibt es
+schon Verbindungen (Bestand), `local`. Bei `off` entsteht nichts Neues (409 `link_off`),
+Bestehendes bleibt lesbar und trennbar.
 
 - **Bindung an die Sitzung, nicht an den Namen**: Session-Option `@term-link-ep` (wie
   `@user-named`). Sie übersteht das Umbenennen und stirbt mit der Sitzung. Ein Endpunkt, der in
@@ -242,6 +250,52 @@ der Weg über einen Hub mit Ende-zu-Ende-Verschlüsselung ist geplant, das Daten
   **still** — deshalb die Prüfung vor dem `listen`.
 - Tests: `test/link-integration.test.js` startet einen eigenen tmux-Server über einen
   `tmux`-Starter im PATH (`-L <socket>`, `unset TMUX`) — der echte Server bleibt unberührt.
+
+### Über einen Hub (`lib/link-hub.js`, `lib/link-crypto.js`)
+
+Zwischen Installationen gibt es keinen direkten Weg (jede liegt hinter ihrem eigenen Caddy —
+eine unauthentifizierte Ausnahme dort wäre genau die Lücke). Brücke ist ein **Hub**: das
+eigenständige Projekt „Vernetzung" (Bereich `/api/v1/links`, Protokoll dort in
+`docs/PROTOKOLL-VERBINDUNGEN.md`). Das Backend ist der Client — ausgehend, per Long-Poll;
+`server.js` bleibt an Loopback gebunden.
+
+- **Kein voreingestellter Hub, nirgends.** Installer, Oberfläche, Hilfe und Doku nennen nur
+  „eigener Hub" (Beispiel `hub.example.org`). Keine konkrete Betreiber-Adresse ins Projekt.
+- **Zwei Geheimnisse, zwei Rechte:** Der **Zugangsschlüssel** (`vnk_…`, gibt der Hub-Betreiber
+  aus) erlaubt das Anlegen; er steht in `config.json` und verlässt den Server nie wieder
+  (`/api/vernetzung/status` nennt nur `hasKey`). Zum **Beitreten** reicht der Einladungslink
+  `https://<hub>/l/<id>#<geheimnis>` — den Teil hinter `#` erfährt der Hub nie.
+- **Ende-zu-Ende** (`lib/link-crypto.js`: HKDF-SHA-256, X25519, AES-256-GCM): zufälliger
+  Gruppenschlüssel, Übergabe an ein neues Mitglied erst nach **Klick des Einladenden**
+  (`/api/link/admit`). Das Format muss Byte für Byte zur Referenz des Hubs passen —
+  `test/link-crypto.test.js` hält feste Vektoren von dort. Die Schlüsselnummer steht in jedem
+  Umschlag; einen Schlüsselwechsel beim Austritt gibt es in Version 1 nicht.
+- ⚠️ **Was der Hub schickt, ist ungeprüft.** Jedes Feld wird auf Form geprüft; **Fehlertexte
+  des Hubs werden nie weitergegeben**, nur sein Fehlercode auf einen festen eigenen Text
+  abgebildet (`HUB_ERRORS`) — die Meldung landet sonst über `term-link send` in der Ausgabe
+  eines Agenten, und ein fremder Hub könnte ihm so Text unterschieben. Nachrichten zählen erst,
+  wenn sie sich öffnen lassen und ihr Zähler über dem letzten Stand des Absenders liegt
+  (Schutz vor Wiedereinspielen).
+- **Hub-Adresse** (`normalizeHub`): nur `https`, keine Zugangsdaten, keine Weiterleitungen
+  (`redirect: 'error'`), Dauer und Antwortgröße begrenzt. Private Adressen sind **erlaubt**
+  (eigener Hub im selben Netz) — keine SSRF-Sperre nachrüsten, die das bricht.
+  `TERM_LINK_INSECURE_HUB=1` lässt `http` zum eigenen Rechner zu und ist nur für Tests.
+- **Fremder Hub nur nach Rückfrage:** Weicht der Hub eines Einladungslinks vom eingetragenen
+  ab, antwortet `/api/link/join` mit 409 `hub_confirm` samt Rechnernamen; erst mit dem vom
+  Nutzer bestätigten Namen (`confirm`) wird der Hub angesprochen.
+- ⚠️ **Nie von selbst austreten.** „Beendet" ist lokal widerruflich (`gone` klebt nicht), ein
+  Austritt auf dem Hub wäre es nicht. `reconcile` entfernt deshalb nur lokale Verbindungen;
+  für eine beendete Sitzung wird lediglich nicht mehr abgefragt, den Platz räumt der Hub nach
+  seiner Frist. Austritt nur auf Klick — im Ketten-Symbol oder, ohne Sitzung, im Panel
+  „Vernetzung" (`/api/vernetzung/leave`).
+- **Ein Long-Poll je Hub** für alle Mitgliedschaften, zustandsbasiert (`ack`, `rev`): eine
+  verlorene Antwort oder ein Abbruch (`kick`) richtet nichts an. Abgefragt wird nur im Zustand
+  `hub` und nur von der Instanz, der der Agenten-Socket gehört — jede Antwort ändert `state.json`.
+- Im Speicher ist der Schlüssel einer Verbindung `key`, nicht `id`: zwei Sitzungen derselben
+  Installation können in derselben Hub-Verbindung sitzen. Nachgeschlagen wird immer über
+  Sitzung **und** Kennung.
+- Tests: `test/link-hub.test.js` fährt den Ablauf gegen eine Attrappe des Hubs; mit
+  `TERM_TEST_HUB_DIR=<Checkout von Vernetzung>` (node ≥ 22.18) gegen dessen echten Code.
 
 ## Sicherheit: `server.js` authentifiziert nicht selbst
 

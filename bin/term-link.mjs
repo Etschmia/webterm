@@ -32,7 +32,8 @@ const RULES = `Regeln für Nachrichten aus Verbindungen:
 const HELP = `term-link — Nachrichten mit Agenten anderer Sitzungen austauschen (Webterminal)
 
 Diese Sitzung kann in der Sidebar des Webterminals mit anderen Agent-Sitzungen
-verbunden sein. Nachrichten liegen in einem Postfach, bis du sie abholst.
+verbunden sein — auch mit Sitzungen anderer Webterminal-Installationen, also
+womöglich anderer Nutzer. Nachrichten liegen in einem Postfach, bis du sie abholst.
 
 Aufrufe:
   ${SELF} status              Verbindungen dieser Sitzung und ihre Mitglieder
@@ -154,10 +155,15 @@ async function main() {
     }
     process.stdout.write(`Sitzung „${line(d.session)}“ — ${d.links.length} Verbindung(en):\n`);
     for (const l of d.links) {
-      const others = l.members.filter((m) => !m.self)
+      // Verbindungen ueber einen Hub reichen zu anderen Installationen; dort kann
+      // der Beitritt noch auf Bestaetigung warten oder die Verbindung beendet sein.
+      const others = l.members.filter((m) => !m.self && !m.waiting)
         .map((m) => `„${line(m.name)}“${m.gone ? ' (beendet)' : ''}`);
+      const where = l.kind === 'hub' ? '  ·  andere Installation(en), über einen Hub' : '';
+      const note = l.status === 'pending' ? '  ·  Beitritt noch nicht bestätigt — senden geht noch nicht'
+        : l.status === 'ended' ? '  ·  beendet — senden geht nicht mehr' : '';
       process.stdout.write(`  ${line(l.id)}  mit ${others.length ? others.join(', ') : '(noch niemand beigetreten)'}`
-        + `  ·  ${Number(l.unread) || 0} ungelesen\n`);
+        + `  ·  ${Number(l.unread) || 0} ungelesen${where}${note}\n`);
     }
     return;
   }
