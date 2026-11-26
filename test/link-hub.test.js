@@ -667,3 +667,30 @@ test('a session rejects a duplicate link id across hubs or local links', { timeo
   );
   assert.equal(a.view('ep_a').length, 2);
 });
+
+test('send reports both known and unknown valid recipients and ignores invalid entries', { timeout: 30000, skip: !!REAL_DIR }, async (t) => {
+  const hub = await startHub(t);
+  let extraRecipients = false;
+  const a = installation(t, hub, {
+    fetchImpl: async (url, init) => {
+      const res = await globalThis.fetch(url, init);
+      if (extraRecipients && init && init.method === 'POST' && String(url).endsWith('/messages')) {
+        const d = await res.json();
+        d.recipients = [
+          ...d.recipients,
+          ...d.recipients, // Duplikat
+          { member_id: 'm_Unbekannt01' }, // gueltig, lokal noch nicht bekannt
+          { member_id: 'kein-gueltiges-id' }, // ungueltig
+          { member_id: 12345 }, // kein String
+        ];
+        return new Response(JSON.stringify(d), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      }
+      return res;
+    },
+  });
+  const b = installation(t, hub);
+  await linked(a, b);
+  extraRecipients = true;
+  const sent = await a.send('ep_a', 'Hallo alle', 'alpha');
+  assert.deepEqual(sent.recipients, ['beta', 'Mitglied']);
+});

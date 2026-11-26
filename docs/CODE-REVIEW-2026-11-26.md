@@ -36,7 +36,7 @@ und Robustheitslücken.
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Behoben: Kennung je Sitzung über alle Verbindungen hinweg eindeutig geprüft |
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Behoben: `canForce` gilt für jeden Hub-Fehler außer `member_unknown` |
 | N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Behoben: `deploy/link-config.mjs` berücksichtigt Bestand aus `state.json` |
-| N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Offen |
+| N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Behoben: Empfänger-IDs geprüft, dedupliziert und einzeln abgebildet |
 | N5 | Niedrig | `renewInvite`, `withdrawInvite` und `decide` lassen gelöschte Hub-Verbindungen (`member_unknown`) bis zum nächsten Poll aktiv | Offen |
 
 ### H1 — Replay-Schutz (`l.seen`) durch den Hub aushebelbar
@@ -269,6 +269,11 @@ begrenzt.
 
 Vorschlag: `res.recipients` auf gültige, eindeutige `MEMBER_RE`-IDs (max. 16) filtern und
 jede ID einzeln auf den lokal bekannten Namen oder `UNKNOWN_NAME` abbilden.
+
+Umsetzung: `send()` in `lib/link-hub.js` filtert `res.recipients` auf eindeutige,
+`MEMBER_RE`-gültige IDs (höchstens 16, ohne die eigene Kennung) und bildet jede ID einzeln
+auf ihren bekannten Namen oder `Mitglied` ab. Neuer Test in `test/link-hub.test.js` prüft
+gemischte bekannte, unbekannte, doppelte und ungültige Einträge.
 
 ### N5 — Gelöschte Hub-Verbindungen bleiben bei Einladungs-/Gesuch-Aktionen vorerst aktiv
 
