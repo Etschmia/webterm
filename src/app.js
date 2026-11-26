@@ -1450,6 +1450,7 @@ function extractLinks() {
   const start = Math.max(0, end - SCAN_LINES);
   let text = '';
   let joinNext = false;
+  let prevIndent = 0;
   for (let i = start; i < end; i++) {
     const line = buf.getLine(i);
     if (!line) continue;
@@ -1459,8 +1460,14 @@ function extractLinks() {
     // Claude Code) brechen selbst hart um — isWrapped bleibt dann false;
     // deshalb auch anhaengen, wenn die Vorzeile randvoll mitten in einer
     // URL endete (joinNext).
+    const hardJoin = i > start && !line.isWrapped && joinNext;
     if (i > start && !line.isWrapped && !joinNext) text += '\n';
-    text += s;
+    // Manche TUIs (agy/Antigravity) ruecken den ganzen Block ein — auch die
+    // Fortsetzungszeilen. Dieselbe Einrueckung wie die Vorzeile gehoert dann
+    // nicht zur URL; mit ihr endete die URL am Leerzeichen nach Zeile 1.
+    const indent = s.length - s.trimStart().length;
+    text += hardJoin && indent === prevIndent ? s.slice(indent) : s;
+    prevIndent = indent;
     // Auf der bereits zusammengefuegten logischen Zeile testen, nicht auf s:
     // Fortsetzungszeilen enthalten selbst kein "https://".
     const tail = text.slice(-4000);
