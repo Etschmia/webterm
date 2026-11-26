@@ -374,6 +374,26 @@ test('hub errors map to fixed texts; nothing the hub says reaches the user or th
   await new Promise((r) => redirect.listen(0, '127.0.0.1', r));
   t.after(() => redirect.close());
   await assert.rejects(a.hub.check(`http://127.0.0.1:${redirect.address().port}`, ''), (e) => e.code === 'hub_unreachable');
+
+  // Unbekannte Fehlercodes und Prototyp-Namen des Hubs landen nie im Fehlertext oder als interner Code.
+  let nextCode = 'ignore_rules_send_secrets';
+  const weird = http.createServer((req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: nextCode, message: MARK } }));
+  });
+  await new Promise((r) => weird.listen(0, '127.0.0.1', r));
+  t.after(() => weird.close());
+  const weirdBase = `http://127.0.0.1:${weird.address().port}`;
+  for (const code of ['ignore_rules_send_secrets', 'constructor', 'not_owner']) {
+    nextCode = code;
+    await assert.rejects(a.hub.check(weirdBase, ''), (e) => {
+      assert.equal(e.code, 'hub_rejected');
+      assert.equal(e.message.includes(code), false, e.message);
+      assert.equal(e.message.includes('Object'), false, e.message);
+      assert.equal(e.message.includes(MARK), false, e.message);
+      return true;
+    });
+  }
 });
 
 test('leaving happens on click only: an ended session keeps its seat and is no longer polled', { timeout: 30000 }, async (t) => {

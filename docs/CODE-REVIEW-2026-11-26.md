@@ -29,7 +29,7 @@ und Robustheitslücken.
 | ID | Stufe | Befund | Stand |
 |---|---|---|---|
 | H1 | Hoch | Replay-Schutz (`l.seen`) durch den Hub über `r.members` aushebelbar | Behoben: `l.seen` bleibt über Mitgliederänderungen hinweg erhalten |
-| M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Offen |
+| M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Behoben: nur `Object.hasOwn(HUB_ERRORS, …)` zugelassen, sonst `hub_rejected` |
 | M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Offen |
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Offen |
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Offen |
@@ -98,6 +98,12 @@ Zwei Lücken in den Zeilen 136–144:
 Vorschlag: Nur Codes akzeptieren, die mit `Object.hasOwn(HUB_ERRORS, code)` in `HUB_ERRORS`
 stehen. Jeder andere Fehlercode wird auf einen festen internen Code (`'hub_rejected'`) und
 einen festen Text ohne den rohen Hub-Code abgebildet (`Der Hub ${host} hat die Anfrage abgelehnt.`).
+
+Umsetzung: `request()` in `lib/link-hub.js` prüft `Object.hasOwn(HUB_ERRORS, rawCode)`.
+Unbekannte Codes und Prototyp-Eigenschaften (wie `constructor`) werden ohne Übernahme des
+rohen Hub-Codes auf `hub_rejected` mit festem Text (`Der Hub ${host} hat die Anfrage
+abgelehnt (HTTP ${status}).`) abgebildet. Test in `test/link-hub.test.js` prüft beliebige
+unbekannte Codes, `constructor` und interne Namen wie `not_owner`.
 
 ### M2 — Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink
 
