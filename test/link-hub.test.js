@@ -630,3 +630,24 @@ test('concurrent joins do not leak seats on the hub and failed local saves clean
   await assert.rejects(c.hub.join({ endpoint: 'ep_c', name: 'gamma', code: made.code }), (e) => e.code === 'not_owner');
   await until(() => hub.members(made.id).length === 2, 'verwaister Platz auf dem Hub geraeumt');
 });
+
+test('a session rejects a duplicate link id across hubs or local links', { timeout: 30000, skip: !!REAL_DIR }, async (t) => {
+  const hub1 = await startHub(t);
+  const hub2 = await startHub(t);
+  const a = installation(t, hub1);
+  const local = a.store.create({ endpoint: 'ep_a', name: 'alpha', seats: 2 });
+  // Einladungslink eines Hubs mit derselben Kennung wie eine lokale Verbindung wird vor dem Hub-Aufruf abgewiesen.
+  const sameAsLocal = `${hub2.base}/l/${local.id}#${'A'.repeat(43)}`;
+  await assert.rejects(
+    a.hub.join({ endpoint: 'ep_a', name: 'alpha', code: sameAsLocal, confirm: hubHost(hub2.base) }),
+    (e) => e.code === 'already_member',
+  );
+  // Ebenso bei Kollision mit einer bestehenden Hub-Verbindung auf einem anderen Hub.
+  const made = await a.hub.create({ endpoint: 'ep_a', name: 'alpha', seats: 2 });
+  const sameAsHub1 = `${hub2.base}/l/${made.id}#${'B'.repeat(43)}`;
+  await assert.rejects(
+    a.hub.join({ endpoint: 'ep_a', name: 'alpha', code: sameAsHub1, confirm: hubHost(hub2.base) }),
+    (e) => e.code === 'already_member',
+  );
+  assert.equal(a.view('ep_a').length, 2);
+});

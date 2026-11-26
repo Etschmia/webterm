@@ -33,7 +33,7 @@ und Robustheitslücken.
 | M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Behoben: monotone `rev`-Prüfung und Mindest-Revision an `l.invite` |
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Behoben: erneute Eigentums-/Modusprüfung nach Netzwerk-Awaits |
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Behoben: In-Flight-Sperre, Hub-Cleanup bei Speicherfehler, `Enter` über `tgButton` |
-| N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Offen |
+| N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Behoben: Kennung je Sitzung über alle Verbindungen hinweg eindeutig geprüft |
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Offen |
 | N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Offen |
 | N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Offen |
@@ -212,6 +212,12 @@ Vorschlag: In `hubAdd()` (und vorab in `hub.join()`) jede vorhandene Verbindung 
 Sitzung mit gleicher `linkId` (`linksOf(endpoint).some((l) => l.id === linkId)`) ablehnen
 (bei Kollision nach `hub.create()` die Antwort als `502 hub_reply` zurückweisen und den
 Eintrag auf dem Hub best-effort entfernen).
+
+Umsetzung: `lib/link-store.js` ergänzt `hasLink(endpoint, linkId)` und prüft in `hubAdd()`
+über alle Verbindungen der Sitzung (`linksOf(endpoint)`), nicht nur innerhalb desselben Hubs.
+`lib/link-hub.js` nutzt `hasLink()` vorab in `join()` (`409 already_member`) sowie nach
+`create()` (`502 hub_reply` samt Hub-Cleanup). Neuer Test in `test/link-hub.test.js` prüft
+Kollisionen mit lokalen Verbindungen und Verbindungen auf einem anderen Hub.
 
 ### N2 — Fehlerhafter Hub kann den Austritt in der Oberfläche blockieren
 
