@@ -423,6 +423,22 @@ test('leaving happens on click only: an ended session keeps its seat and is no l
   await until(() => a.view('ep_a')[0].members.length === 1, 'A sieht den Austritt');
   await assert.rejects(a.send('ep_a', 'hallo?', 'alpha'), (e) => e.code === 'no_recipients');
 
+  // Hub lehnt DELETE mit beliebigem Fehlercode ab (z. B. 429 rate_limited): canForce greift trotzdem.
+  const hostile = installation(t, hub, {
+    fetchImpl: async (url, init) => {
+      if (init && init.method === 'DELETE' && String(url).endsWith('/members/me')) {
+        return new Response(JSON.stringify({ error: { code: 'rate_limited', message: MARK } }),
+          { status: 429, headers: { 'Content-Type': 'application/json' } });
+      }
+      return globalThis.fetch(url, init);
+    },
+  });
+  await hostile.hub.create({ endpoint: 'ep_h', name: 'hostile' });
+  await assert.rejects(hostile.hub.leave({ key: hostile.store.hubView()[0].key }),
+    (e) => e.code === 'rate_limited' && e.data && e.data.canForce === true);
+  await hostile.hub.leave({ key: hostile.store.hubView()[0].key, force: true });
+  assert.deepEqual(hostile.store.hubView(), []);
+
   // Hub nicht erreichbar: der Austritt scheitert sichtbar und laesst sich nur hier erzwingen.
   hub.server.close();
   hub.server.closeAllConnections();
