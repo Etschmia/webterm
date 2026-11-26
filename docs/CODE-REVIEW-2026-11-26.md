@@ -34,7 +34,7 @@ und Robustheitslücken.
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Behoben: erneute Eigentums-/Modusprüfung nach Netzwerk-Awaits |
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Behoben: In-Flight-Sperre, Hub-Cleanup bei Speicherfehler, `Enter` über `tgButton` |
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Behoben: Kennung je Sitzung über alle Verbindungen hinweg eindeutig geprüft |
-| N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Behoben: `canForce` gilt für jeden Hub-Fehler außer `member_unknown` |
+| N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Behoben: `canForce` gilt für jeden Hub-Fehler außer `member_unknown`; bei `rate_limited` erst im Wiederholungsfall |
 | N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Behoben: `deploy/link-config.mjs` berücksichtigt Bestand aus `state.json` |
 | N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Behoben: Empfänger-IDs geprüft, dedupliziert und einzeln abgebildet |
 | N5 | Niedrig | `renewInvite`, `withdrawInvite` und `decide` lassen gelöschte Hub-Verbindungen (`member_unknown`) bis zum nächsten Poll aktiv | Behoben: sofortiges `end(..., 'removed')` + `kick()`; `mode`-Prüfung vor `forgetCheck()` |
@@ -235,6 +235,11 @@ setzen.
 Umsetzung: `leave()` in `lib/link-hub.js` setzt `canForce: true` nun bei jedem `LinkError`
 des Hub-Aufrufs (außer `member_unknown`). Test in `test/link-hub.test.js` prüft ein
 `429 rate_limited` bei `DELETE /members/me` samt erzwungenem lokalem Entfernen.
+
+Nachtrag: Für `rate_limited` enger gefasst. Bremst der Hub nur, hilft meist ein zweiter
+Versuch, und der erzwungene Austritt ließe den Platz auf dem Hub unnötig belegt. `canForce`
+gibt es dort deshalb erst, wenn der Hub denselben Austritt erneut bremst — ein dauerhaft
+bremsender Hub kann ihn also weiterhin nicht blockieren.
 
 ### N3 — `install.sh` schaltet bestehende lokale Verbindungen still auf `off`
 
