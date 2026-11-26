@@ -33,7 +33,7 @@ function fakeHub() {
 
   function auth(req, linkId, anyStatus) {
     const t = tokens.get((req.headers.authorization || '').replace(/^Bearer /, ''));
-    if (!t || t.link.id !== linkId || !t.link.members.has(t.member.id)) throw fail(401, 'member_unknown');
+    if (!t || t.link.id !== linkId || !links.has(t.link.id) || !t.link.members.has(t.member.id)) throw fail(401, 'member_unknown');
     if (!anyStatus && t.member.status !== 'active') throw fail(403, 'not_active');
     return t;
   }
@@ -469,13 +469,21 @@ test('renewing and withdrawing the invitation; a link deleted on the hub ends lo
   assert.equal(a.view('ep_a')[0].canInvite, true);
   await assert.rejects(c.hub.join({ endpoint: 'ep_c', name: 'gamma', code: renewed.code }), (e) => e.code === 'link_unknown');
 
-  // Der Betreiber loescht die Verbindung: hier steht sie danach als beendet, bis der Nutzer sie entfernt.
+  // Der Betreiber loescht die Verbindung: eine Aktion darauf (renewInvite) markiert sie sofort als beendet.
   if (REAL_DIR) hub.real.links.admin.deleteLink(made.id);
   else { hub.links.delete(made.id); }
-  a.hub.sync();
-  await a.hub.renewInvite({ endpoint: 'ep_a', linkId: made.id }).catch(() => {});
-  const ended = await until(() => { const v = a.view('ep_a')[0]; return v.status === 'ended' && v; }, 'A bemerkt die Löschung', 15000);
-  assert.equal(ended.ended, 'removed');
+  await assert.rejects(a.hub.renewInvite({ endpoint: 'ep_a', linkId: made.id }), (e) => e.code === 'member_unknown');
+  assert.equal(a.view('ep_a')[0].status, 'ended');
+  assert.equal(a.view('ep_a')[0].ended, 'removed');
+
+  // Ebenso bei withdrawInvite auf einer geloeschten Verbindung.
+  const made2 = await a.hub.create({ endpoint: 'ep_a', name: 'alpha', seats: 2 });
+  if (REAL_DIR) hub.real.links.admin.deleteLink(made2.id);
+  else { hub.links.delete(made2.id); }
+  await assert.rejects(a.hub.withdrawInvite({ endpoint: 'ep_a', linkId: made2.id }), (e) => e.code === 'member_unknown');
+  const ended2 = a.view('ep_a').find((l) => l.id === made2.id);
+  assert.equal(ended2.status, 'ended');
+  assert.equal(ended2.ended, 'removed');
 });
 
 test('two sessions of one installation can sit in the same hub link', { timeout: 30000 }, async (t) => {

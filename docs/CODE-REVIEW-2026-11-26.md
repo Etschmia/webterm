@@ -37,7 +37,7 @@ und Robustheitslücken.
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Behoben: `canForce` gilt für jeden Hub-Fehler außer `member_unknown` |
 | N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Behoben: `deploy/link-config.mjs` berücksichtigt Bestand aus `state.json` |
 | N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Behoben: Empfänger-IDs geprüft, dedupliziert und einzeln abgebildet |
-| N5 | Niedrig | `renewInvite`, `withdrawInvite` und `decide` lassen gelöschte Hub-Verbindungen (`member_unknown`) bis zum nächsten Poll aktiv | Offen |
+| N5 | Niedrig | `renewInvite`, `withdrawInvite` und `decide` lassen gelöschte Hub-Verbindungen (`member_unknown`) bis zum nächsten Poll aktiv | Behoben: sofortiges `end(..., 'removed')` + `kick()`; `mode`-Prüfung vor `forgetCheck()` |
 
 ### H1 — Replay-Schutz (`l.seen`) durch den Hub aushebelbar
 
@@ -288,6 +288,12 @@ einen ungültigen `mode` ablehnt.
 Vorschlag: Bei `member_unknown` in `renewInvite`, `withdrawInvite` und `decide` ebenfalls
 `end(link.key, 'removed')` und `kick(link.hub)` ausführen; in `configure()` `mode` vor
 `hub.forgetCheck()` prüfen.
+
+Umsetzung: `renewInvite()`, `withdrawInvite()` und `decide()` in `lib/link-hub.js` rufen bei
+`member_unknown` (sofern Eigentümer) sofort `end(link.key, 'removed')` und `kick(link.hub)`
+auf. `configure()` in `lib/link.js` prüft `MODES.includes(mode)` vor `hub.forgetCheck()`.
+Test in `test/link-hub.test.js` prüft, dass `renewInvite` und `withdrawInvite` eine auf dem
+Hub gelöschte Verbindung unmittelbar als `ended` (`removed`) markieren.
 
 ## Geprüft und unauffällig
 
