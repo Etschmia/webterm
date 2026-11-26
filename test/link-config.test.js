@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { checkKey, createLinkConfig, hubHost, inviteUrl, normalizeHub, parseInvite } from '../lib/link-config.js';
+
+const LINK_CFG_BIN = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), 'deploy', 'link-config.mjs');
 
 const SECRET = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 
@@ -58,4 +62,18 @@ test('the setting defaults to off, to local for existing links, and is stored wi
   fs.rmSync(config.file);
   links = true;
   assert.equal(createLinkConfig({ dir, hasLinks: () => links }).get().mode, 'local');
+});
+
+test('deploy/link-config.mjs show reports legacy local links so install.sh does not turn them off', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'term-link-cli-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const show = () => execFileSync(process.execPath, [LINK_CFG_BIN, '--dir', dir, 'show'], { encoding: 'utf8' });
+  assert.equal(show(), 'none\t\t\n');
+
+  // Bestand: state.json mit Verbindung, aber noch keine config.json.
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({
+    version: 1,
+    links: { ln_bestand00: { id: 'ln_bestand00', kind: 'local', createdAt: 1, seats: 2, seq: 0, invite: null, members: [], messages: [] } },
+  }), { mode: 0o600 });
+  assert.equal(show(), 'local\t\t\n');
 });

@@ -35,7 +35,7 @@ und Robustheitslücken.
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Behoben: In-Flight-Sperre, Hub-Cleanup bei Speicherfehler, `Enter` über `tgButton` |
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Behoben: Kennung je Sitzung über alle Verbindungen hinweg eindeutig geprüft |
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Behoben: `canForce` gilt für jeden Hub-Fehler außer `member_unknown` |
-| N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Offen |
+| N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Behoben: `deploy/link-config.mjs` berücksichtigt Bestand aus `state.json` |
 | N4 | Niedrig | `hub.send()` unterschlägt unbekannte Empfänger und validiert `recipients` aus der Hub-Antwort nicht | Offen |
 | N5 | Niedrig | `renewInvite`, `withdrawInvite` und `decide` lassen gelöschte Hub-Verbindungen (`member_unknown`) bis zum nächsten Poll aktiv | Offen |
 
@@ -252,6 +252,11 @@ Vorschlag: `deploy/link-config.mjs` prüft über `createLinkStore({ dir }).count
 (`hasLinks`), ob bereits Verbindungen vorhanden sind. Bei fehlender `config.json` mit
 Bestand meldet `show` `local` statt `none`, sodass `install.sh` die vorhandene lokale
 Nutzung nicht abschaltet.
+
+Umsetzung: `deploy/link-config.mjs` übergibt `hasLinks: () => createLinkStore({ dir }).count() > 0`
+an `createLinkConfig` und gibt bei `show` für Bestandsinstallationen ohne `config.json`
+`local` statt `none` aus; `install.sh` lässt den Stand dann unverändert. Neuer Test in
+`test/link-config.test.js` prüft `show` für leeres Verzeichnis und Bestands-`state.json`.
 
 ### N4 — Empfängerliste bei `hub.send()` unterschlägt unbekannte Empfänger
 

@@ -12,7 +12,7 @@
 
 import fs from 'node:fs';
 import { checkKey, createLinkConfig, normalizeHub } from '../lib/link-config.js';
-import { LinkError } from '../lib/link-store.js';
+import { createLinkStore, LinkError } from '../lib/link-store.js';
 
 const args = process.argv.slice(2);
 let dir = '';
@@ -29,10 +29,13 @@ try {
     process.stdout.write(normalizeHub(value) + '\n');
   } else {
     if (!dir) throw new LinkError(400, 'usage', 'Aufruf: link-config.mjs --dir <verzeichnis> show|off|local|hub <adresse>');
-    const config = createLinkConfig({ dir });
+    const config = createLinkConfig({ dir, hasLinks: () => createLinkStore({ dir }).count() > 0 });
     if (cmd === 'show') {
       const c = config.get();
-      process.stdout.write(`${c.stored ? c.mode : 'none'}\t${c.hub}\t${c.key ? 'key' : ''}\n`);
+      // Bestand ohne config.json, aber mit vorhandenen Verbindungen, gilt als 'local',
+      // damit install.sh ihn nicht still auf 'off' schaltet.
+      const shown = c.stored || c.mode === 'local' ? c.mode : 'none';
+      process.stdout.write(`${shown}\t${c.hub}\t${c.key ? 'key' : ''}\n`);
     } else if (cmd === 'off' || cmd === 'local') {
       const old = config.get();
       config.set({ mode: cmd, hub: old.hub, key: old.key });
