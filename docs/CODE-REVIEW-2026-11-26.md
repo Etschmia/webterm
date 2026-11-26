@@ -31,7 +31,7 @@ und Robustheitslücken.
 | H1 | Hoch | Replay-Schutz (`l.seen`) durch den Hub über `r.members` aushebelbar | Behoben: `l.seen` bleibt über Mitgliederänderungen hinweg erhalten |
 | M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Behoben: nur `Object.hasOwn(HUB_ERRORS, …)` zugelassen, sonst `hub_rejected` |
 | M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Behoben: monotone `rev`-Prüfung und Mindest-Revision an `l.invite` |
-| M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Offen |
+| M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Behoben: erneute Eigentums-/Modusprüfung nach Netzwerk-Awaits |
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Offen |
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Offen |
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Offen |
@@ -157,6 +157,14 @@ Vorschlag: In `run()` unmittelbar nach `await request(...)` erneut
 `if (p.stopped || closed || !isOwner() || config.get().mode !== 'hub') break;` prüfen;
 vor jedem lokalen Schreiben nach einem Netzwerk-Await (`store.hubAdd`, `hubUpdate`,
 `hubRemove`, `config.set`) die Eigentumsprüfung wiederholen (`503 not_owner`).
+
+Umsetzung: `lib/link-hub.js` prüft nach dem Long-Poll erneut `p.stopped`, `closed`,
+`isOwner()` und `config.get().mode === 'hub'` (sowie `isOwner()` in `apply()`), und
+wiederholt `assertOwner()` vor jedem lokalen Schreibvorgang nach einem `await request(...)`
+(`create`, `join`, `renewInvite`, `withdrawInvite`, `decide`, `send`, `leave`). `lib/link.js`
+wiederholt `requireOwner()` in `configure()` nach `await hub.check(...)`. Neuer Test in
+`test/link-hub.test.js` prüft, dass `state.json` nach Eigentumsverlust während eines laufenden
+Polls oder `leave`-Aufrufs unverändert bleibt.
 
 ### M4 — Parallele Beitrittsgesuche leaken verwaiste Plätze auf dem Hub
 

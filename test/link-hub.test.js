@@ -566,3 +566,38 @@ test('a stale poll response neither wipes a newly created invite nor downgrades 
   assert.equal(b.store.hubLinks()[0].rev, curRev);
   assert.equal(b.view('ep_b')[0].members.length, 3);
 });
+
+test('losing ownership during a long-poll or hub call prevents writing state.json', { timeout: 30000, skip: !!REAL_DIR }, async (t) => {
+  const hub = await startHub(t);
+  let owned = true;
+  let releasePoll = null;
+  let holdNextPoll = false;
+  const fetchImpl = async (url, init) => {
+    const res = await globalThis.fetch(url, init);
+    if (holdNextPoll && String(url).endsWith('/poll')) {
+      holdNextPoll = false;
+      await new Promise((r) => { releasePoll = r; });
+    }
+    return res;
+  };
+  const a = installation(t, hub);
+  const b = installation(t, hub, { fetchImpl, isOwner: () => owned });
+  const made = await linked(a, b);
+  await until(() => b.store.hubLinks()[0].rev === hub.links.get(made.id).rev, 'B synchron');
+
+  // Waehrend des laufenden Polls verliert B den Socket; die Nachricht von A darf state.json nicht mehr aendern.
+  holdNextPoll = true;
+  await a.send('ep_a', 'waehrend Uebernahme', 'alpha');
+  await until(() => releasePoll !== null, 'Poll haengt im Rueckweg');
+  const stateFile = path.join(b.dir, 'state.json');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  owned = false;
+  releasePoll();
+  await until(() => b.hub.status().hubs.length === 0, 'Poller von B beendet');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+  assert.equal(b.store.summary('ep_b').unread, 0);
+
+  // Auch direkte Hub-Aktionen schreiben nicht, wenn der Besitz verloren ging.
+  await assert.rejects(b.hub.leave({ key: b.store.hubView()[0].key }), (e) => e.code === 'not_owner');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+});
