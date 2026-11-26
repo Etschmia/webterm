@@ -601,3 +601,32 @@ test('losing ownership during a long-poll or hub call prevents writing state.jso
   await assert.rejects(b.hub.leave({ key: b.store.hubView()[0].key }), (e) => e.code === 'not_owner');
   assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
 });
+
+test('concurrent joins do not leak seats on the hub and failed local saves clean up on the hub', { timeout: 30000, skip: !!REAL_DIR }, async (t) => {
+  const hub = await startHub(t);
+  const a = installation(t, hub);
+  const b = installation(t, hub);
+  const made = await a.hub.create({ endpoint: 'ep_a', name: 'alpha', seats: 3 });
+
+  const [first, second] = await Promise.allSettled([
+    b.hub.join({ endpoint: 'ep_b', name: 'beta', code: made.code }),
+    b.hub.join({ endpoint: 'ep_b', name: 'beta', code: made.code }),
+  ]);
+  assert.equal(first.status, 'fulfilled');
+  assert.equal(second.status, 'rejected');
+  assert.equal(second.reason.code, 'busy');
+  assert.equal(hub.members(made.id).length, 2, 'nur ein offenes Gesuch auf dem Hub');
+
+  // Geht der Besitz waehrend des Hub-Aufrufs verloren, wird der neue Platz auf dem Hub wieder geraeumt.
+  let owned = true;
+  const c = installation(t, hub, {
+    isOwner: () => owned,
+    fetchImpl: async (url, init) => {
+      const res = await globalThis.fetch(url, init);
+      if (init && init.method === 'POST' && String(url).endsWith('/join')) owned = false;
+      return res;
+    },
+  });
+  await assert.rejects(c.hub.join({ endpoint: 'ep_c', name: 'gamma', code: made.code }), (e) => e.code === 'not_owner');
+  await until(() => hub.members(made.id).length === 2, 'verwaister Platz auf dem Hub geraeumt');
+});

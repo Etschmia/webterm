@@ -4234,8 +4234,9 @@ function lkRender() {
       } catch (e2) { lkFail(e2); }
     }
   };
-  code.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doJoin(); } });
-  join.append(code, tgButton('Eintragen', 'tg-secondary', doJoin));
+  const joinBtn = tgButton('Eintragen', 'tg-secondary', doJoin);
+  code.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); joinBtn.click(); } });
+  join.append(code, joinBtn);
   add.append(join);
   lkBody.append(add);
 

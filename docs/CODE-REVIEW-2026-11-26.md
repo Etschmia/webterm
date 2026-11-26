@@ -32,7 +32,7 @@ und Robustheitslücken.
 | M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Behoben: nur `Object.hasOwn(HUB_ERRORS, …)` zugelassen, sonst `hub_rejected` |
 | M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Behoben: monotone `rev`-Prüfung und Mindest-Revision an `l.invite` |
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Behoben: erneute Eigentums-/Modusprüfung nach Netzwerk-Awaits |
-| M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Offen |
+| M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Behoben: In-Flight-Sperre, Hub-Cleanup bei Speicherfehler, `Enter` über `tgButton` |
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Offen |
 | N2 | Niedrig | Fehlerhafter oder feindseliger Hub kann den Austritt in der Oberfläche dauerhaft blockieren | Offen |
 | N3 | Niedrig | `install.sh` schaltet bestehende lokale Verbindungen („Bestand“) ohne `config.json` still auf `off` | Offen |
@@ -187,6 +187,13 @@ Vorschlag: In `lib/link-hub.js` laufende `join`-Aufrufe je `(endpoint, hub, id)`
 dennoch, den frisch angelegten Platz sofort best-effort mit `DELETE /<id>/members/me`
 (mit dem soeben erhaltenen `member_token`) auf dem Hub wieder räumen. Im Frontend `Enter`
 über den zugehörigen `tgButton` (`joinBtn.click()`) auslösen.
+
+Umsetzung: `lib/link-hub.js` sperrt parallele `join`-Aufrufe je `(endpoint, hub, id)` über
+ein `joining`-Set (`409 busy`) und räumt bei einem Fehler in `assertOwner()`/`store.hubAdd()`
+nach `create` oder `join` den neuen Platz best-effort per `DELETE /<id>/members/me` auf dem
+Hub wieder frei. In `src/app.js` löst `Enter` im Code-Feld nun `joinBtn.click()` aus, sodass
+die `tgBusy`-Sperre greift. Neuer Test in `test/link-hub.test.js` prüft parallele `join`-Aufrufe
+sowie das Aufräumen nach fehlgeschlagenem lokalem Speichern.
 
 ### N1 — Kollision gleicher `link_id` in derselben Sitzung
 
