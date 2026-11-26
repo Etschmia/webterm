@@ -28,7 +28,7 @@ und Robustheitslücken.
 
 | ID | Stufe | Befund | Stand |
 |---|---|---|---|
-| H1 | Hoch | Replay-Schutz (`l.seen`) durch den Hub über `r.members` aushebelbar | Offen |
+| H1 | Hoch | Replay-Schutz (`l.seen`) durch den Hub über `r.members` aushebelbar | Behoben: `l.seen` bleibt über Mitgliederänderungen hinweg erhalten |
 | M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Offen |
 | M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Offen |
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Offen |
@@ -69,6 +69,12 @@ spart keinen nennenswerten Speicher, hebt aber den Replay-Schutz vollständig au
 Vorschlag: Einträge in `l.seen` nicht beim Verschwinden aus `r.members` löschen; sie bleiben
 für die Lebensdauer der Verbindung erhalten und entfallen erst beim Entfernen der Verbindung
 (`hubRemove`).
+
+Umsetzung: Das Löschen aus `l.seen` beim Verarbeiten von `r.members` wurde entfernt.
+Zähler je Absender bleiben für die gesamte Lebensdauer der Verbindung stehen und werden erst
+beim Löschen der Verbindung verworfen. Test in `test/link-hub.test.js` prüft das
+Wiedereinspielen eines alten Chiffrats, während der Hub den Absender aus `r.members` entfernt
+und danach wieder einfügt.
 
 ### M1 — Unbekannte Hub-Fehlercodes im Agenten-Output und Prototyp-Nachschlag
 

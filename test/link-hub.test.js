@@ -479,4 +479,13 @@ test('replayed, re-attributed and undecryptable messages from the hub are droppe
   assert.deepEqual(b.store.history({ endpoint: 'ep_b', full: true }).map((m) => m.text), ['echt', 'danach']);
   assert.equal(b.view('ep_b')[0].lost, 2, 'zwei Umschläge ließen sich nicht öffnen');
   assert.equal(b.store.summary('ep_b').unread, 2);
+
+  // Auch wenn der Absender aus r.members verschwindet (Austritt oder Weglassen
+  // durch den Hub), darf derselbe Umschlag nicht ploetzlich wieder angenommen werden.
+  await a.hub.leave({ key: a.store.hubView()[0].key });
+  await until(() => b.view('ep_b')[0].members.length === 1, 'B sieht fehlendes Mitglied');
+  inject({ from: sender, box: original.box });
+  await until(() => b.store.hubLinks()[0].ack === link.seq, 'B hat den wiedereingespielten Umschlag verarbeitet');
+  assert.deepEqual(b.store.history({ endpoint: 'ep_b', full: true }).map((m) => m.text), ['echt', 'danach']);
+  assert.equal(b.store.summary('ep_b').unread, 2);
 });
