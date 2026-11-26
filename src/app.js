@@ -824,7 +824,7 @@ function isGenericClaudeTitle(clean) {
 }
 
 // Welcher Agent laeuft in der Session ('claude'|'kimi'|'codex'|'grok'|'muse'|
-// 'opencode'|null)? Primaer das aktuelle agent-Feld; der Rueckfall aufs alte
+// 'opencode'|'antigravity'|null)? Primaer das aktuelle agent-Feld; der Rueckfall aufs alte
 // claude-Flag ueberbrueckt den Version-Skew kurz nach einem Deploy (neues
 // Frontend, altes Backend).
 function agentOf(s) {
@@ -836,7 +836,7 @@ function agentOf(s) {
 // Unbekannt (auch: altes Backend ohne agent-Feld) faellt auf "Claude" zurueck.
 const AGENT_NAMES = {
   claude: 'Claude', kimi: 'Kimi', codex: 'Codex', grok: 'Grok', muse: 'Muse',
-  opencode: 'Opencode',
+  opencode: 'Opencode', antigravity: 'Antigravity',
 };
 function agentName(s) {
   return AGENT_NAMES[agentOf(s)] || 'Claude';
@@ -869,6 +869,13 @@ function sessionLabel(s) {
   const lc = clean.toLowerCase();
   const isHost = !!host && (lc === host || lc === hostShort);
   const looksDefault = !clean || lc === cmd || /^\S+@\S+/.test(clean) || isHost;
+  // agy setzt gar keinen pane_title. Ohne Zusatz bliebe nur der Session-Name,
+  // der ueber das laufende Tool nichts sagt (oder, nach einem frueheren Start
+  // aus der Standard-Sitzung, noch ein anderes nennt).
+  if (looksDefault && agentOf(s) === 'antigravity') {
+    const dir = sessionDir(s);
+    return dir ? `${dir} — Antigravity` : 'Antigravity';
+  }
   return looksDefault ? s.name : clean;
 }
 

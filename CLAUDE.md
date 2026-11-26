@@ -362,6 +362,16 @@ Fallback (letzter `turn_context`). **Nie das neueste Rollout nur anhand des cwd 
 Das kann eine alte CLI-, Desktop- oder Subagent-Sitzung mit einem anderen Modell sein.
 Fehlen beide sicheren Quellen, bleibt der Chip leer.
 
+Antigravity (`agy`, Agent-Name `antigravity`) hält seinen Zustand unter
+`~/.gemini/antigravity-cli` als SQLite/Protobuf — keine PID-Registry, kein lesbares Modellfeld.
+Modell **und** Effort kommen deshalb allein aus der Fußzeile des eigenen Panes
+(`<modus> · <modell> · <effort>`, rechtsbündig in der letzten nichtleeren Zeile;
+`lib/antigravity-model.js`). Passt die Zeile nicht exakt, bleibt der Chip leer. Weil nur das
+eigene Pane gelesen wird, greift der cwd-Mehrdeutigkeits-Riegel hier nicht. Der Ampel-Status
+stammt aus Texten des Binaries: `… (… esc to cancel)` = arbeitet, Auswahlzeilen
+`Yes, allow …` / `Yes, and always …` / `No, deny …` = wartet auf Freigabe. `agy` setzt keinen
+`pane_title`; die Sidebar zeigt deshalb `<Verzeichnis> — Antigravity`.
+
 Wichtig für Änderungen daran: **nur Claude und muse führen eine PID-Registry** — grok,
 kimi und opencode werden über `/proc/<pid>/cwd` zugeordnet. Laufen zwei Prozesse desselben
 Tools im selben Verzeichnis, ist die Zuordnung nicht mehr eindeutig; `listSessions()` zeigt

@@ -20,6 +20,7 @@ import pty from 'node-pty';
 import { backendVersion } from './lib/backend-version.js';
 import { codexModelFromPane, codexRolloutForPid } from './lib/codex-model.js';
 import { opencodeMessageFiles, opencodeModelFromFiles } from './lib/opencode-model.js';
+import { antigravityModelFromPane, antigravityStatusFromTail } from './lib/antigravity-model.js';
 import {
   canonicalOrigin, isLoopbackHost, isPathInside, terminalSize, validCsrfRequest,
 } from './lib/security.js';
@@ -198,7 +199,7 @@ const link = createLink({
 // Erkannte Agenten. Reihenfolge egal; Vergleich immer gegen comm (s. u.).
 const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse', 'opencode'];
 
-// comm -> Agent-Name. Normalerweise identisch; zwei Ausnahmen:
+// comm -> Agent-Name. Normalerweise identisch; drei Ausnahmen:
 // muse: der Launcher ~/.local/bin/muse ist ein Shell-Skript, das das
 // VERSIONIERTE Binary exec't — comm heisst dann 'muse-bin-1.0.3-R2198.1'
 // (und wird von Linux auf 15 Zeichen gekuerzt: 'muse-bin-1.0.3-'). Ein
@@ -206,10 +207,12 @@ const AGENT_COMMANDS = ['claude', 'kimi', 'codex', 'grok', 'muse', 'opencode'];
 // muse-Update waere es ausserdem ein anderer Name.
 // opencode: per npm als opencode-ai installiert heisst das Binary
 // 'opencode.exe' (comm), per Install-Skript dagegen 'opencode'.
+// antigravity: das CLI von Google Antigravity heisst 'agy'.
 function agentFromComm(comm) {
   if (AGENT_COMMANDS.includes(comm)) return comm;
   if (comm.startsWith('muse-bin-')) return 'muse';
   if (comm === 'opencode.exe') return 'opencode';
+  if (comm === 'agy') return 'antigravity';
   return null;
 }
 
@@ -236,7 +239,7 @@ async function agentSessions() {
     });
   });
   const parent = new Map();
-  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'|'muse'|'opencode'
+  const agentPids = new Map(); // pid -> 'claude'|'kimi'|'codex'|'grok'|'muse'|'opencode'|'antigravity'
   for (const line of ps.split('\n')) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
@@ -650,6 +653,8 @@ function agentModelInfo(agent, pid, cwd, paneTail) {
   try {
     if (agent === 'claude') return claudeModelInfo(pid);
     if (agent === 'muse') return museModelInfo(pid, paneTail);
+    // Haengt allein am Pane dieser Sitzung, braucht also kein cwd.
+    if (agent === 'antigravity') return antigravityModelFromPane(paneTail);
     if (!cwd) return null;
     if (agent === 'codex') return codexModelInfo(pid, cwd, paneTail);
     if (agent === 'grok') return grokModelInfo(cwd);
@@ -702,6 +707,7 @@ function agentStatusFromTail(tail, agent) {
     if (/esc\s+(again\s+to\s+|to\s+)?interrupt/i.test(tail)) return 'working';
     return 'idle';
   }
+  if (agent === 'antigravity') return antigravityStatusFromTail(tail);
   if (agent === 'muse') {
     // Freigabe-Dialog: die Auswahl heisst immer "Allow once" / "Allow for this
     // session" / "Reject" / "Always allow in this workspace".
@@ -787,7 +793,7 @@ async function listSessionsFull() {
         command: command || '',
         path: path || '',
         // Laeuft in dieser Session gerade ein Agent ('claude'|'kimi'|'codex'|
-        // 'grok'|'muse'|'opencode')? Steuert das Sidebar-Label
+        // 'grok'|'muse'|'opencode'|'antigravity')? Steuert das Sidebar-Label
         // ("<Verzeichnis> — Claude"), das nach dem Beenden wieder verschwindet.
         agent: found.agent || null,
         // PID des Agenten — nur intern (Modell-/Effort-Lookup), wird unten
@@ -824,7 +830,7 @@ async function listSessionsFull() {
     // Ohne Pane-ID (sollte nicht vorkommen) die Sitzung exakt per '=<name>:'.
     const st = await agentPaneStatus(s.activePane || `=${s.name}:`, s.title, s.agent);
     s.agentStatus = st.status;
-    // Nur intern (Codex-Modell/muse-Effort), wird unten wieder entfernt.
+    // Nur intern (Codex-/Antigravity-Modell, muse-Effort), wird unten wieder entfernt.
     s.paneTail = st.tail;
   }));
 
@@ -835,8 +841,9 @@ async function listSessionsFull() {
   // Mehrdeutigkeits-Riegel: laufen ZWEI Prozesse desselben Tools im selben
   // Verzeichnis, laesst sich die Sitzungsdatei nicht mehr eindeutig zuordnen —
   // dann lieber nichts anzeigen als das Falsche. claude und muse sind
-  // ausgenommen, dort fuehrt die PID ueber eine Registry zur richtigen Datei.
-  const byPid = new Set(['claude', 'muse']);
+  // ausgenommen, dort fuehrt die PID ueber eine Registry zur richtigen Datei;
+  // antigravity ebenso, weil es nur die Fusszeile des eigenen Panes liest.
+  const byPid = new Set(['claude', 'muse', 'antigravity']);
   const perKey = new Map();
   for (const s of agentRows) {
     const key = `${s.agent}\u0000${s.agentCwd}`;
