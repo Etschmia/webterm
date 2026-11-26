@@ -30,7 +30,7 @@ und Robustheitslücken.
 |---|---|---|---|
 | H1 | Hoch | Replay-Schutz (`l.seen`) durch den Hub über `r.members` aushebelbar | Behoben: `l.seen` bleibt über Mitgliederänderungen hinweg erhalten |
 | M1 | Mittel | Unbekannte Hub-Fehlercodes landen im Agenten-Output; Prototyp-Nachschlag in `HUB_ERRORS` | Behoben: nur `Object.hasOwn(HUB_ERRORS, …)` zugelassen, sonst `hub_rejected` |
-| M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Offen |
+| M2 | Mittel | Veraltete Long-Poll-Antwort löscht frisch erzeugten Einladungslink und überschreibt neueren Stand | Behoben: monotone `rev`-Prüfung und Mindest-Revision an `l.invite` |
 | M3 | Mittel | Long-Poll und Hub-Aktionen schreiben `state.json`/`config.json` nach Wartezeit ohne erneute Eigentumsprüfung | Offen |
 | M4 | Mittel | Parallele Beitrittsgesuche (u. a. doppeltes `Enter`) leaken verwaiste Plätze auf dem Hub | Offen |
 | N1 | Niedrig | Gleiche `link_id` aus zwei Verbindungen derselben Sitzung macht die zweite unbedienbar | Offen |
@@ -130,6 +130,13 @@ Vorschlag: In `apply()` Roster-Stände mit `r.rev < l.rev` verwerfen. `create()`
 ohne `l.rev` vorab blind hochzusetzen (so gehen zwischenzeitliche Mitgliederänderungen nicht
 verloren). Solange `r.rev < l.invite.rev`, darf `apply()` `l.invite` weder verwerfen noch
 alte `r.requests` gegen das neue Geheimnis prüfen.
+
+Umsetzung: `apply()` übernimmt Roster-Stände nur noch für `r.rev >= l.rev`. `create()` und
+`renewInvite()` speichern `res.rev` an `l.invite.rev`; solange `r.rev < l.invite.rev`,
+bleibt `l.invite` samt `inviter`/`inviteExpiresAt` unberührt und alte `r.requests` werden
+nicht gegen das neue Geheimnis geprüft. Neuer Test in `test/link-hub.test.js` liefert eine
+veraltete Poll-Antwort nach `renewInvite` sowie ein `rev < l.rev` ein und prüft, dass
+Einladung und Mitgliederstand erhalten bleiben.
 
 ### M3 — Fehlende Eigentums- und Modusprüfung nach Netzwerk-Wartezeiten
 

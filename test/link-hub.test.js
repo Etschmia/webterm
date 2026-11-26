@@ -203,12 +203,12 @@ async function startHub(t) {
 
 const quiet = { warn() {}, error() {}, log() {} };
 
-function installation(t, hub, { mode = 'hub', base = hub.base, key = hub.key } = {}) {
+function installation(t, hub, { mode = 'hub', base = hub.base, key = hub.key, fetchImpl, isOwner } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'term-link-hub-'));
   const store = createLinkStore({ dir });
   const config = createLinkConfig({ dir, insecure: true });
   config.set({ mode, hub: base, key });
-  const client = createHubLinks({ store, config, log: quiet, pollWait: 2, minGapMs: 10 });
+  const client = createHubLinks({ store, config, log: quiet, pollWait: 2, minGapMs: 10, ...(fetchImpl ? { fetchImpl } : {}), ...(isOwner ? { isOwner } : {}) });
   t.after(() => { client.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return {
     store, config, hub: client, dir,
@@ -508,4 +508,61 @@ test('replayed, re-attributed and undecryptable messages from the hub are droppe
   await until(() => b.store.hubLinks()[0].ack === link.seq, 'B hat den wiedereingespielten Umschlag verarbeitet');
   assert.deepEqual(b.store.history({ endpoint: 'ep_b', full: true }).map((m) => m.text), ['echt', 'danach']);
   assert.equal(b.store.summary('ep_b').unread, 2);
+});
+
+test('a stale poll response neither wipes a newly created invite nor downgrades rev', { timeout: 30000, skip: !!REAL_DIR }, async (t) => {
+  const hub = await startHub(t);
+  let injectStale = null;
+  const fetchImpl = async (url, init) => {
+    const res = await globalThis.fetch(url, init);
+    if (injectStale && String(url).endsWith('/poll')) {
+      const payload = injectStale;
+      injectStale = null;
+      return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return res;
+  };
+  const a = installation(t, hub);
+  const b = installation(t, hub, { fetchImpl });
+  const c = installation(t, hub);
+  const made = await linked(a, b, { seats: 3 });
+
+  // B uebernimmt die Einladung (rev steigt auf 4, inviter = B).
+  const oldRev = b.store.hubLinks()[0].rev;
+  const aMemberId = a.store.hubLinks()[0].me.id;
+  const bMemberId = b.store.hubLinks()[0].me.id;
+  // Veraltete Antwort von davor: inviter ist noch A, rev < neue Einladungs-rev.
+  injectStale = {
+    results: [{
+      link_id: made.id, member_id: bMemberId, status: 'active', rev: oldRev,
+      seats: 3, inviter: aMemberId, invite_expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      members: [{ member_id: bMemberId, status: 'active' }, { member_id: aMemberId, status: 'active' }],
+      messages: [],
+    }],
+  };
+  const renewed = await b.hub.renewInvite({ endpoint: 'ep_b', linkId: made.id });
+  await until(() => injectStale === null, 'veralteter Poll wurde geliefert');
+  // Noch ein regulaerer Poll hinterher: B hat seine neue Einladung behalten und kann C annehmen.
+  await c.hub.join({ endpoint: 'ep_c', name: 'gamma', code: renewed.code });
+  const req = await until(() => b.view('ep_b')[0].requests[0], 'Gesuch von C bei B trotz veraltetem Poll');
+  assert.equal(req.name, 'gamma');
+  await b.hub.decide({ endpoint: 'ep_b', linkId: made.id, memberId: req.id, admit: true });
+  await until(() => c.view('ep_c')[0].status === 'active', 'C aktiv');
+  await until(() => b.store.hubLinks()[0].rev === hub.links.get(made.id).rev, 'B auf aktuellem rev');
+
+  // Eine Antwort mit rev < l.rev darf weder rev zurueckdrehen noch Mitglieder entfernen.
+  const curRev = b.store.hubLinks()[0].rev;
+  injectStale = {
+    results: [{
+      link_id: made.id, member_id: bMemberId, status: 'active', rev: curRev - 1,
+      seats: 3, inviter: null, invite_expires_at: null,
+      members: [{ member_id: bMemberId, status: 'active' }],
+      messages: [],
+    }],
+  };
+  const prevOk = b.hub.status().hubs[0].okAt;
+  await until(() => injectStale === null && b.hub.status().hubs[0].okAt >= prevOk, 'aeltere rev wurde geliefert');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(b.store.hubLinks()[0].rev, curRev);
+  assert.equal(b.view('ep_b')[0].members.length, 3);
 });
